@@ -3,13 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "mongoose": "^9.3.3",
     "next": "16.2.2",
+    "open-graph-scraper": "^6.11.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
