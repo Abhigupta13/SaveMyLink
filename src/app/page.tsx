@@ -4,6 +4,8 @@ import CategoryFilter from '@/components/CategoryFilter';
 import LinksDisplay from '@/components/LinksDisplay';
 import Pagination from '@/components/Pagination';
 
+export const dynamic = 'force-dynamic';
+
 export default async function Home({
   searchParams,
 }: {

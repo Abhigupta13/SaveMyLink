@@ -6,6 +6,8 @@ import { getCategories } from "@/actions/category";
 import { PreviewProvider } from "@/components/PreviewContext";
 import { ViewProvider } from "@/components/ViewContext";
 
+export const dynamic = 'force-dynamic';
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
