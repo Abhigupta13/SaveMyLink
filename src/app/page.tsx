@@ -5,6 +5,10 @@ import LinksDisplay from '@/components/LinksDisplay';
 import Pagination from '@/components/Pagination';
 import { cookies } from 'next/headers';
 
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import LandingPage from '@/components/LandingPage';
+
 export const dynamic = 'force-dynamic';
 
 export default async function Home({
@@ -12,6 +16,12 @@ export default async function Home({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
+  const session = await getServerSession(authOptions);
+
+  if (!session) {
+    return <LandingPage />;
+  }
+
   const cookieStore = await cookies();
   const privateSafe = cookieStore.get('privateSafe')?.value === 'true';
   
@@ -41,7 +51,7 @@ export default async function Home({
       
       {links.length > 0 ? (
         <>
-          <LinksDisplay links={links} categories={categories} />
+          <LinksDisplay links={links} categories={categories} privateSafe={privateSafe} />
           <Pagination currentPage={currentPage} totalPages={totalPages} />
         </>
       ) : (

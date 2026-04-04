@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { usePreview } from '@/components/PreviewContext';
 import { updateLink, deleteLink, toggleFavorite, refreshMetadata, toggleLinkPrivacy } from '@/actions/link';
 
-export default function LinkCard({ link, categories }: { link: any, categories: any[] }) {
+export default function LinkCard({ link, categories, privateSafe = false }: { link: any, categories: any[], privateSafe?: boolean }) {
   const { showPreview } = usePreview();
   const categoryName = link.category?.name || 'Uncategorized';
   const categoryColor = link.category?.color || '#3b82f6';
@@ -13,8 +13,9 @@ export default function LinkCard({ link, categories }: { link: any, categories: 
   const [selectedCategory, setSelectedCategory] = useState(link.category?._id || '');
   const [tagsInput, setTagsInput] = useState(link.tags ? link.tags.join(', ') : '');
   const [title, setTitle] = useState(link.title || '');
-  const [url, setUrl] = useState(link.url || '');
+   const [url, setUrl] = useState(link.url || '');
   const [isFavorite, setIsFavorite] = useState(link.isFavorite || false);
+  const [isPrivateMode, setIsPrivateMode] = useState(link.isPrivate || false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -28,7 +29,8 @@ export default function LinkCard({ link, categories }: { link: any, categories: 
       tagsInput,
       title,
       url,
-      isFavorite
+      isFavorite,
+      isPrivate: isPrivateMode
     });
     if (res.success) {
       setIsEditing(false);
@@ -116,17 +118,6 @@ export default function LinkCard({ link, categories }: { link: any, categories: 
               <span className="card-category" style={{ backgroundColor: categoryColor, marginBottom: 0 }}>
                 {categoryName}
               </span>
-              {link.isPrivate && <span className="card-private-badge" title="Private Link">🔒</span>}
-              {!link.isPrivate && (
-                <button 
-                  className="quick-privacy-btn" 
-                  onClick={(e) => { e.preventDefault(); handleTogglePrivacy(); }}
-                  title="Move to Private Safe"
-                  style={{ fontSize: '0.9rem', opacity: 0.7, cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
-                >
-                  🔓
-                </button>
-              )}
             </div>
             <div className="card-tags">
               {link.tags && link.tags.map((tag: string, i: number) => (
@@ -209,6 +200,20 @@ export default function LinkCard({ link, categories }: { link: any, categories: 
                   value={tagsInput}
                   onChange={(e) => setTagsInput(e.target.value)}
                 />
+              </div>
+
+              <div className="input-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '10px', marginTop: '0', marginBottom: '0' }}>
+                <label className="switch-container">
+                  <div className="switch">
+                    <input 
+                      type="checkbox" 
+                      checked={isPrivateMode} 
+                      onChange={(e) => setIsPrivateMode(e.target.checked)}
+                    />
+                    <span className="slider"></span>
+                  </div>
+                  <span className="switch-label">Mark as Private Link 🔒</span>
+                </label>
               </div>
 
               <div className="modal-footer">

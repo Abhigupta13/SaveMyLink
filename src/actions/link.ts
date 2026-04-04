@@ -5,11 +5,17 @@ import connectToDatabase from '@/lib/mongodb';
 import { Link } from '@/lib/models/Link';
 import { revalidatePath } from 'next/cache';
 import { scrapeMetadata } from '@/lib/metadata';
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 export async function getLinks(categoryId?: string, page: number = 1, limit: number = 50, search?: string, privateSafe: boolean = false) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { links: [], totalCount: 0 };
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   
-  let query: any = {};
+  let query: any = { userId };
   
   // Filtering by Private Safe state
   if (!privateSafe) {
@@ -52,6 +58,10 @@ export async function getLinks(categoryId?: string, page: number = 1, limit: num
 }
 
 export async function createLink(url: string, categoryId: string, tags: string[] = [], isPrivate: boolean = false) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   try {
     // Scrape open graph data
@@ -65,7 +75,8 @@ export async function createLink(url: string, categoryId: string, tags: string[]
       duration: metadata.duration || '',
       quality: metadata.quality || '',
       tags,
-      isPrivate
+      isPrivate,
+      userId
     });
     
     revalidatePath('/');
@@ -75,9 +86,16 @@ export async function createLink(url: string, categoryId: string, tags: string[]
   }
 }
 
-export async function updateLink(linkId: string, data: { categoryId?: string, tagsInput?: string, title?: string, url?: string, isFavorite?: boolean }) {
+export async function updateLink(linkId: string, data: { categoryId?: string, tagsInput?: string, title?: string, url?: string, isFavorite?: boolean, isPrivate?: boolean }) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   try {
+    const link = await Link.findOne({ _id: linkId, userId });
+    if (!link) return { error: 'Link not found or unauthorized' };
+
     const updateData: any = {};
     if (data.categoryId) {
       updateData.category = new mongoose.Types.ObjectId(data.categoryId) as any;
@@ -94,6 +112,9 @@ export async function updateLink(linkId: string, data: { categoryId?: string, ta
     if (data.isFavorite !== undefined) {
       updateData.isFavorite = data.isFavorite;
     }
+    if (data.isPrivate !== undefined) {
+      updateData.isPrivate = data.isPrivate;
+    }
 
     await Link.findByIdAndUpdate(linkId, updateData);
     
@@ -105,9 +126,14 @@ export async function updateLink(linkId: string, data: { categoryId?: string, ta
 }
 
 export async function toggleFavorite(linkId: string, isFavorite: boolean) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   try {
-    await Link.findByIdAndUpdate(linkId, { isFavorite });
+    const res = await Link.findOneAndUpdate({ _id: linkId, userId }, { isFavorite });
+    if (!res) return { error: 'Unauthorized' };
     revalidatePath('/');
     return { success: true };
   } catch (err: any) {
@@ -116,9 +142,14 @@ export async function toggleFavorite(linkId: string, isFavorite: boolean) {
 }
 
 export async function deleteLink(linkId: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   try {
-    await Link.findByIdAndDelete(linkId);
+    const res = await Link.findOneAndDelete({ _id: linkId, userId });
+    if (!res) return { error: 'Unauthorized' };
     revalidatePath('/');
     return { success: true };
   } catch (err: any) {
@@ -127,11 +158,15 @@ export async function deleteLink(linkId: string) {
 }
 
 export async function refreshMetadata(linkId: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   try {
-    const link = await Link.findById(linkId);
+    const link = await Link.findOne({ _id: linkId, userId });
     if (!link) {
-      return { error: 'Link not found' };
+      return { error: 'Link not found or unauthorized' };
     }
 
     const metadata = await scrapeMetadata(link.url);
@@ -154,9 +189,13 @@ export async function refreshMetadata(linkId: string) {
 }
 
 export async function migrateExistingLinksToPrivate() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   try {
-    const result = await Link.updateMany({}, { isPrivate: true });
+    const result = await Link.updateMany({ userId }, { isPrivate: true });
     revalidatePath('/');
     return { success: true, modifiedCount: result.modifiedCount };
   } catch (err: any) {
@@ -165,9 +204,14 @@ export async function migrateExistingLinksToPrivate() {
 }
 
 export async function toggleLinkPrivacy(linkId: string, isPrivate: boolean) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   try {
-    await Link.findByIdAndUpdate(linkId, { isPrivate });
+    const res = await Link.findOneAndUpdate({ _id: linkId, userId }, { isPrivate });
+    if (!res) return { error: 'Unauthorized' };
     revalidatePath('/');
     return { success: true };
   } catch (err: any) {

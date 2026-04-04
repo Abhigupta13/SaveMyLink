@@ -79,9 +79,9 @@ export default function PinModal() {
             ))}
           </div>
           {error && <p className="pin-error">Incorrect PIN. Please try again.</p>}
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', textAlign: 'center', marginTop: '12px' }}>
+          {/* <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', textAlign: 'center', marginTop: '12px' }}>
             Hint: Default PIN is 1234
-          </p>
+          </p> */}
           <div className="modal-footer" style={{ justifyContent: 'center', marginTop: '20px' }}>
             <button type="submit" className="btn-primary" style={{ width: '100%' }}>
               Unlock Private Safe

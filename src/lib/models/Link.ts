@@ -11,6 +11,7 @@ export interface ILink extends Document {
   tags?: string[];
   isFavorite?: boolean;
   isPrivate?: boolean;
+  userId: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -24,7 +25,8 @@ const LinkSchema: Schema<ILink> = new Schema({
   quality: { type: String },
   tags: [{ type: String }],
   isFavorite: { type: Boolean, default: false },
-  isPrivate: { type: Boolean, default: false }
+  isPrivate: { type: Boolean, default: false },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true }
 }, { timestamps: true });
 
 if (mongoose.models.Link) {

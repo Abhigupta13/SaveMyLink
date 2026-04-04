@@ -9,8 +9,10 @@ import { useView } from '@/components/ViewContext';
 import { useUser } from '@/components/UserContext';
 import UserProfileSidebar from './UserProfileSidebar';
 import PinModal from './PinModal';
+import { useSession } from 'next-auth/react';
 
 export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
+  const { data: session } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
   
@@ -98,55 +100,63 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     <header className="app-header">
       <div className="container">
         {/* Row 1: App name and add link */}
-        <div className="header-row row-1">
+        <div className="header-row row-1" style={!session ? { justifyContent: 'center' } : {}}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <button 
-              className="user-icon-btn" 
-              onClick={() => setSidebarOpen(true)}
-              title="User Profile"
-              style={{ fontSize: '1.5rem', background: 'var(--bg-tertiary)', width: '38px', height: '38px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            >
-              👤
-            </button>
+            {session && (
+              <button 
+                className="user-icon-btn" 
+                onClick={() => setSidebarOpen(true)}
+                title="User Profile"
+                style={{ fontSize: '1.5rem', background: 'var(--bg-tertiary)', width: '38px', height: '38px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                👤
+              </button>
+            )}
             <a href="/" className="logo">SaveMyLink</a>
           </div>
-          <button className="btn-primary" onClick={() => setIsModalOpen(true)}>
-            + Add Link
-          </button>
+          {session && (
+            <button className="btn-primary" onClick={() => setIsModalOpen(true)}>
+              + Add Link
+            </button>
+          )}
         </div>
 
         {/* Row 2: Search input, hide button and toggle view */}
-        <div className="header-row row-2">
-          <div className="search-container">
-            <span className="search-icon">🔍</span>
-            <input 
-              type="text" 
-              placeholder="Search by title, tag, or URL..." 
-              value={searchValue}
-              onChange={(e) => setSearchValue(e.target.value)}
-              className="search-input"
-            />
-          </div>
+        {session && (
+          <div className="header-row row-2">
+            <div className="search-container">
+              <span className="search-icon">🔍</span>
+              <input 
+                type="text" 
+                placeholder="Search by title, tag, or URL..." 
+                value={searchValue}
+                onChange={(e) => setSearchValue(e.target.value)}
+                className="search-input"
+              />
+            </div>
 
-          <div className="header-actions">
-            <button className="btn-icon circle" onClick={togglePreview} title={showPreview ? "Hide Previews" : "Show Previews"}>
-              {showPreview ? (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-              ) : (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                </svg>
-              )}
-            </button>
-            <button className="btn-icon circle" onClick={toggleColumns} title="Toggle Grid View">
-              {columns === 1 ? '⊞' : '⊟'}
-            </button>
+            <div className="header-actions">
+              <button className="btn-icon circle" onClick={togglePreview} title={showPreview ? "Hide Previews" : "Show Previews"}>
+                {showPreview ? (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"></path>
+                    <path d="M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"></path>
+                    <path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"></path>
+                  </svg>
+                ) : (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M1.05 1.05l21.9 21.9"></path>
+                    <path d="M17.45 17.45a9 9 0 0 1-12.9-12.9"></path>
+                    <path d="M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"></path>
+                  </svg>
+                )}
+              </button>
+              <button className="btn-icon circle" onClick={toggleColumns} title="Toggle Grid View">
+                {columns === 1 ? '⊞' : '⊟'}
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {isModalOpen && (
@@ -161,7 +171,7 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
               <div className="input-group">
                 <input 
                   type="url" 
-                  placeholder="Paste video URL here..." 
+                  placeholder="Paste the URL here..." 
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   required
@@ -229,15 +239,16 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
               </div>
 
               <div className="input-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
-                <input 
-                  type="checkbox" 
-                  id="isPrivate" 
-                  checked={isPrivate} 
-                  onChange={(e) => setIsPrivate(e.target.checked)}
-                  style={{ width: 'auto' }}
-                />
-                <label htmlFor="isPrivate" style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                  Mark as Private Link 🔒
+                <label className="switch-container">
+                  <div className="switch">
+                    <input 
+                      type="checkbox" 
+                      checked={isPrivate} 
+                      onChange={(e) => setIsPrivate(e.target.checked)}
+                    />
+                    <span className="slider"></span>
+                  </div>
+                  <span className="switch-label">Mark as Private Link 🔒</span>
                 </label>
               </div>
 

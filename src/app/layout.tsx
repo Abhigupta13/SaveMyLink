@@ -6,6 +6,7 @@ import { getCategories } from "@/actions/category";
 import { PreviewProvider } from "@/components/PreviewContext";
 import { ViewProvider } from "@/components/ViewContext";
 import { UserProvider } from "@/components/UserContext";
+import AuthProvider from "@/components/AuthProvider";
 import { cookies } from "next/headers";
 
 export const dynamic = 'force-dynamic';
@@ -47,14 +48,16 @@ export default async function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
-        <UserProvider>
-          <PreviewProvider>
-            <ViewProvider>
-              <TopNav initialCategories={categories} />
-              {children}
-            </ViewProvider>
-          </PreviewProvider>
-        </UserProvider>
+        <AuthProvider>
+          <UserProvider>
+            <PreviewProvider>
+              <ViewProvider>
+                <TopNav initialCategories={categories} />
+                {children}
+              </ViewProvider>
+            </PreviewProvider>
+          </UserProvider>
+        </AuthProvider>
       </body>
     </html>
   );

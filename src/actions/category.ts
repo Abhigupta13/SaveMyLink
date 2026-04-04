@@ -1,16 +1,23 @@
-'use server'
+'use server';
 
+import mongoose from 'mongoose';
 import connectToDatabase from '@/lib/mongodb';
 import { Category } from '@/lib/models/Category';
 import { Link } from '@/lib/models/Link';
 import { revalidatePath } from 'next/cache';
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 export async function getCategories(privateSafe: boolean = false) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return [];
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   const categories = await Category.find({}).lean();
   
   // Build query for link aggregation
-  const linkQuery: any = {};
+  const linkQuery: any = { userId: new mongoose.Types.ObjectId(userId) };
   if (!privateSafe) {
     linkQuery.isPrivate = { $ne: true };
   }
