@@ -9,6 +9,8 @@ export interface ILink extends Document {
   duration?: string;
   quality?: string;
   tags?: string[];
+  isFavorite?: boolean;
+  isPrivate?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -20,7 +22,12 @@ const LinkSchema: Schema<ILink> = new Schema({
   previewImageUrl: { type: String },
   duration: { type: String },
   quality: { type: String },
-  tags: [{ type: String }]
+  tags: [{ type: String }],
+  isFavorite: { type: Boolean, default: false },
+  isPrivate: { type: Boolean, default: false }
 }, { timestamps: true });
 
-export const Link: Model<ILink> = mongoose.models.Link || mongoose.model<ILink>('Link', LinkSchema);
+if (mongoose.models.Link) {
+  delete mongoose.models.Link;
+}
+export const Link: Model<ILink> = mongoose.model<ILink>('Link', LinkSchema);

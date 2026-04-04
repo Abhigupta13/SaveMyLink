@@ -3,6 +3,7 @@ import { getCategories } from '@/actions/category';
 import CategoryFilter from '@/components/CategoryFilter';
 import LinksDisplay from '@/components/LinksDisplay';
 import Pagination from '@/components/Pagination';
+import { cookies } from 'next/headers';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,9 @@ export default async function Home({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
+  const cookieStore = await cookies();
+  const privateSafe = cookieStore.get('privateSafe')?.value === 'true';
+  
   const resolvedParams = await searchParams;
   const categoryId = typeof resolvedParams.category === 'string' ? resolvedParams.category : undefined;
   const currentPage = Number(resolvedParams.page) || 1;
@@ -21,10 +25,10 @@ export default async function Home({
   let categories = [];
   let totalCount = 0;
   try {
-    const data = await getLinks(categoryId, currentPage, limit, search);
+    const data = await getLinks(categoryId, currentPage, limit, search, privateSafe);
     links = data.links;
     totalCount = data.totalCount;
-    categories = await getCategories();
+    categories = await getCategories(privateSafe);
   } catch (err) {
     console.warn("Failed to fetch links or categories.", err);
   }

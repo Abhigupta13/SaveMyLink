@@ -5,22 +5,32 @@ import { Category } from '@/lib/models/Category';
 import { Link } from '@/lib/models/Link';
 import { revalidatePath } from 'next/cache';
 
-export async function getCategories() {
+export async function getCategories(privateSafe: boolean = false) {
   await connectToDatabase();
   const categories = await Category.find({}).lean();
   
-  // Aggregate link counts per category
+  // Build query for link aggregation
+  const linkQuery: any = {};
+  if (!privateSafe) {
+    linkQuery.isPrivate = { $ne: true };
+  }
+
+  // Aggregate link counts per category based on privacy filter
   const linkCounts = await Link.aggregate([
+    { $match: linkQuery },
     { $group: { _id: '$category', count: { $sum: 1 } } }
   ]);
   
   const countMap = new Map();
   linkCounts.forEach((lc) => countMap.set(lc._id.toString(), lc.count));
   
-  const enriched = categories.map((cat: any) => ({
-    ...cat,
-    count: countMap.get(cat._id.toString()) || 0
-  }));
+  // Enrich categories and filter out empty ones
+  const enriched = categories
+    .map((cat: any) => ({
+      ...cat,
+      count: countMap.get(cat._id.toString()) || 0
+    }))
+    .filter((cat: any) => cat.count > 0); // Only show categories with links
   
   // Sort by count descending, then alphabetically
   enriched.sort((a, b) => {

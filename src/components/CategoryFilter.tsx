@@ -22,6 +22,13 @@ export default function CategoryFilter({ categories, activeCategoryId }: { categ
         >
           All Categories
         </button>
+
+        <button 
+          className={`category-filter-btn ${activeCategoryId === 'favorites' ? 'active' : ''}`}
+          onClick={() => handleFilter('favorites')}
+        >
+          ★ Favorites
+        </button>
         
         {categories.map((c) => (
           <button

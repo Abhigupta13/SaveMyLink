@@ -6,6 +6,9 @@ import { createCategory } from '@/actions/category';
 import { createLink } from '@/actions/link';
 import { usePreview } from '@/components/PreviewContext';
 import { useView } from '@/components/ViewContext';
+import { useUser } from '@/components/UserContext';
+import UserProfileSidebar from './UserProfileSidebar';
+import PinModal from './PinModal';
 
 export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
   const router = useRouter();
@@ -23,18 +26,27 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
   
   const { showPreview, togglePreview } = usePreview();
   const { columns, toggleColumns } = useView();
+  const { setSidebarOpen, privateSafe } = useUser();
+  
+  const [isPrivate, setIsPrivate] = useState(false);
 
   // Debounced search
   useEffect(() => {
     const timer = setTimeout(() => {
       const params = new URLSearchParams(searchParams.toString());
-      if (searchValue) {
-        params.set('search', searchValue);
-      } else {
-        params.delete('search');
+      const currentSearch = params.get('search') || '';
+      const currentPage = params.get('page') || '1';
+
+      // Only push if the search value or page has actually changed
+      if (searchValue !== currentSearch || currentPage !== '1') {
+        if (searchValue) {
+          params.set('search', searchValue);
+        } else {
+          params.delete('search');
+        }
+        params.set('page', '1'); // Reset to page 1 on search
+        router.push(`/?${params.toString()}`);
       }
-      params.set('page', '1'); // Reset to page 1 on search
-      router.push(`/?${params.toString()}`);
     }, 500);
 
     return () => clearTimeout(timer);
@@ -68,9 +80,10 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
         return;
     }
 
-    const res = await createLink(url, categoryId, []);
+    const res = await createLink(url, categoryId, [], isPrivate);
     if (res.success) {
       setUrl('');
+      setIsPrivate(false);
       setIsModalOpen(false);
     } else {
       alert(res.error || 'Failed to save link');
@@ -86,7 +99,17 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
       <div className="container">
         {/* Row 1: App name and add link */}
         <div className="header-row row-1">
-          <a href="/" className="logo">SaveMyLink</a>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button 
+              className="user-icon-btn" 
+              onClick={() => setSidebarOpen(true)}
+              title="User Profile"
+              style={{ fontSize: '1.5rem', background: 'var(--bg-tertiary)', width: '38px', height: '38px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              👤
+            </button>
+            <a href="/" className="logo">SaveMyLink</a>
+          </div>
           <button className="btn-primary" onClick={() => setIsModalOpen(true)}>
             + Add Link
           </button>
@@ -205,6 +228,19 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
                 )}
               </div>
 
+              <div className="input-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
+                <input 
+                  type="checkbox" 
+                  id="isPrivate" 
+                  checked={isPrivate} 
+                  onChange={(e) => setIsPrivate(e.target.checked)}
+                  style={{ width: 'auto' }}
+                />
+                <label htmlFor="isPrivate" style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  Mark as Private Link 🔒
+                </label>
+              </div>
+
               <button type="submit" className="btn-primary" disabled={isLoading} style={{ marginTop: '8px' }}>
                 {isLoading ? <div className="loading-spinner"></div> : 'Save Link'}
               </button>
@@ -212,6 +248,9 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
           </div>
         </div>
       )}
+      
+      <UserProfileSidebar />
+      <PinModal />
     </header>
   );
 }
