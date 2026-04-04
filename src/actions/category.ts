@@ -16,10 +16,12 @@ export async function getCategories(privateSafe: boolean = false) {
   await connectToDatabase();
   const categories = await Category.find({}).lean();
   
-  // Build query for link aggregation
+  // Build link query for aggregation based on mode
   const linkQuery: any = { userId: new mongoose.Types.ObjectId(userId) };
   if (!privateSafe) {
-    linkQuery.isPrivate = { $ne: true };
+    linkQuery.isPrivate = { $ne: true }; // Count only public links
+  } else {
+    linkQuery.isPrivate = true; // Count ONLY private links
   }
 
   // Aggregate link counts per category based on privacy filter

@@ -17,9 +17,11 @@ export async function getLinks(categoryId?: string, page: number = 1, limit: num
   
   let query: any = { userId };
   
-  // Filtering by Private Safe state
+  // Strict Filtering by Private Safe state
   if (!privateSafe) {
-    query.isPrivate = { $ne: true }; // Only show public links
+    query.isPrivate = { $ne: true }; // Only show public links in general mode
+  } else {
+    query.isPrivate = true; // ONLY show private links in private safe mode
   }
   
   if (categoryId && categoryId !== 'all') {
