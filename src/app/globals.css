@@ -110,11 +110,18 @@ input:focus, select:focus, textarea:focus {
 .header-row.row-2 {
   margin-top: 12px;
   padding: 4px 12px;
-  border-bottom: none;
+  border: 1px solid var(--border-color);
   background: var(--bg-secondary);
   border-radius: 12px;
-  justify-content: flex-start; /* Was space-between, making gap smaller */
-  gap: 16px; /* Explicit gap between search and buttons */
+  justify-content: space-between;
+  gap: 16px; 
+  transition: var(--transition);
+}
+
+.header-row.row-2:focus-within {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
 .search-container {
@@ -122,8 +129,7 @@ input:focus, select:focus, textarea:focus {
   align-items: center;
   gap: 10px;
   flex: 1;
-  min-width: 0; /* Important: prevents overflow/overlap by allowing shrinking */
-  max-width: 400px;
+  min-width: 0;
 }
 
 .header-row.row-2 .header-actions {

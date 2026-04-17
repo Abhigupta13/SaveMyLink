@@ -2,7 +2,6 @@ import { getLinks } from '@/actions/link';
 import { getCategories } from '@/actions/category';
 import CategoryFilter from '@/components/CategoryFilter';
 import LinksDisplay from '@/components/LinksDisplay';
-import Pagination from '@/components/Pagination';
 import { cookies } from 'next/headers';
 
 import { getServerSession } from 'next-auth/next';
@@ -23,13 +22,14 @@ export default async function Home({
   }
 
   const cookieStore = await cookies();
-  const privateSafe = cookieStore.get('privateSafe')?.value === 'true';
-  
   const resolvedParams = await searchParams;
+  const privateSafe = (cookieStore.get('privateSafe')?.value === 'true') || (resolvedParams.private === 'true');
   const categoryId = typeof resolvedParams.category === 'string' ? resolvedParams.category : undefined;
+  const columns = Number(resolvedParams.columns) || Number(cookieStore.get('columns')?.value) || 2;
   const currentPage = Number(resolvedParams.page) || 1;
   const search = typeof resolvedParams.search === 'string' ? resolvedParams.search : undefined;
-  const limit = 50;
+  
+  const limit = columns === 1 ? 10 : columns === 2 ? 20 : 40;
   
   let links = [];
   let categories = [];
@@ -50,10 +50,15 @@ export default async function Home({
       <CategoryFilter categories={categories} activeCategoryId={categoryId} />
       
       {links.length > 0 ? (
-        <>
-          <LinksDisplay links={links} categories={categories} privateSafe={privateSafe} />
-          <Pagination currentPage={currentPage} totalPages={totalPages} />
-        </>
+        <LinksDisplay 
+          key={`${categoryId || 'all'}-${search || ''}-${privateSafe}`} 
+          links={links} 
+          categories={categories} 
+          totalCount={totalCount}
+          categoryId={categoryId}
+          search={search}
+          privateSafe={privateSafe}
+        />
       ) : (
         <div style={{ textAlign: 'center', padding: '60px 20px' }}>
           <h2 style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>

@@ -8,6 +8,7 @@ export interface IUser extends Document {
   resetTokenExpiry?: Date;
   createdAt: Date;
   updatedAt: Date;
+  privatePin?: string;
 }
 
 const UserSchema: Schema<IUser> = new Schema({
@@ -15,7 +16,8 @@ const UserSchema: Schema<IUser> = new Schema({
   email: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String },
   resetToken: { type: String },
-  resetTokenExpiry: { type: Date }
+  resetTokenExpiry: { type: Date },
+  privatePin: { type: String }
 }, { timestamps: true });
 
 if (mongoose.models.User) {

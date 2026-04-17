@@ -8,6 +8,18 @@ import { scrapeMetadata } from '@/lib/metadata';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
+export async function getLinkMetadata(url: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  
+  try {
+    const metadata = await scrapeMetadata(url);
+    return { success: true, metadata };
+  } catch (error: any) {
+    return { error: error.message };
+  }
+}
+
 export async function getLinks(categoryId?: string, page: number = 1, limit: number = 50, search?: string, privateSafe: boolean = false) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { links: [], totalCount: 0 };
@@ -59,19 +71,24 @@ export async function getLinks(categoryId?: string, page: number = 1, limit: num
   };
 }
 
-export async function createLink(url: string, categoryId: string, tags: string[] = [], isPrivate: boolean = false) {
+export async function createLink(url: string, categoryId: string, tags: string[] = [], isPrivate: boolean = false, prefetchedMetadata?: { title?: string, image?: string }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: 'Not authenticated' };
   const userId = (session.user as any).id;
 
   await connectToDatabase();
   try {
-    // Scrape open graph data
-    const metadata = await scrapeMetadata(url);
+    // Only scrape if metadata not provided
+    const metadata = prefetchedMetadata ? { 
+      title: prefetchedMetadata.title, 
+      image: prefetchedMetadata.image,
+      duration: '',
+      quality: ''
+    } : await scrapeMetadata(url);
     
     const newLink = await Link.create({
       url,
-      category: new mongoose.Types.ObjectId(categoryId) as any,
+      category: categoryId ? new mongoose.Types.ObjectId(categoryId) : undefined,
       title: metadata.title || url,
       previewImageUrl: metadata.image || '',
       duration: metadata.duration || '',
@@ -212,11 +229,51 @@ export async function toggleLinkPrivacy(linkId: string, isPrivate: boolean) {
 
   await connectToDatabase();
   try {
-    const res = await Link.findOneAndUpdate({ _id: linkId, userId }, { isPrivate });
-    if (!res) return { error: 'Unauthorized' };
     revalidatePath('/');
     return { success: true };
   } catch (err: any) {
     return { error: err.message };
   }
+}
+
+export async function bulkCreateLinks(links: { url: string, isPrivate: boolean }[]) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
+  await connectToDatabase();
+  
+  const results = {
+    successCount: 0,
+    failed: 0,
+    errors: [] as string[]
+  };
+
+  for (const item of links) {
+    try {
+      if (!item.url || !item.url.startsWith('http')) {
+        results.failed++;
+        continue;
+      }
+
+      const metadata = await scrapeMetadata(item.url).catch(() => ({ title: item.url, image: '', duration: '', quality: '' }));
+      
+      await Link.create({
+        url: item.url,
+        title: metadata.title || item.url,
+        previewImageUrl: metadata.image || '',
+        duration: metadata.duration || '',
+        quality: metadata.quality || '',
+        isPrivate: item.isPrivate,
+        userId
+      });
+      results.successCount++;
+    } catch (err: any) {
+      results.failed++;
+      results.errors.push(`${item.url}: ${err.message}`);
+    }
+  }
+
+  revalidatePath('/');
+  return { success: true, ...results };
 }

@@ -1,16 +1,26 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 export default function CategoryFilter({ categories, activeCategoryId }: { categories: any[], activeCategoryId?: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const isPrivate = searchParams.get('private') === 'true';
 
   const handleFilter = (id: string | null) => {
+    const params = new URLSearchParams(searchParams.toString());
     if (id) {
-      router.push(`/?category=${id}`);
+      params.set('category', id);
     } else {
-      router.push(`/`);
+      params.delete('category');
     }
+    
+    // Always preserve private state if present in URL
+    if (isPrivate) {
+      params.set('private', 'true');
+    }
+
+    router.push(`/?${params.toString()}`);
   };
 
   return (
@@ -30,15 +40,16 @@ export default function CategoryFilter({ categories, activeCategoryId }: { categ
           ★ Favorites
         </button>
         
-        {categories.map((c) => (
-          <button
-            key={c._id}
-            className={`category-filter-btn ${activeCategoryId === c._id ? 'active' : ''}`}
-            onClick={() => handleFilter(c._id)}
-          >
-            {c.name}
-          </button>
-        ))}
+        {categories
+          .map((c) => (
+            <button
+              key={c._id}
+              className={`category-filter-btn ${activeCategoryId === c._id ? 'active' : ''}`}
+              onClick={() => handleFilter(c._id)}
+            >
+              {c.name}
+            </button>
+          ))}
       </div>
     </div>
   );

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createCategory } from '@/actions/category';
-import { createLink } from '@/actions/link';
+import { createLink, getLinkMetadata } from '@/actions/link';
 import { usePreview } from '@/components/PreviewContext';
 import { useView } from '@/components/ViewContext';
 import { useUser } from '@/components/UserContext';
@@ -17,6 +17,12 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
   const searchParams = useSearchParams();
   
   const [categories, setCategories] = useState(initialCategories);
+  
+  // Sync categories when server provides new ones (after router.refresh())
+  useEffect(() => {
+    setCategories(initialCategories);
+  }, [initialCategories]);
+
   const [url, setUrl] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -26,11 +32,80 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
   const [showCreateCategory, setShowCreateCategory] = useState(false);
   const [searchValue, setSearchValue] = useState(searchParams.get('search') || '');
   
+  // Metadata Preview State
+  const [previewMetadata, setPreviewMetadata] = useState<{ title: string, image: string } | null>(null);
+  const [isFetchingMetadata, setIsFetchingMetadata] = useState(false);
+  
   const { showPreview, togglePreview } = usePreview();
   const { columns, toggleColumns } = useView();
   const { setSidebarOpen, privateSafe } = useUser();
   
-  const [isPrivate, setIsPrivate] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(privateSafe);
+
+  // Sync isPrivate with current mode when mode changes
+  useEffect(() => {
+    setIsPrivate(privateSafe);
+  }, [privateSafe]);
+
+  // Also sync when modal opens to ensure it matches current mode
+  useEffect(() => {
+    if (isModalOpen) {
+      setIsPrivate(privateSafe);
+    }
+  }, [isModalOpen, privateSafe]);
+
+  // Fetch metadata logic
+  const handleFetchMetadata = async (targetUrl: string) => {
+    if (!targetUrl || !targetUrl.startsWith('http')) {
+      setPreviewMetadata(null);
+      return;
+    }
+
+    setIsFetchingMetadata(true);
+    try {
+      const res = await getLinkMetadata(targetUrl);
+      if (res.success && res.metadata) {
+        setPreviewMetadata({
+          title: res.metadata.title || '',
+          image: res.metadata.image || ''
+        });
+      } else {
+        setPreviewMetadata({ title: 'No preview found', image: '' });
+      }
+    } catch (err) {
+      console.error('Failed to fetch metadata:', err);
+      setPreviewMetadata({ title: 'Failed to fetch preview', image: '' });
+    } finally {
+      setIsFetchingMetadata(false);
+    }
+  };
+
+  // Debounced metadata fetch
+  useEffect(() => {
+    if (!url) {
+      setPreviewMetadata(null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      if (url && url.startsWith('http')) {
+        handleFetchMetadata(url);
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [url]);
+
+  // Reset metadata when modal closes
+  useEffect(() => {
+    if (!isModalOpen) {
+      setPreviewMetadata(null);
+      setUrl('');
+      setNewCategoryName('');
+      setShowCreateCategory(false);
+      setShowMoreCategories(false);
+    }
+  }, [isModalOpen]);
 
   // Debounced search
   useEffect(() => {
@@ -62,13 +137,14 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     let categoryId = selectedCategory;
 
     if (showCreateCategory && newCategoryName) {
-      const res = await createCategory(newCategoryName);
+      const res = await createCategory(newCategoryName, isPrivate);
       if (res.success && res.category) {
         categoryId = res.category._id;
         setCategories([res.category, ...categories]);
         setSelectedCategory(categoryId);
         setNewCategoryName('');
         setShowCreateCategory(false);
+        router.refresh(); // Sync search bar categories
       } else {
         alert(res.error || 'Failed to create category');
         setIsLoading(false);
@@ -76,17 +152,23 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
       }
     }
 
-    if (!categoryId) {
-        alert('Please select a category');
-        setIsLoading(false);
-        return;
-    }
-
-    const res = await createLink(url, categoryId, [], isPrivate);
+    const res = await createLink(url, categoryId || '', [], isPrivate, previewMetadata ? {
+      title: previewMetadata.title,
+      image: previewMetadata.image
+    } : undefined);
     if (res.success) {
       setUrl('');
-      setIsPrivate(false);
+      // Keep isPrivate state if we are in private mode
       setIsModalOpen(false);
+      
+      const params = new URLSearchParams(window.location.search);
+      if (privateSafe) {
+        params.set('private', 'true');
+      }
+      params.delete('category'); // Reset filter
+      
+      router.push(`/?${params.toString()}`);
+      router.refresh(); // Pull new links
     } else {
       alert(res.error || 'Failed to save link');
     }
@@ -139,20 +221,18 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
               <button className="btn-icon circle" onClick={togglePreview} title={showPreview ? "Hide Previews" : "Show Previews"}>
                 {showPreview ? (
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"></path>
-                    <path d="M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"></path>
-                    <path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"></path>
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
                   </svg>
                 ) : (
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M1.05 1.05l21.9 21.9"></path>
-                    <path d="M17.45 17.45a9 9 0 0 1-12.9-12.9"></path>
-                    <path d="M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"></path>
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
                   </svg>
                 )}
               </button>
               <button className="btn-icon circle" onClick={toggleColumns} title="Toggle Grid View">
-                {columns === 1 ? '⊞' : '⊟'}
+                {columns === 1 ? '☰' : columns === 2 ? '⊟' : '⊞'}
               </button>
             </div>
           </div>
@@ -177,6 +257,55 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
                   required
                 />
               </div>
+
+              {/* Incremental Metadata Preview */}
+              {(url && (isFetchingMetadata || previewMetadata)) && (
+                <div className="modal-preview-container">
+                  {isFetchingMetadata ? (
+                    <div className="loading-spinner"></div>
+                  ) : previewMetadata ? (
+                    <div className="preview-content-box" style={{ position: 'relative', width: '100%', height: '100%' }}>
+                      {previewMetadata.image ? (
+                        <img src={previewMetadata.image} alt="Preview" className="modal-preview-image" />
+                      ) : (
+                        <div className="no-preview-text" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                          No Image Preview Found
+                        </div>
+                      )}
+                      <div className="preview-metadata-overlay" style={{ 
+                        position: 'absolute', 
+                        bottom: 0, 
+                        left: 0, 
+                        right: 0, 
+                        backgroundColor: 'rgba(0,0,0,0.7)', 
+                        padding: '10px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: '10px'
+                      }}>
+                        <p className="preview-title-text" style={{ 
+                          fontSize: '0.8rem', 
+                          fontWeight: 600, 
+                          color: 'white',
+                          margin: 0,
+                          flex: 1
+                        }}>
+                          {previewMetadata.title}
+                        </p>
+                        <button 
+                          type="button" 
+                          className="refresh-preview-btn"
+                          onClick={() => handleFetchMetadata(url)}
+                          title="Reload metadata"
+                        >
+                          ↻ Reload
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
               
               <div className="category-selector">
                 <p style={{marginBottom: '10px', fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Choose Category</p>

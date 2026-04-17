@@ -1,15 +1,19 @@
 'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import { getPinStatus, verifyPrivatePin } from '@/actions/pin';
 
 interface UserContextType {
   privateSafe: boolean;
   isSidebarOpen: boolean;
   isPinModalOpen: boolean;
+  hasPin: boolean;
   setPrivateSafe: (value: boolean) => void;
   setSidebarOpen: (value: boolean) => void;
   setPinModalOpen: (value: boolean) => void;
-  verifyPin: (pin: string) => boolean;
+  verifyPin: (pin: string) => Promise<boolean>;
+  refreshPinStatus: () => Promise<void>;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
@@ -18,31 +22,60 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [privateSafe, setPrivateSafeState] = useState(false);
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [isPinModalOpen, setPinModalOpen] = useState(false);
+  const [hasPin, setHasPin] = useState(false);
   const router = useRouter();
+  const { data: session, status } = useSession();
 
-  // Persistence (Sync with Cookie)
+  const refreshPinStatus = async () => {
+    try {
+      const res = await getPinStatus();
+      if (res.success) {
+        setHasPin(res.hasPin || false);
+      }
+    } catch (err) {
+      console.error('Failed to refresh PIN status:', err);
+    }
+  };
+
+  // Sync PIN status when session changes
+  useEffect(() => {
+    if (status === 'authenticated') {
+      refreshPinStatus();
+    } else if (status === 'unauthenticated') {
+      setHasPin(false);
+      setPrivateSafeState(false);
+    }
+  }, [status, session]);
+
+  // Persistence (Sync with Cookie & URL)
   useEffect(() => {
     const getCookie = (name: string) => {
       const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
       return match ? match[2] : null;
     };
     
-    const saved = getCookie('privateSafe');
-    if (saved === 'true') {
+    const searchParams = new URLSearchParams(window.location.search);
+    const inUrl = searchParams.get('private') === 'true';
+    const inCookie = getCookie('privateSafe') === 'true';
+    
+    if (inUrl || inCookie) {
       setPrivateSafeState(true);
+      if (inUrl && !inCookie) {
+         document.cookie = `privateSafe=true; path=/; max-age=${30 * 24 * 60 * 60}`;
+      }
     }
   }, []);
 
   const setPrivateSafe = (value: boolean) => {
     setPrivateSafeState(value);
-    // Set cookie (valid for 30 days)
     document.cookie = `privateSafe=${value}; path=/; max-age=${30 * 24 * 60 * 60}`;
-    router.refresh(); // Refresh to trigger server-side filtering
+    setSidebarOpen(false);
+    router.refresh();
   };
 
-  const verifyPin = (pin: string) => {
-    // Default PIN for now
-    return pin === '1234';
+  const verifyPin = async (pin: string) => {
+    const res = await verifyPrivatePin(pin);
+    return res.success === true;
   };
 
   return (
@@ -50,10 +83,12 @@ export function UserProvider({ children }: { children: ReactNode }) {
       privateSafe, 
       isSidebarOpen, 
       isPinModalOpen,
+      hasPin,
       setPrivateSafe, 
       setSidebarOpen, 
       setPinModalOpen,
-      verifyPin 
+      verifyPin,
+      refreshPinStatus
     }}>
       {children}
     </UserContext.Provider>

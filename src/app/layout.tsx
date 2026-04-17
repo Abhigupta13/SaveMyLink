@@ -33,6 +33,7 @@ export default async function RootLayout({
 }>) {
   const cookieStore = await cookies();
   const privateSafe = cookieStore.get('privateSafe')?.value === 'true';
+  const columns = Number(cookieStore.get('columns')?.value) || 2;
 
   let categories = [];
   try {
@@ -40,7 +41,7 @@ export default async function RootLayout({
   } catch (error) {
     console.warn("Failed to fetch categories. Database might not be connected yet.");
   }
-
+  
   return (
     <html
       lang="en"
@@ -51,7 +52,7 @@ export default async function RootLayout({
         <AuthProvider>
           <UserProvider>
             <PreviewProvider>
-              <ViewProvider>
+              <ViewProvider initialColumns={columns}>
                 <TopNav initialCategories={categories} />
                 {children}
               </ViewProvider>

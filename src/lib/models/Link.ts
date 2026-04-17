@@ -18,7 +18,7 @@ export interface ILink extends Document {
 
 const LinkSchema: Schema<ILink> = new Schema({
   url: { type: String, required: true },
-  category: { type: Schema.Types.ObjectId, ref: 'Category', required: true },
+  category: { type: Schema.Types.ObjectId, ref: 'Category', required: false },
   title: { type: String },
   previewImageUrl: { type: String },
   duration: { type: String },

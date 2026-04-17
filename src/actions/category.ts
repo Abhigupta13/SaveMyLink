@@ -9,19 +9,45 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 export async function getCategories(privateSafe: boolean = false) {
+  await connectToDatabase();
   const session = await getServerSession(authOptions);
+  
+  const fs = require('fs');
+  const logMsg = `[getCategories] Mode: ${privateSafe}, UserID: ${(session?.user as any)?.id}\n`;
+  fs.appendFileSync('action_log_new.txt', logMsg);
+
   if (!session?.user) return [];
   const userId = (session.user as any).id;
-
-  await connectToDatabase();
-  const categories = await Category.find({}).lean();
+  const userObjectId = new mongoose.Types.ObjectId(userId);
   
+  // Find categories belonging to this user in this mode
+  // Also include "ownerless" categories temporarily (for migration)
+  const categories = await Category.find({ 
+    $or: [
+      { userId: userObjectId }, 
+      { userId: { $exists: false } },
+      { userId: userId } // Handle string IDs just in case
+    ],
+    isPrivate: privateSafe === true ? true : { $ne: true }
+  }).lean();
+  
+  // Tag "ownerless" categories with current user if found, preserving their privacy state
+  const ownerless = categories.filter(c => !c.userId);
+  if (ownerless.length > 0) {
+    for (const cat of ownerless) {
+      await Category.updateOne(
+        { _id: cat._id },
+        { $set: { userId: userObjectId, isPrivate: cat.isPrivate || false } }
+      );
+    }
+  }
+
   // Build link query for aggregation based on mode
-  const linkQuery: any = { userId: new mongoose.Types.ObjectId(userId) };
+  const linkQuery: any = { userId: userObjectId };
   if (!privateSafe) {
-    linkQuery.isPrivate = { $ne: true }; // Count only public links
+    linkQuery.isPrivate = { $ne: true }; 
   } else {
-    linkQuery.isPrivate = true; // Count ONLY private links
+    linkQuery.isPrivate = true; 
   }
 
   // Aggregate link counts per category based on privacy filter
@@ -33,13 +59,12 @@ export async function getCategories(privateSafe: boolean = false) {
   const countMap = new Map();
   linkCounts.forEach((lc) => countMap.set(lc._id.toString(), lc.count));
   
-  // Enrich categories and filter out empty ones
+  // Enrich categories (WE REMOVE THE FILTER cat.count > 0 as requested)
   const enriched = categories
     .map((cat: any) => ({
       ...cat,
       count: countMap.get(cat._id.toString()) || 0
-    }))
-    .filter((cat: any) => cat.count > 0); // Only show categories with links
+    }));
   
   // Sort by count descending, then alphabetically
   enriched.sort((a, b) => {
@@ -50,13 +75,31 @@ export async function getCategories(privateSafe: boolean = false) {
   return JSON.parse(JSON.stringify(enriched));
 }
 
-export async function createCategory(name: string, color?: string) {
+export async function createCategory(name: string, isPrivate: boolean = false, color?: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
   await connectToDatabase();
   try {
-    const existing = await Category.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
-    if (existing) return { error: 'Category already exists' };
+    const existing = await Category.findOne({ 
+      userId,
+      isPrivate,
+      name: { $regex: new RegExp(`^${name}$`, 'i') } 
+    });
+    
+    if (existing) {
+      // Instead of error, return the existing category
+      return { success: true, category: JSON.parse(JSON.stringify(existing)) };
+    }
 
-    const category = await Category.create({ name, color });
+    const category = await Category.create({ 
+      name, 
+      color, 
+      userId, 
+      isPrivate 
+    });
+    
     revalidatePath('/');
     return { success: true, category: JSON.parse(JSON.stringify(category)) };
   } catch (error: any) {
