@@ -6,14 +6,14 @@ export default function LandingPage() {
     <div className="landing-page">
       <section className="hero">
         <div className="hero-content">
-          <h1 className="hero-title">Securely Save & Organize <br/><span className="gradient-text">Your Digital Treasure</span></h1>
+          <h1 className="hero-title">ALL <span className="logo-light" style={{ color: 'inherit', fontWeight: 'inherit', opacity: 1, background: 'none', WebkitTextFillColor: 'initial' }}>you need</span> <br/><span className="gradient-text">In One Sanctuary</span></h1>
           <p className="hero-subtitle">
-            A premium link manager with a built-in Private Safe. 
-            Keep your favorites organized and your secrets locked away.
+            Your personal digital companion. 
+            Organize links, store documents, and access social hubs all in one secure place.
           </p>
           <div className="hero-actions">
-            <Link href="/auth/signup" className="btn-primary hero-btn">Get Started for Free</Link>
-            <Link href="/auth/signin" className="btn-secondary hero-btn">Sign In to Your Vault</Link>
+            <Link href="/auth/signup" className="btn-primary hero-btn">Explore Your Sanctuary</Link>
+            <Link href="/auth/signin" className="btn-secondary hero-btn">Sign In</Link>
           </div>
         </div>
         <div className="hero-visual">
@@ -43,7 +43,7 @@ export default function LandingPage() {
       </section>
 
       <footer className="landing-footer">
-        <p>&copy; 2026 SaveMyLink. Build your personal vault today.</p>
+        <p>&copy; 2026 MYVOULT. Build your personal vault today.</p>
       </footer>
     </div>
   );

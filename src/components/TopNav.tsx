@@ -1,24 +1,24 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { createCategory } from '@/actions/category';
 import { createLink, getLinkMetadata } from '@/actions/link';
-import { usePreview } from '@/components/PreviewContext';
-import { useView } from '@/components/ViewContext';
 import { useUser } from '@/components/UserContext';
 import UserProfileSidebar from './UserProfileSidebar';
 import PinModal from './PinModal';
 import { useSession } from 'next-auth/react';
+import { Search, Menu, Plus, Home, Link as LinkIcon, Library, CheckSquare, Globe, X } from 'lucide-react';
 
 export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
   const { data: session } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const pathname = usePathname();
   
   const [categories, setCategories] = useState(initialCategories);
+  const [showSearchBar, setShowSearchBar] = useState(false);
   
-  // Sync categories when server provides new ones (after router.refresh())
   useEffect(() => {
     setCategories(initialCategories);
   }, [initialCategories]);
@@ -28,33 +28,19 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
   const [newCategoryName, setNewCategoryName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [showMoreCategories, setShowMoreCategories] = useState(false);
   const [showCreateCategory, setShowCreateCategory] = useState(false);
   const [searchValue, setSearchValue] = useState(searchParams.get('search') || '');
   
-  // Metadata Preview State
   const [previewMetadata, setPreviewMetadata] = useState<{ title: string, image: string } | null>(null);
   const [isFetchingMetadata, setIsFetchingMetadata] = useState(false);
   
-  const { showPreview, togglePreview } = usePreview();
-  const { columns, toggleColumns } = useView();
   const { setSidebarOpen, privateSafe } = useUser();
-  
   const [isPrivate, setIsPrivate] = useState(privateSafe);
 
-  // Sync isPrivate with current mode when mode changes
   useEffect(() => {
     setIsPrivate(privateSafe);
   }, [privateSafe]);
 
-  // Also sync when modal opens to ensure it matches current mode
-  useEffect(() => {
-    if (isModalOpen) {
-      setIsPrivate(privateSafe);
-    }
-  }, [isModalOpen, privateSafe]);
-
-  // Fetch metadata logic
   const handleFetchMetadata = async (targetUrl: string) => {
     if (!targetUrl || !targetUrl.startsWith('http')) {
       setPreviewMetadata(null);
@@ -80,7 +66,6 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     }
   };
 
-  // Debounced metadata fetch
   useEffect(() => {
     if (!url) {
       setPreviewMetadata(null);
@@ -96,38 +81,34 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     return () => clearTimeout(timer);
   }, [url]);
 
-  // Reset metadata when modal closes
   useEffect(() => {
     if (!isModalOpen) {
       setPreviewMetadata(null);
       setUrl('');
       setNewCategoryName('');
       setShowCreateCategory(false);
-      setShowMoreCategories(false);
     }
   }, [isModalOpen]);
 
-  // Debounced search
   useEffect(() => {
     const timer = setTimeout(() => {
       const params = new URLSearchParams(searchParams.toString());
       const currentSearch = params.get('search') || '';
       const currentPage = params.get('page') || '1';
 
-      // Only push if the search value or page has actually changed
       if (searchValue !== currentSearch || currentPage !== '1') {
         if (searchValue) {
           params.set('search', searchValue);
         } else {
           params.delete('search');
         }
-        params.set('page', '1'); // Reset to page 1 on search
-        router.push(`/?${params.toString()}`);
+        params.set('page', '1');
+        router.push(`${pathname}?${params.toString()}`);
       }
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [searchValue, router, searchParams]);
+  }, [searchValue, router, searchParams, pathname]);
 
   const handleAddLink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,7 +125,7 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
         setSelectedCategory(categoryId);
         setNewCategoryName('');
         setShowCreateCategory(false);
-        router.refresh(); // Sync search bar categories
+        router.refresh();
       } else {
         alert(res.error || 'Failed to create category');
         setIsLoading(false);
@@ -158,149 +139,144 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     } : undefined);
     if (res.success) {
       setUrl('');
-      // Keep isPrivate state if we are in private mode
       setIsModalOpen(false);
       
       const params = new URLSearchParams(window.location.search);
-      if (privateSafe) {
+      if (isPrivate) {
         params.set('private', 'true');
       }
-      params.delete('category'); // Reset filter
+      params.delete('category');
       
-      router.push(`/?${params.toString()}`);
-      router.refresh(); // Pull new links
+      router.push(`/links?${params.toString()}`);
+      router.refresh();
     } else {
       alert(res.error || 'Failed to save link');
     }
     setIsLoading(false);
   };
 
-  const topCategories = categories.slice(0, 5);
-  const restCategories = categories.slice(5);
+  const navItems = [
+    { label: 'Home', path: '/', icon: <Home size={18} strokeWidth={2.5} /> },
+    { label: 'Links', path: '/links', icon: <LinkIcon size={18} strokeWidth={2.5} /> },
+    { label: 'D-locker', path: '/d-locker', icon: <Library size={18} strokeWidth={2.5} /> },
+    { label: 'Tasks', path: '/tasks', icon: <CheckSquare size={18} strokeWidth={2.5} /> },
+    { label: 'Social', path: '/social', icon: <Globe size={18} strokeWidth={2.5} /> },
+  ];
 
   return (
-    <header className="app-header">
-      <div className="container">
-        {/* Row 1: App name and add link */}
-        <div className="header-row row-1" style={!session ? { justifyContent: 'center' } : {}}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+    <header className="app-header-container">
+      <div className="container" style={{ padding: '0 16px' }}>
+        {/* Row 1: Logo & Tools */}
+        <div className="header-top-line" style={{ padding: '16px 0 12px' }}>
+          <a href="/" className="logo">ALL <span className="logo-light" style={{ marginLeft: '4px' }}>YOU NEED</span></a>
+          
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             {session && (
               <button 
-                className="user-icon-btn" 
-                onClick={() => setSidebarOpen(true)}
-                title="User Profile"
-                style={{ fontSize: '1.5rem', background: 'var(--bg-tertiary)', width: '38px', height: '38px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                onClick={() => setShowSearchBar(!showSearchBar)} 
+                className={`menu-trigger-btn ${showSearchBar ? 'active' : ''}`}
+                style={{ 
+                  background: showSearchBar ? 'var(--accent-soft)' : 'transparent',
+                  color: showSearchBar ? 'var(--accent-color)' : 'var(--text-primary)'
+                }}
               >
-                👤
+                <Search size={22} strokeWidth={2.5} />
               </button>
             )}
-            <a href="/" className="logo">SaveMyLink</a>
+
+            {session && (
+              <button 
+                onClick={() => setSidebarOpen(true)} 
+                className="menu-trigger-btn"
+                style={{ color: 'var(--text-primary)' }}
+              >
+                <Menu size={24} strokeWidth={2.5} />
+              </button>
+            )}
           </div>
-          {session && (
-            <button className="btn-primary" onClick={() => setIsModalOpen(true)}>
-              + Add Link
-            </button>
-          )}
         </div>
 
-        {/* Row 2: Search input, hide button and toggle view */}
+        {/* Row 2: Navigation Tabs */}
         {session && (
-          <div className="header-row row-2">
-            <div className="search-container">
-              <span className="search-icon">🔍</span>
-              <input 
-                type="text" 
-                placeholder="Search by title, tag, or URL..." 
-                value={searchValue}
-                onChange={(e) => setSearchValue(e.target.value)}
-                className="search-input"
-              />
-            </div>
+          <nav className="tab-nav-container">
+            {navItems.map((item) => (
+              <button 
+                key={item.label}
+                className={`nav-tab-item ${pathname === item.path || (item.path !== '/' && pathname.startsWith(item.path)) ? 'active' : ''}`}
+                onClick={() => router.push(item.path)}
+              >
+                <span>{item.icon}</span>
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        )}
 
-            <div className="header-actions">
-              <button className="btn-icon circle" onClick={togglePreview} title={showPreview ? "Hide Previews" : "Show Previews"}>
-                {showPreview ? (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                    <circle cx="12" cy="12" r="3"></circle>
-                  </svg>
-                ) : (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                    <line x1="1" y1="1" x2="23" y2="23"></line>
-                  </svg>
-                )}
-              </button>
-              <button className="btn-icon circle" onClick={toggleColumns} title="Toggle Grid View">
-                {columns === 1 ? '☰' : columns === 2 ? '⊟' : '⊞'}
-              </button>
+        {/* Row 3: Conditional Search bar */}
+        {session && showSearchBar && (
+          <div className="contextual-header-row" style={{ paddingBottom: '12px', animation: 'fadeInDown 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}>
+            <div className="search-wrapper">
+              <div className="search-container" style={{ height: '48px', borderRadius: '16px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
+                <span className="search-icon" style={{ opacity: 0.5 }}><Search size={18} /></span>
+                <input 
+                  type="text" 
+                  placeholder="Search your vault..." 
+                  value={searchValue}
+                  onChange={(e) => setSearchValue(e.target.value)}
+                  className="search-input"
+                  style={{ paddingLeft: '44px', fontWeight: 600 }}
+                  autoFocus
+                />
+              </div>
             </div>
           </div>
         )}
       </div>
 
+      {session && pathname === '/links' && (
+        <div className="fab-container">
+          <button className="fab-btn" onClick={() => setIsModalOpen(true)} title="Add Link">
+            <Plus size={32} strokeWidth={3} />
+          </button>
+        </div>
+      )}
+
       {isModalOpen && (
         <div className="modal-overlay" onClick={() => setIsModalOpen(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h2 className="modal-title">Save a New Link</h2>
-              <button className="modal-close" onClick={() => setIsModalOpen(false)}>&times;</button>
+              <h2 className="modal-title">New Entry</h2>
+              <button className="modal-close" onClick={() => setIsModalOpen(false)}><X size={24} /></button>
             </div>
             
             <form onSubmit={handleAddLink} className="modal-form">
               <div className="input-group">
                 <input 
-                  type="url" 
-                  placeholder="Paste the URL here..." 
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  required
+                  type="url" placeholder="Paste URL (https://...)" 
+                  value={url} onChange={(e) => setUrl(e.target.value)}
+                  style={{ borderRadius: '16px', padding: '14px 18px', background: 'var(--bg-tertiary)' }} required
                 />
               </div>
 
-              {/* Incremental Metadata Preview */}
               {(url && (isFetchingMetadata || previewMetadata)) && (
                 <div className="modal-preview-container">
                   {isFetchingMetadata ? (
-                    <div className="loading-spinner"></div>
+                    <div style={{ padding: '20px', display: 'flex', justifyContent: 'center' }}>
+                      <div className="loading-spinner"></div>
+                    </div>
                   ) : previewMetadata ? (
-                    <div className="preview-content-box" style={{ position: 'relative', width: '100%', height: '100%' }}>
+                    <div className="preview-content-box" style={{ 
+                      position: 'relative', width: '100%', height: '180px', background: 'var(--bg-tertiary)', borderRadius: '20px', overflow: 'hidden', border: '1px solid var(--border-color)'
+                    }}>
                       {previewMetadata.image ? (
-                        <img src={previewMetadata.image} alt="Preview" className="modal-preview-image" />
+                        <img src={previewMetadata.image} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                       ) : (
-                        <div className="no-preview-text" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                          No Image Preview Found
-                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)', fontWeight: 600 }}>NO PREVIEW</div>
                       )}
-                      <div className="preview-metadata-overlay" style={{ 
-                        position: 'absolute', 
-                        bottom: 0, 
-                        left: 0, 
-                        right: 0, 
-                        backgroundColor: 'rgba(0,0,0,0.7)', 
-                        padding: '10px',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: '10px'
+                      <div style={{ 
+                        position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.95) 0%, transparent 100%)', padding: '20px 16px'
                       }}>
-                        <p className="preview-title-text" style={{ 
-                          fontSize: '0.8rem', 
-                          fontWeight: 600, 
-                          color: 'white',
-                          margin: 0,
-                          flex: 1
-                        }}>
-                          {previewMetadata.title}
-                        </p>
-                        <button 
-                          type="button" 
-                          className="refresh-preview-btn"
-                          onClick={() => handleFetchMetadata(url)}
-                          title="Reload metadata"
-                        >
-                          ↻ Reload
-                        </button>
+                        <p style={{ fontSize: '0.85rem', color: 'white', margin: 0, fontWeight: 700, lineClamp: 2, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{previewMetadata.title}</p>
                       </div>
                     </div>
                   ) : null}
@@ -308,81 +284,47 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
               )}
               
               <div className="category-selector">
-                <p style={{marginBottom: '10px', fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Choose Category</p>
+                <p style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Store in</p>
                 <div className="popular-categories" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  {topCategories.map(c => (
+                  {categories.slice(0, 5).map(c => (
                     <button 
-                      type="button" 
-                      key={c._id} 
+                      type="button" key={c._id} 
                       className={`cat-pill ${selectedCategory === c._id && !showCreateCategory ? 'active' : ''}`} 
-                      onClick={() => { setSelectedCategory(c._id); setShowCreateCategory(false); setShowMoreCategories(false); }}
+                      onClick={() => { setSelectedCategory(c._id); setShowCreateCategory(false); }}
+                      style={{ padding: '10px 16px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: 700 }}
                     >
                       {c.name}
                     </button>
                   ))}
-                  
-                  {restCategories.length > 0 && (
-                    <button 
-                      type="button" 
-                      className={`cat-pill ${showMoreCategories ? 'active' : ''}`} 
-                      onClick={() => { setShowMoreCategories(!showMoreCategories); setShowCreateCategory(false); }}
-                    >
-                      + More
-                    </button>
-                  )}
-                  
                   <button 
-                    type="button" 
-                    className={`cat-pill ${showCreateCategory ? 'active' : ''}`} 
-                    onClick={() => { setShowCreateCategory(true); setShowMoreCategories(false); setSelectedCategory(''); }}
+                    type="button" className={`cat-pill ${showCreateCategory ? 'active' : ''}`} 
+                    onClick={() => { setShowCreateCategory(true); setSelectedCategory(''); }}
+                    style={{ padding: '10px 16px', borderRadius: '12px', fontSize: '0.8rem', borderStyle: 'dashed' }}
                   >
-                    + Create
+                    + New
                   </button>
                 </div>
-                
-                {showMoreCategories && restCategories.length > 0 && (
-                  <select 
-                    className="category-select"
-                    value={selectedCategory}
-                    onChange={(e) => { setSelectedCategory(e.target.value); setShowCreateCategory(false); }}
-                    style={{marginTop: '12px'}}
-                  >
-                    <option value="" disabled>Select from more categories</option>
-                    {restCategories.map((c: any) => (
-                      <option key={c._id} value={c._id}>{c.name}</option>
-                    ))}
-                  </select>
-                )}
                 
                 {showCreateCategory && (
                   <div className="input-group" style={{marginTop: '12px'}}>
                     <input 
-                      type="text" 
-                      placeholder="New Category Name" 
-                      value={newCategoryName}
+                      type="text" placeholder="Category Name" value={newCategoryName}
                       onChange={(e) => setNewCategoryName(e.target.value)}
-                      required
+                      style={{ borderRadius: '14px' }} required
                     />
                   </div>
                 )}
               </div>
 
-              <div className="input-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
+              <div className="input-group" style={{ marginBottom: '24px' }}>
                 <label className="switch-container">
-                  <div className="switch">
-                    <input 
-                      type="checkbox" 
-                      checked={isPrivate} 
-                      onChange={(e) => setIsPrivate(e.target.checked)}
-                    />
-                    <span className="slider"></span>
-                  </div>
-                  <span className="switch-label">Mark as Private Link 🔒</span>
+                  <div className="switch"><input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)}/><span className="slider round"></span></div>
+                  <span className="switch-label" style={{ fontWeight: 600 }}>Internal Safe 🔒</span>
                 </label>
               </div>
 
-              <button type="submit" className="btn-primary" disabled={isLoading} style={{ marginTop: '8px' }}>
-                {isLoading ? <div className="loading-spinner"></div> : 'Save Link'}
+              <button type="submit" className="btn-primary" disabled={isLoading} style={{ width: '100%', height: '56px', borderRadius: '18px', fontWeight: 800 }}>
+                {isLoading ? 'Saving...' : 'Secure to Vault'}
               </button>
             </form>
           </div>
@@ -391,6 +333,12 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
       
       <UserProfileSidebar />
       <PinModal />
+      <style jsx>{`
+        @keyframes fadeInDown {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
     </header>
   );
 }

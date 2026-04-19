@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { usePreview } from '@/components/PreviewContext';
 import { updateLink, deleteLink, toggleFavorite, refreshMetadata, toggleLinkPrivacy } from '@/actions/link';
 
@@ -87,6 +87,45 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
     setIsRefreshing(false);
   };
 
+  const handleShare = async (e: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    if (isMobile && typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: link.title || 'Check out this link',
+          url: link.url,
+        });
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          console.error('Error sharing:', err);
+          // Fallback to clipboard if share fails for non-abort reasons
+          copyToClipboard();
+        }
+      }
+    } else {
+      // Prioritize clipboard on desktop due to unreliability of Web Share API on some OSs
+      copyToClipboard();
+    }
+  };
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setStatus({ type: 'success', message: 'Link copied!' });
+      setTimeout(() => setStatus(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy link:', err);
+      setStatus({ type: 'error', message: 'Failed to copy link' });
+      setTimeout(() => setStatus(null), 2000);
+    }
+  };
+
   return (
     <div className="link-card-container">
       <a href={link.url} target="_blank" rel="noopener noreferrer" className="link-card">
@@ -127,6 +166,13 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
           </div>
           <div className="card-url" title={link.url}>{link.url}</div>
           <h3 className="card-title">{link.title || link.url}</h3>
+          
+          {status && !isEditing && (
+            <div className={`card-status ${status.type}`}>
+              {status.message}
+            </div>
+          )}
+
           <button 
             className="card-menu-btn" 
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsEditing(true); }}
@@ -247,6 +293,15 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
                       style={{ background: 'var(--bg-tertiary)', width: '36px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)' }}
                     >
                       {isFavorite ? '★' : '☆'}
+                    </button>
+                    <button 
+                      type="button"
+                      className="modal-share-btn"
+                      onClick={handleShare}
+                      title="Share Link"
+                      style={{ background: 'var(--bg-tertiary)', width: '36px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}
+                    >
+                      🔗
                     </button>
                   </div>
                   <button type="submit" className="btn-primary" disabled={isSaving}>

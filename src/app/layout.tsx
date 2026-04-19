@@ -22,8 +22,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SaveMyLink",
-  description: "Save your important links",
+  title: "ALL you need",
+  description: "Your personal digital companion",
 };
 
 export default async function RootLayout({
@@ -54,7 +54,9 @@ export default async function RootLayout({
             <PreviewProvider>
               <ViewProvider initialColumns={columns}>
                 <TopNav initialCategories={categories} />
-                {children}
+                <main className="flex-1">
+                  {children}
+                </main>
               </ViewProvider>
             </PreviewProvider>
           </UserProvider>

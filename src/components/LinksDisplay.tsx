@@ -76,11 +76,7 @@ export default function LinksDisplay({
   return (
     <>
       <div 
-        className="links-grid" 
-        style={{ 
-          gridTemplateColumns: `repeat(${columns}, 1fr)`,
-          '--cols': columns
-        } as any}
+        className={`links-grid display-cols-${columns}`} 
       >
         {links.map((link: any) => (
           <LinkCard key={link._id} link={link} categories={categories} privateSafe={privateSafe} />
