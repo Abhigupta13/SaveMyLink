@@ -3,6 +3,7 @@
 import mongoose from 'mongoose';
 import connectToDatabase from '@/lib/mongodb';
 import { Link } from '@/lib/models/Link';
+import { Category } from '@/lib/models/Category';
 import { revalidatePath } from 'next/cache';
 import { scrapeMetadata } from '@/lib/metadata';
 import { getServerSession } from "next-auth/next";
@@ -207,6 +208,60 @@ export async function refreshMetadata(linkId: string) {
   }
 }
 
+export async function refreshAllMetadata(privateSafe?: boolean) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
+  await connectToDatabase();
+  try {
+    const query: any = { userId };
+    if (privateSafe === true) {
+      query.isPrivate = true;
+    } else if (privateSafe === false) {
+      query.isPrivate = { $ne: true };
+    }
+
+    const links = await Link.find(query)
+      .select('_id url title')
+      .lean();
+
+    let successCount = 0;
+    let failedCount = 0;
+    const batchSize = 5;
+
+    for (let i = 0; i < links.length; i += batchSize) {
+      const batch = links.slice(i, i + batchSize);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (link: any) => {
+          const metadata = await scrapeMetadata(link.url);
+          const updateData: any = {
+            title: metadata.title || link.title || link.url,
+            previewImageUrl: metadata.image || '',
+          };
+          if (metadata.duration) updateData.duration = metadata.duration;
+          if (metadata.quality) updateData.quality = metadata.quality;
+          await Link.findByIdAndUpdate(link._id, updateData);
+        })
+      );
+
+      for (const result of batchResults) {
+        if (result.status === 'fulfilled') {
+          successCount++;
+        } else {
+          failedCount++;
+        }
+      }
+    }
+
+    revalidatePath('/links');
+    revalidatePath('/');
+    return { success: true, total: links.length, successCount, failedCount };
+  } catch (err: any) {
+    return { error: err.message };
+  }
+}
+
 export async function migrateExistingLinksToPrivate() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: 'Not authenticated' };
@@ -236,7 +291,9 @@ export async function toggleLinkPrivacy(linkId: string, isPrivate: boolean) {
   }
 }
 
-export async function bulkCreateLinks(links: { url: string, isPrivate: boolean }[]) {
+export async function bulkCreateLinks(
+  links: { url: string; isPrivate?: boolean; category?: string; tags?: string[] }[]
+) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: 'Not authenticated' };
   const userId = (session.user as any).id;
@@ -249,6 +306,8 @@ export async function bulkCreateLinks(links: { url: string, isPrivate: boolean }
     errors: [] as string[]
   };
 
+  const categoryCache = new Map<string, string>();
+
   for (const item of links) {
     try {
       if (!item.url || !item.url.startsWith('http')) {
@@ -256,15 +315,48 @@ export async function bulkCreateLinks(links: { url: string, isPrivate: boolean }
         continue;
       }
 
+      const resolvedIsPrivate = item.isPrivate ?? false;
+      const normalizedTags = Array.isArray(item.tags)
+        ? item.tags.map((tag) => tag.trim()).filter(Boolean)
+        : [];
+      let categoryId: mongoose.Types.ObjectId | undefined;
+
+      const categoryName = item.category?.trim();
+      if (categoryName) {
+        const cacheKey = `${resolvedIsPrivate}:${categoryName.toLowerCase()}`;
+        const cachedId = categoryCache.get(cacheKey);
+
+        if (cachedId) {
+          categoryId = new mongoose.Types.ObjectId(cachedId);
+        } else {
+          const categoryDoc = await Category.findOneAndUpdate(
+            {
+              userId,
+              isPrivate: resolvedIsPrivate,
+              name: { $regex: new RegExp(`^${categoryName}$`, 'i') },
+            },
+            { $setOnInsert: { name: categoryName, userId, isPrivate: resolvedIsPrivate } },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
+          );
+
+          if (categoryDoc?._id) {
+            categoryId = categoryDoc._id;
+            categoryCache.set(cacheKey, categoryDoc._id.toString());
+          }
+        }
+      }
+
       const metadata = await scrapeMetadata(item.url).catch(() => ({ title: item.url, image: '', duration: '', quality: '' }));
       
       await Link.create({
         url: item.url,
+        category: categoryId,
         title: metadata.title || item.url,
         previewImageUrl: metadata.image || '',
         duration: metadata.duration || '',
         quality: metadata.quality || '',
-        isPrivate: item.isPrivate,
+        tags: normalizedTags,
+        isPrivate: resolvedIsPrivate,
         userId
       });
       results.successCount++;

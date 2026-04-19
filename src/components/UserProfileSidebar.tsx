@@ -5,11 +5,14 @@ import { useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import Link from 'next/link';
 import BulkImportModal from './BulkImportModal';
+import { refreshAllMetadata } from '@/actions/link';
 
 export default function UserProfileSidebar() {
   const { isSidebarOpen, setSidebarOpen, privateSafe, setPrivateSafe, setPinModalOpen } = useUser();
   const { data: session } = useSession();
   const [isBulkModalOpen, setBulkModalOpen] = useState(false);
+  const [isRefreshingMetadata, setIsRefreshingMetadata] = useState(false);
+  const [metadataRefreshResult, setMetadataRefreshResult] = useState<string | null>(null);
 
   const handleLogout = () => {
     if (window.confirm('Are you sure you want to log out?')) {
@@ -23,6 +26,20 @@ export default function UserProfileSidebar() {
     } else {
       setPrivateSafe(false);
     }
+  };
+
+  const handleReloadAllPreviews = async () => {
+    setIsRefreshingMetadata(true);
+    setMetadataRefreshResult(null);
+    const res: any = await refreshAllMetadata(privateSafe);
+    if (res?.success) {
+      setMetadataRefreshResult(
+        `Updated ${res.successCount}/${res.total} links${res.failedCount ? ` (${res.failedCount} failed)` : ''}.`
+      );
+    } else {
+      setMetadataRefreshResult(res?.error || 'Failed to refresh metadata.');
+    }
+    setIsRefreshingMetadata(false);
   };
 
   return (
@@ -75,11 +92,27 @@ export default function UserProfileSidebar() {
                   <span className="menu-sublabel" style={{ fontSize: '0.75rem', opacity: 0.6 }}>Encryption enabled</span>
                 </div>
               </div>
-              <div className="switch" onClick={e => e.stopPropagation()}>
+              <div
+                className="switch"
+                role="switch"
+                aria-checked={privateSafe}
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleTogglePrivate();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleTogglePrivate();
+                  }
+                }}
+              >
                 <input 
                   type="checkbox" 
                   checked={privateSafe} 
-                  onChange={handleTogglePrivate}
+                  readOnly
+                  aria-hidden="true"
                 />
                 <span className="slider round"></span>
               </div>
@@ -100,6 +133,42 @@ export default function UserProfileSidebar() {
                 </div>
               </div>
             </button>
+
+            <button
+              className="menu-item"
+              onClick={handleReloadAllPreviews}
+              disabled={isRefreshingMetadata}
+              style={{
+                width: '100%',
+                border: 'none',
+                background: 'none',
+                textAlign: 'left',
+                padding: '16px',
+                borderRadius: '18px',
+                margin: '4px 0',
+                opacity: isRefreshingMetadata ? 0.7 : 1
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'var(--bg-tertiary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ fontSize: '1.2rem' }}>↻</span>
+                </div>
+                <div className="menu-text">
+                  <span className="menu-label" style={{ fontWeight: 700 }}>
+                    {isRefreshingMetadata ? 'Reloading...' : 'Reload previews & names'}
+                  </span>
+                  <span className="menu-sublabel" style={{ fontSize: '0.75rem', opacity: 0.6 }}>
+                    Refresh all {privateSafe ? 'private' : 'visible'} links
+                  </span>
+                </div>
+              </div>
+            </button>
+
+            {metadataRefreshResult && (
+              <div style={{ padding: '0 16px 8px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {metadataRefreshResult}
+              </div>
+            )}
 
             <div className="menu-group-label" style={{ padding: '24px 16px 8px', fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Preference</div>
 

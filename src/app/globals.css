@@ -1,5 +1,5 @@
-@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@700;800&display=swap');
+@import "tailwindcss";
 
 @theme {
   --color-bg-primary: #0c111d;
@@ -1807,6 +1807,10 @@ body {
 .sidebar-panel-overlay.open {
   visibility: visible;
   opacity: 1;
+}
+
+.sidebar-panel-overlay.open .sidebar-panel {
+  transform: translateX(0);
 }
 
 .sidebar-panel {

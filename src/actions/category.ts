@@ -11,10 +11,6 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 export async function getCategories(privateSafe: boolean = false) {
   await connectToDatabase();
   const session = await getServerSession(authOptions);
-  
-  const fs = require('fs');
-  const logMsg = `[getCategories] Mode: ${privateSafe}, UserID: ${(session?.user as any)?.id}\n`;
-  fs.appendFileSync('action_log_new.txt', logMsg);
 
   if (!session?.user) return [];
   const userId = (session.user as any).id;
@@ -56,14 +52,17 @@ export async function getCategories(privateSafe: boolean = false) {
     { $group: { _id: '$category', count: { $sum: 1 } } }
   ]);
   
-  const countMap = new Map();
-  linkCounts.forEach((lc) => countMap.set(lc._id.toString(), lc.count));
+  const countMap = new Map<string, number>();
+  linkCounts.forEach((lc: { _id: unknown; count: number }) => {
+    if (!lc?._id) return;
+    countMap.set(String(lc._id), lc.count ?? 0);
+  });
   
   // Enrich categories (WE REMOVE THE FILTER cat.count > 0 as requested)
   const enriched = categories
     .map((cat: any) => ({
       ...cat,
-      count: countMap.get(cat._id.toString()) || 0
+      count: cat?._id ? countMap.get(String(cat._id)) || 0 : 0
     }));
   
   // Sort by count descending, then alphabetically

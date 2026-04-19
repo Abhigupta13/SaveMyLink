@@ -3,15 +3,49 @@ import { useState, useRef } from 'react';
 import { bulkCreateLinks } from '@/actions/link';
 import { useUser } from './UserContext';
 
+type BulkImportEntry = {
+  url: string;
+  isPrivate?: boolean;
+  category?: string;
+  tags?: string[];
+};
+
 export default function BulkImportModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
   const { privateSafe } = useUser();
   const [activeTab, setActiveTab] = useState<'text' | 'csv'>('text');
   const [urlList, setUrlList] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ success: number, failed: number } | null>(null);
+  const [progress, setProgress] = useState<{ processed: number; total: number; success: number; failed: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
+
+  const parseCsvLine = (line: string) => {
+    const cols: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        cols.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    cols.push(current.trim());
+    return cols.map((col) => col.replace(/^["']|["']$/g, ''));
+  };
 
   const handlePasteSubmit = async () => {
     const urls = urlList
@@ -21,13 +55,43 @@ export default function BulkImportModal({ isOpen, onClose }: { isOpen: boolean, 
 
     if (urls.length === 0) return;
 
-    setLoading(true);
-    const res: any = await bulkCreateLinks(urls.map(url => ({ url, isPrivate: privateSafe })));
-    setLoading(false);
-    
-    if (res.success) {
-      setResult({ success: res.successCount || 0, failed: res.failed || 0 });
+    const entries: BulkImportEntry[] = urls.map((url) => ({ url, isPrivate: privateSafe }));
+    await importWithProgress(entries);
+    if (entries.length > 0) {
       setUrlList('');
+    }
+  };
+
+  const importWithProgress = async (entries: BulkImportEntry[]) => {
+    if (entries.length === 0) return;
+
+    const batchSize = 5;
+    let successCount = 0;
+    let failedCount = 0;
+    setLoading(true);
+    setProgress({ processed: 0, total: entries.length, success: 0, failed: 0 });
+
+    try {
+      for (let i = 0; i < entries.length; i += batchSize) {
+        const batch = entries.slice(i, i + batchSize);
+        const res: any = await bulkCreateLinks(batch);
+        const batchSuccess = res?.successCount || 0;
+        const batchFailed = res?.failed || 0;
+
+        successCount += batchSuccess;
+        failedCount += batchFailed;
+
+        setProgress({
+          processed: Math.min(i + batch.length, entries.length),
+          total: entries.length,
+          success: successCount,
+          failed: failedCount
+        });
+      }
+
+      setResult({ success: successCount, failed: failedCount });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -35,42 +99,55 @@ export default function BulkImportModal({ isOpen, onClose }: { isOpen: boolean, 
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setLoading(true);
     const reader = new FileReader();
     reader.onload = async (event) => {
       const text = event.target?.result as string;
-      const lines = text.split('\n');
+      const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
       if (lines.length < 1) {
-        setLoading(false);
         return;
       }
 
-      // Simple CSV parsing: find URL-like columns or look for "url", "link" in header
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+      const headers = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase());
       let urlIndex = headers.findIndex(h => h.includes('url') || h.includes('link') || h.includes('href'));
+      const categoryIndex = headers.findIndex(h => h === 'category' || h.includes('category'));
+      const privateIndex = headers.findIndex(h => h === 'isprivate' || h.includes('private'));
+      const tagsIndex = headers.findIndex(h => h === 'tags' || h.includes('tag'));
       
       if (urlIndex === -1) urlIndex = 0; // Default to first column if no header match
 
-      const urls = lines.slice(1)
+      const entries: BulkImportEntry[] = lines.slice(1)
         .map(line => {
-          const cols = line.split(',');
-          return cols[urlIndex]?.trim().replace(/^["']|["']$/g, ''); // Remove quotes
-        })
-        .filter(url => url && url.startsWith('http'));
+          const cols = parseCsvLine(line);
+          const url = cols[urlIndex]?.trim();
+          const category = categoryIndex >= 0 ? cols[categoryIndex]?.trim() : '';
+          const rawPrivate = privateIndex >= 0 ? cols[privateIndex]?.trim().toLowerCase() : '';
+          const rowIsPrivate = ['true', '1', 'yes', 'y'].includes(rawPrivate)
+            ? true
+            : ['false', '0', 'no', 'n'].includes(rawPrivate)
+              ? false
+              : privateSafe;
+          const rawTags = tagsIndex >= 0 ? cols[tagsIndex] : '';
+          const tags = rawTags
+            ? rawTags.split(/[;,]/).map(tag => tag.trim()).filter(Boolean)
+            : [];
 
-      if (urls.length > 0) {
-        const res: any = await bulkCreateLinks(urls.map(url => ({ url, isPrivate: privateSafe })));
-        if (res.success) {
-          setResult({ success: res.successCount || 0, failed: res.failed || 0 });
-        }
-      }
-      setLoading(false);
+          return {
+            url,
+            category: category || undefined,
+            isPrivate: rowIsPrivate,
+            tags
+          };
+        })
+        .filter(item => item.url && item.url.startsWith('http'));
+
+      await importWithProgress(entries);
     };
     reader.readAsText(file);
   };
 
   const handleClose = () => {
     setResult(null);
+    setProgress(null);
     setUrlList('');
     onClose();
   };
@@ -133,6 +210,11 @@ export default function BulkImportModal({ isOpen, onClose }: { isOpen: boolean, 
                 >
                   {loading ? 'Importing...' : 'Import Links'}
                 </button>
+                {progress && (
+                  <p style={{ marginTop: '10px', color: 'var(--accent-color)', fontSize: '0.85rem' }}>
+                    {progress.processed} out of {progress.total} links uploaded ({progress.success} success, {progress.failed} failed)
+                  </p>
+                )}
               </div>
             ) : (
               <div 
@@ -149,9 +231,15 @@ export default function BulkImportModal({ isOpen, onClose }: { isOpen: boolean, 
                 <div style={{ fontSize: '2.5rem', marginBottom: '15px' }}>📁</div>
                 <p style={{ color: 'var(--text-primary)', fontWeight: '500' }}>Click to upload CSV file</p>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '8px' }}>
-                  We will look for columns named "url" or "link".
+                  Supported columns: URL, Category, IsPrivate, Tags.
                 </p>
-                {loading && <p style={{ marginTop: '15px', color: 'var(--accent-color)' }}>Parsing and importing links...</p>}
+                {loading && (
+                  <p style={{ marginTop: '15px', color: 'var(--accent-color)' }}>
+                    {progress
+                      ? `${progress.processed} out of ${progress.total} links uploaded (${progress.success} success, ${progress.failed} failed)`
+                      : 'Parsing and importing links...'}
+                  </p>
+                )}
               </div>
             )}
           </div>
