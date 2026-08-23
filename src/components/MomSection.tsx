@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { getMoms, uploadMomAudio, transcribeMom, extractMomTasks, confirmMomTasks, deleteMom, updateMom } from '@/actions/mom';
+import { getMoms, uploadMomAudio, extractMomTasks, confirmMomTasks, deleteMom, updateMom } from '@/actions/mom';
 import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
 
@@ -102,17 +102,13 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   };
 
   const runPipeline = async (blob: Blob) => {
-    setPipeline('Uploading recording…');
+    setPipeline('Transcribing… (this can take a minute)');
     const formData = new FormData();
     formData.append('projectId', project._id);
     formData.append('title', `Meeting ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`);
     formData.append('audio', blob, 'meeting.webm');
-    const up = await uploadMomAudio(formData);
+    const up = await uploadMomAudio(formData);   // transcribes in the same call
     if (!up.success) { setPipeline(''); toast(up.error || 'Something went wrong', 'error'); return; }
-
-    setPipeline('Transcribing… (this can take a minute)');
-    const tr = await transcribeMom(up.mom._id);
-    if (!tr.success) { setPipeline(''); toast(tr.error || 'Something went wrong', 'error'); fetchMoms(); return; }
 
     setPipeline('Extracting tasks…');
     const ex = await extractMomTasks(up.mom._id, Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -121,13 +117,10 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     fetchMoms();
   };
 
-  // Resume a stuck pipeline (failed/interrupted transcription or extraction)
+  // Resume a meeting whose task extraction failed. The audio is gone once transcribed,
+  // so a meeting with no transcript can only be recorded again.
   const handleProcess = async (mom: any) => {
-    if (!mom.transcript) {
-      setPipeline('Transcribing… (this can take a minute)');
-      const tr = await transcribeMom(mom._id);
-      if (!tr.success) { setPipeline(''); toast(tr.error || 'Something went wrong', 'error'); return; }
-    }
+    if (!mom.transcript) { toast('That recording has no transcript — record it again.', 'error'); return; }
     setPipeline('Extracting tasks…');
     const ex = await extractMomTasks(mom._id, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setPipeline('');

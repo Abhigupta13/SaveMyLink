@@ -8,7 +8,7 @@ export interface IMom extends MongooseDocument {
   projectId: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
   title: string;
-  audioUrl: string;
+  audioUrl?: string;
   transcript?: string;
   summary?: string;
   candidates: {
@@ -29,7 +29,7 @@ const MomSchema = new Schema<IMom>({
   projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true },
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   title: { type: String, required: true },
-  audioUrl: { type: String, required: true },
+  audioUrl: { type: String },   // legacy: audio is transcribed on upload and never stored now
   transcript: { type: String },
   summary: { type: String },
   candidates: [{

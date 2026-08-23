@@ -11,9 +11,8 @@ import { User } from "@/lib/models/User";
 import { projectForMember } from "@/lib/projectAccess";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
-import fs from 'fs';
 import path from 'path';
-import { writeFile, mkdir, unlink } from 'fs/promises';
+import { unlink } from 'fs/promises';
 
 const GROQ_BASE = 'https://api.groq.com/openai/v1';
 
@@ -49,51 +48,26 @@ export async function getMoms(projectId: string) {
   }
 }
 
+/**
+ * Records straight to a transcript. The audio is never written to disk: nothing plays it
+ * back, the only thing that ever read it was transcription, and on a serverless host the
+ * filesystem is read-only (and per-instance), so storing it failed in production and left
+ * the meeting stuck with no transcript.
+ */
 export async function uploadMomAudio(formData: FormData) {
   try {
     const projectId = formData.get('projectId') as string;
     const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString()}`;
     const audio = formData.get('audio') as File | null;
-    if (!audio) return { success: false, error: 'No audio' };
+    if (!audio || audio.size < 1000) return { success: false, error: 'Nothing was recorded' };
 
     const ctx = await memberSession(projectId);
     if (!ctx) return { success: false, error: 'Not a member' };
-
-    const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'mom');
-    if (!fs.existsSync(uploadDir)) await mkdir(uploadDir, { recursive: true });
-    const fileName = `${Date.now()}-${ctx.session.user.id}.webm`;
-    await writeFile(path.join(uploadDir, fileName), Buffer.from(await audio.arrayBuffer()));
-
-    const mom = await Mom.create({
-      projectId,
-      userId: ctx.session.user.id,
-      title,
-      audioUrl: `/uploads/mom/${fileName}`,
-    });
-    return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
-  } catch (error) {
-    console.error('Failed to upload MOM audio:', error);
-    return { success: false, error: 'Failed to upload recording' };
-  }
-}
-
-export async function transcribeMom(momId: string) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
-    await connectToDatabase();
-    const mom = await Mom.findById(momId);
-    if (!mom) return { success: false, error: 'MOM not found' };
-    const ctx = await memberSession(String(mom.projectId));
-    if (!ctx) return { success: false, error: 'Not a member' };
     if (!process.env.GROQ_API_KEY) return { success: false, error: 'GROQ_API_KEY not configured' };
 
-    const filePath = path.join(process.cwd(), 'public', mom.audioUrl);
-    const buffer = await fs.promises.readFile(filePath);
-
     const form = new FormData();
-    form.append('file', new Blob([new Uint8Array(buffer)], { type: 'audio/webm' }), 'meeting.webm');
-    // whisper-large-v3 handles Hinglish code-switching well
+    form.append('file', audio, 'meeting.webm');
+    // whisper-large-v3 handles Hinglish code-switching well, and detects the language itself
     form.append('model', 'whisper-large-v3');
 
     const res = await fetch(`${GROQ_BASE}/audio/transcriptions`, {
@@ -108,12 +82,16 @@ export async function transcribeMom(momId: string) {
     }
     const { text } = await res.json();
 
-    mom.transcript = text || '';
-    await mom.save();
-    return { success: true, transcript: mom.transcript };
+    const mom = await Mom.create({
+      projectId,
+      userId: ctx.session.user.id,
+      title,
+      transcript: String(text || ''),
+    });
+    return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
   } catch (error) {
-    console.error('Failed to transcribe MOM:', error);
-    return { success: false, error: 'Transcription failed' };
+    console.error('Failed to record meeting:', error);
+    return { success: false, error: 'Failed to save recording' };
   }
 }
 
@@ -288,7 +266,8 @@ export async function deleteMom(momId: string) {
     // Recorder only (owns the file)
     const mom = await Mom.findOneAndDelete({ _id: momId, userId: session.user.id });
     if (!mom) return { success: false, error: 'MOM not found or not yours' };
-    await unlink(path.join(process.cwd(), 'public', mom.audioUrl)).catch(() => {});
+    // Recordings made before transcripts replaced stored audio may still have a file
+    if (mom.audioUrl) await unlink(path.join(process.cwd(), 'public', mom.audioUrl)).catch(() => {});
     return { success: true };
   } catch (error) {
     console.error('Failed to delete MOM:', error);
