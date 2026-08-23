@@ -101,6 +101,9 @@ WHAT YOU CAN DO
    - {"type":"create_note","title":"<short title, optional>","text":"the note body"}
    - {"type":"update_task","id":"<TASK id from DATA>","title":"<optional>","description":"<optional, REPLACES the whole description>","appendDescription":"<optional, adds this as a new line at the end>","dueAt":"YYYY-MM-DDTHH:mm | none (clears it)","completed":true|false}
    - {"type":"update_note","id":"<NOTE id from DATA>","title":"<optional>","text":"<optional, REPLACES the whole body>","appendText":"<optional, adds this as a new line at the end>"}
+   - {"type":"create_project","name":"..."}
+   - {"type":"update_project","id":"<PROJECT id from DATA>","name":"<optional, renames it>","notes":"<optional, REPLACES the whole notes>","appendNotes":"<optional, adds this as a new line at the end>","addMember":"<optional email>","removeMember":"<optional email>"}
+   A project groups tasks, meetings and people. Only its owner can rename it or change who is on it; any member can edit its notes. If the user asks for something you are not allowed to do, say so rather than pretending it worked.
    Emit an action whenever the user asks to add/remind/save/note something, or to change/rename/reschedule/append to/tick off something that already exists.
    Only send the fields that change — omitted fields are left alone. To add a point or line to an existing task or note, use appendDescription / appendText; only use description / text when the user wants the whole thing rewritten.
    Resolve relative times ("tomorrow 5pm", "in 2 hours", "move it to Friday") against the current time given above.
@@ -177,6 +180,44 @@ ${ctx.text || '(empty — the user has not saved anything yet)'}`;
           if (!note.isModified()) continue;
           await note.save();
           created.push({ id: String(note._id), type: 'note', title: note.title || note.body.slice(0, 60), detail: 'Updated in Notes' });
+        } else if (a?.type === 'create_project' && a.name) {
+          const name = str(a.name);
+          const dup = ctx.projects.find((p: any) => p.name?.toLowerCase() === name.toLowerCase());
+          if (dup) {
+            created.push({ id: String(dup._id), type: 'project', title: dup.name, detail: 'Already exists' });
+          } else {
+            const project = await Project.create({ name, ownerId: userId, memberEmails: [] });
+            // So a create_task later in the same reply can file itself under the new project
+            ctx.projects.push(project.toObject() as any);
+            created.push({ id: String(project._id), type: 'project', title: project.name, detail: 'Project created' });
+          }
+        } else if (a?.type === 'update_project' && a.id && ctx.ids.has(String(a.id))) {
+          // ctx.ids only holds projects the user owns or is a member of
+          const project = await Project.findOne({ _id: a.id });
+          if (!project) continue;
+          const isOwner = String(project.ownerId) === String(userId);
+          const changes: string[] = [];
+
+          if (a.notes !== undefined) { project.notes = str(a.notes); changes.push('notes'); }   // any member
+          const addNotes = str(a.appendNotes);
+          if (addNotes) { project.notes = [str(project.notes), addNotes].filter(Boolean).join('\n'); changes.push('notes'); }
+
+          // Renaming and membership are the owner's alone, same as the Projects page
+          if (str(a.name) && isOwner && str(a.name) !== project.name) { project.name = str(a.name); changes.push('renamed'); }
+          const add = str(a.addMember).toLowerCase();
+          if (add && isOwner && /^\S+@\S+\.\S+$/.test(add) && !project.memberEmails.includes(add)) {
+            project.memberEmails.push(add); changes.push(`added ${add}`);
+          }
+          const drop = str(a.removeMember).toLowerCase();
+          if (drop && isOwner && drop !== email && project.memberEmails.includes(drop)) {
+            project.memberEmails = project.memberEmails.filter(e => e !== drop);
+            await Task.updateMany({ projectId: project._id, assigneeEmail: drop }, { $unset: { assigneeId: '', assigneeEmail: '' } });
+            changes.push(`removed ${drop}`);
+          }
+
+          if (!changes.length) continue;
+          await project.save();
+          created.push({ id: String(project._id), type: 'project', title: project.name, detail: `Updated · ${[...new Set(changes)].join(', ')}` });
         } else if (a?.type === 'create_task' && a.title) {
           const project = a.projectName ? ctx.projects.find((p: any) => p.name?.toLowerCase() === String(a.projectName).toLowerCase()) : null;
           let assigneeId;
@@ -200,7 +241,7 @@ ${ctx.text || '(empty — the user has not saved anything yet)'}`;
         }
       } catch (e) { console.error('Jarvis action failed:', e); }
     }
-    if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); }
+    if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); }
 
     // Anti-hallucination: keep only items whose id really exists (or that we just created)
     const validIds = new Set([...ctx.ids, ...created.map(c => c.id)]);

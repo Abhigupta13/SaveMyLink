@@ -20,7 +20,8 @@ const MIN_SPEECH_MS = 800;
 
 function itemHref(i: JarvisItem) {
   if (i.type === 'link' && i.url) return i.url;
-  if (i.type === 'task' || i.type === 'project') return '/tasks';
+  if (i.type === 'project') return '/projects';
+  if (i.type === 'task') return '/tasks';
   if (i.type === 'mom') return '/mom';
   if (i.type === 'contact') return '/contacts';
   if (i.type === 'note') return '/notes';
