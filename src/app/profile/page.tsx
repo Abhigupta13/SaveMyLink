@@ -9,6 +9,7 @@ import { getProjects } from '@/actions/project';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useUser } from '@/components/UserContext';
 import ThemeToggle from '@/components/ThemeToggle';
+import SuggestBox from '@/components/SuggestBox';
 
 export default function ProfilePage() {
   const { confirm, toast } = useFeedback();
@@ -74,6 +75,8 @@ export default function ProfilePage() {
           <span className="slider round"></span>
         </label>
       </div>
+
+      <SuggestBox />
 
       <button onClick={async () => { if (await confirm({ title: 'Log out?', message: 'You can sign back in anytime.', confirmLabel: 'Log out' })) signOut({ callbackUrl: '/' }); }}
         style={{ marginTop: '18px', width: '100%', height: '48px', borderRadius: '14px', background: 'var(--danger-soft)', color: 'var(--danger-color)', fontWeight: 800, border: '1px solid color-mix(in srgb, var(--danger-color) 25%, transparent)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
