@@ -7,6 +7,12 @@ const DocumentSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  // Filing a document under a project shares it with that project's members. Absent = my
+  // own locker only. Orthogonal to `folder`, which stays a personal filing label.
+  projectId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Project'
+  },
   name: {
     type: String,
     required: true
@@ -24,8 +30,13 @@ const DocumentSchema = new mongoose.Schema({
     required: true
   },
   url: {
-    type: String, // Path to file or external link
+    type: String, // /api/files/<key> for uploads, or the external link
     required: true
+  },
+  // Storage key for uploads. Absent on external links, and on files saved before the move
+  // off public/uploads — those keep serving from their old /uploads/... url.
+  key: {
+    type: String
   },
   mimeType: {
     type: String
@@ -45,5 +56,6 @@ const DocumentSchema = new mongoose.Schema({
 });
 
 DocumentSchema.index({ user: 1, folder: 1, createdAt: -1 });
+DocumentSchema.index({ projectId: 1, createdAt: -1 });
 
 export const Document = defineModel<any>('Document', DocumentSchema as any);

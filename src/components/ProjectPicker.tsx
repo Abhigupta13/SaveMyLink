@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Search, Plus, MoreHorizontal, Pencil, Trash2, UserPlus, Check, X, FolderOpen } from 'lucide-react';
+import { useSession } from 'next-auth/react';
 import { useFeedback } from '@/components/ui/Feedback';
 
 export interface PickerProject { _id: string; name: string; count?: number; ownerId?: any; memberEmails?: string[] }
@@ -25,6 +26,12 @@ export default function ProjectPicker({
   showPersonal = true, recentCount = 4,
 }: Props) {
   const { confirm } = useFeedback();
+  const { data: session } = useSession();
+  const myEmail = (session?.user?.email || '').toLowerCase();
+  // getProjects populates ownerId with {email,name} — same check the project page uses.
+  const ownerEmail = (p: PickerProject) => (p.ownerId?.email || '').toLowerCase();
+  const isOwner = (p: PickerProject) => ownerEmail(p) === myEmail;
+  const ownerLabel = (p: PickerProject) => ownerEmail(p) || 'its owner';
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
@@ -134,24 +141,32 @@ export default function ProjectPicker({
 
                   {menuFor === p._id && (
                     <div className="picker-menu">
-                      {onRename && (
-                        <button onClick={() => { setRenaming(p._id); setDraftName(p.name); setMenuFor(null); }}>
-                          <Pencil size={13} /> Rename
-                        </button>
-                      )}
-                      {onInvite && (
-                        <button onClick={() => { onSelect(p); onInvite(p); reset(); }}>
-                          <UserPlus size={13} /> Invite someone
-                        </button>
-                      )}
-                      {onDelete && (
-                        <button className="danger" onClick={async () => {
-                          const ok = await confirm({ title: `Delete “${p.name}”?`, message: 'Its tasks and meetings go with it. This cannot be undone.', danger: true, confirmLabel: 'Delete project' });
-                          if (!ok) return;
-                          await onDelete(p); setMenuFor(null); reset();
-                        }}>
-                          <Trash2 size={13} /> Delete project
-                        </button>
+                      {/* Rename, invite and delete are all owner-only server-side. Showing them
+                          to a member meant confirming a scary dialog and getting a toast. */}
+                      {isOwner(p) ? (
+                        <>
+                          {onRename && (
+                            <button onClick={() => { setRenaming(p._id); setDraftName(p.name); setMenuFor(null); }}>
+                              <Pencil size={13} /> Rename
+                            </button>
+                          )}
+                          {onInvite && (
+                            <button onClick={() => { onSelect(p); onInvite(p); reset(); }}>
+                              <UserPlus size={13} /> Invite someone
+                            </button>
+                          )}
+                          {onDelete && (
+                            <button className="danger" onClick={async () => {
+                              const ok = await confirm({ title: `Delete “${p.name}”?`, message: 'Its tasks and meetings go with it. This cannot be undone.', danger: true, confirmLabel: 'Delete project' });
+                              if (!ok) return;
+                              await onDelete(p); setMenuFor(null); reset();
+                            }}>
+                              <Trash2 size={13} /> Delete project
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <span className="picker-menu-note">Shared with you · {ownerLabel(p)} manages it</span>
                       )}
                     </div>
                   )}

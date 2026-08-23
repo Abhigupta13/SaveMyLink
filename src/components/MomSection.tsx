@@ -2,22 +2,16 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { getMoms, uploadMomAudio, extractMomTasks, confirmMomTasks, deleteMom, updateMom } from '@/actions/mom';
-import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
+import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
 
 interface MomSectionProps {
   projects?: any[]; // all projects, so items can be routed to any of them
-  project: any;
+  project: any | null; // null = a personal meeting: no home project, the transcript routes every item
   myEmail: string;
   memberOptions: string[];
   onTasksCreated: () => void;
 }
-
-const inputStyle: React.CSSProperties = {
-  padding: '10px 14px', borderRadius: '12px', background: 'var(--bg-tertiary)',
-  borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-color)',
-  color: 'var(--text-primary)', fontWeight: 600, fontSize: '0.85rem'
-};
 
 export default function MomSection({ project, projects = [], myEmail, memberOptions, onTasksCreated }: MomSectionProps) {
   const { toast, confirm } = useFeedback();
@@ -26,7 +20,15 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [pipeline, setPipeline] = useState(''); // status text while upload/transcribe/extract runs
-  type Draft = { kind: 'task' | 'note'; title: string; detail?: string; assigneeEmail: string; dueAt: string; projectId: string; missing: string[] };
+  type Kind = 'task' | 'note' | 'brief';
+  type Draft = { kind: Kind; title: string; detail?: string; assigneeEmail: string; dueAt: string; projectId: string; missing: string[] };
+  // task → note → project brief → task. One button, no dropdown for three options.
+  const nextKind = (k: Kind): Kind => (k === 'task' ? 'note' : k === 'note' ? 'brief' : 'task');
+  const kindMeta = {
+    task: { Icon: CheckSquare, label: 'Task', hint: 'A task — click for a note' },
+    note: { Icon: StickyNote, label: 'Note', hint: 'A note — click to add to the project brief' },
+    brief: { Icon: BookOpen, label: 'Project brief', hint: 'Appends to the project’s About text — click for a task' },
+  } as const;
   const [drafts, setDrafts] = useState<Record<string, Draft[]>>({});
   const toLocalInput = (iso?: string | null) => {
     if (!iso) return '';
@@ -35,7 +37,8 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
-  const allProjects = projects.length ? projects : [project];
+  const projectId: string = project?._id || '';
+  const allProjects = projects.length ? projects : [project].filter(Boolean);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -44,7 +47,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const [showTranscript, setShowTranscript] = useState<string | null>(null);
 
   const fetchMoms = useCallback(async () => {
-    const res = await getMoms(project._id);
+    const res = await getMoms(projectId);
     if (res.success) {
       setMoms(res.moms || []);
       // Seed editable drafts for MOMs awaiting review
@@ -53,7 +56,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
         for (const mom of res.moms || []) {
           if (!mom.tasksConfirmed && mom.candidates?.length && !next[mom._id]) {
             next[mom._id] = mom.candidates.map((c: any) => ({
-              kind: c.kind === 'note' ? 'note' : 'task',
+              kind: (c.kind === 'note' || c.kind === 'brief' ? c.kind : 'task') as Kind,
               title: c.title,
               detail: c.detail,
               assigneeEmail: c.assigneeEmail || '',
@@ -67,7 +70,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       });
     }
     setLoading(false);
-  }, [project._id]);
+  }, [projectId]);
 
   useEffect(() => { fetchMoms(); }, [fetchMoms]);
 
@@ -104,7 +107,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const runPipeline = async (blob: Blob) => {
     setPipeline('Transcribing… (this can take a minute)');
     const formData = new FormData();
-    formData.append('projectId', project._id);
+    formData.append('projectId', projectId);
     formData.append('title', `Meeting ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`);
     formData.append('audio', blob, 'meeting.webm');
     const up = await uploadMomAudio(formData);   // transcribes in the same call
@@ -161,7 +164,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       detail: d.detail,
       assigneeEmail: d.assigneeEmail || undefined,
       dueAt: d.dueAt ? new Date(d.dueAt).toISOString() : undefined,
-      projectId: d.projectId || undefined,
+      projectId: d.projectId,   // '' is a real choice (Personal) — never collapse it to undefined
     }));
     const res = await confirmMomTasks(momId, items);
     if (res.success) {
@@ -210,12 +213,14 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
           </button>
         ) : (
           <button onClick={stopRecording}
-            style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 28px', borderRadius: '16px', fontWeight: 800, background: '#ef4444', color: 'white', border: 'none', cursor: 'pointer' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 28px', borderRadius: '16px', fontWeight: 800, background: 'var(--danger-color)', color: 'white', border: 'none', cursor: 'pointer' }}>
             <Square size={18} fill="white" /> Stop · {fmtTime(elapsed)}
           </button>
         )}
         <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600 }}>
-          {pipeline || (recording ? 'Recording… keep the phone near the discussion.' : 'Record → transcribe → extract action items.')}
+          {pipeline || (recording ? 'Recording… keep the phone near the discussion.'
+            : project ? `Record → transcribe → action items, filed under ${project.name}.`
+            : 'Record → transcribe → each action item routed to the project it belongs to.')}
         </span>
       </div>
 
@@ -232,7 +237,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                 {editing === mom._id ? (
                   <input value={draftMom.title} onChange={e => setDraftMom(d => ({ ...d, title: e.target.value }))}
-                    style={{ ...inputStyle, flex: 1, fontWeight: 800 }} autoFocus />
+                    className="field" style={{ flex: 1, fontWeight: 800 }} autoFocus />
                 ) : (
                   <span style={{ fontWeight: 800, color: 'var(--text-primary)', flex: 1 }}>{mom.title}</span>
                 )}
@@ -272,7 +277,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
               {editing === mom._id ? (
                 <textarea value={draftMom.summary} onChange={e => setDraftMom(d => ({ ...d, summary: e.target.value }))}
                   rows={5} placeholder="Minutes / summary"
-                  style={{ ...inputStyle, width: '100%', marginBottom: '12px', lineHeight: 1.6, resize: 'vertical' }} />
+                  className="field" style={{ marginBottom: '12px', lineHeight: 1.6, resize: 'vertical' }} />
               ) : mom.summary ? (
                 <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.6, whiteSpace: 'pre-wrap', marginBottom: '12px' }}>
                   {mom.summary}
@@ -294,34 +299,42 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                       {list.map((d, i) => {
                         const needs = (f: string) => d.missing.includes(f);
-                        const gapStyle = (f: string, empty: boolean) => needs(f) && empty
-                          ? { ...inputStyle, borderColor: '#f59e0b', background: 'rgba(245,158,11,0.07)' } : inputStyle;
+                        const gapCls = (f: string, empty: boolean) => `field${needs(f) && empty ? ' needs-fill' : ''}`;
                         return (
                           <div key={i} className="card" style={{ padding: '12px', display: 'grid', gap: '8px' }}>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                              <button type="button" title={d.kind === 'task' ? 'This is a task — click for note' : 'This is a note — click for task'}
-                                onClick={() => updateDraft(mom._id, i, { kind: d.kind === 'task' ? 'note' : 'task' })}
+                              <button type="button" title={kindMeta[d.kind].hint}
+                                onClick={() => updateDraft(mom._id, i, { kind: nextKind(d.kind) })}
                                 className="icon-btn" style={{ flexShrink: 0, color: d.kind === 'task' ? 'var(--accent-color)' : 'var(--text-secondary)' }}>
-                                {d.kind === 'task' ? <CheckSquare size={15} /> : <StickyNote size={15} />}
+                                {(() => { const { Icon } = kindMeta[d.kind]; return <Icon size={15} />; })()}
                               </button>
                               <input type="text" value={d.title} onChange={e => updateDraft(mom._id, i, { title: e.target.value })}
-                                style={{ ...inputStyle, flex: 1, fontWeight: 700 }} />
+                                className="field" style={{ flex: 1, fontWeight: 700 }} />
                               <button onClick={() => removeDraft(mom._id, i)} className="icon-btn danger" title="Discard"><Trash2 size={14} /></button>
                             </div>
 
                             {d.detail && <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-tertiary)', lineHeight: 1.45 }}>{d.detail}</p>}
 
+                            {d.kind === 'brief' && (
+                              <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--accent-color)', fontWeight: 700 }}>
+                                Gets appended to the project’s About text{d.projectId ? '' : ' — pick which project'}
+                              </p>
+                            )}
+
                             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                               <select value={d.projectId} onChange={e => updateDraft(mom._id, i, { projectId: e.target.value })}
-                                style={{ ...gapStyle('project', !d.projectId), flex: '1 1 140px' }}>
-                                <option value="">{needs('project') ? '⚠ Pick a project' : 'No project'}</option>
+                                className={gapCls('project', !d.projectId)} style={{ flex: '1 1 140px' }}>
+                                <option value="">
+                                  {d.kind === 'brief' ? '⚠ Which project’s brief?'
+                                    : needs('project') ? '⚠ Pick a project' : 'Personal — no project'}
+                                </option>
                                 {allProjects.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
                               </select>
 
                               {d.kind === 'task' && (
                                 <>
                                   <select value={d.assigneeEmail} onChange={e => updateDraft(mom._id, i, { assigneeEmail: e.target.value })}
-                                    style={{ ...gapStyle('assignee', !d.assigneeEmail), flex: '1 1 140px' }}>
+                                    className={gapCls('assignee', !d.assigneeEmail)} style={{ flex: '1 1 140px' }}>
                                     <option value="">{needs('assignee') ? '⚠ Who does this?' : 'Unassigned'}</option>
                                     {[...new Set([...memberOptions, d.assigneeEmail].filter(Boolean))].map(email => (
                                       <option key={email} value={email}>{email === myEmail ? 'me' : email}</option>
@@ -329,7 +342,8 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                                   </select>
                                   <input type="datetime-local" value={d.dueAt} onChange={e => updateDraft(mom._id, i, { dueAt: e.target.value })}
                                     title={needs('due') ? 'No deadline was mentioned — set one' : 'Deadline from the recording'}
-                                    style={{ ...gapStyle('due', !d.dueAt), flex: '1 1 150px', color: d.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+                                    className={gapCls('due', !d.dueAt)}
+                                    style={{ flex: '1 1 150px', color: d.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
                                 </>
                               )}
                             </div>
@@ -340,8 +354,11 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
 
                     <button onClick={() => handleConfirm(mom._id)} className="btn-primary"
                       style={{ marginTop: '14px', padding: '12px 28px', borderRadius: '14px', fontWeight: 800 }}>
-                      Create {list.filter(d => d.kind === 'task').length} task{list.filter(d => d.kind === 'task').length === 1 ? '' : 's'}
-                      {list.some(d => d.kind === 'note') && ` + ${list.filter(d => d.kind === 'note').length} note${list.filter(d => d.kind === 'note').length === 1 ? '' : 's'}`}
+                      Create {(['task', 'note', 'brief'] as const)
+                        .map(k => [list.filter(d => d.kind === k).length, k] as const)
+                        .filter(([n]) => n)
+                        .map(([n, k]) => `${n} ${k === 'brief' ? 'brief note' : k}${n === 1 ? '' : 's'}`)
+                        .join(' + ')}
                     </button>
                   </div>
                 );

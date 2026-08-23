@@ -6,8 +6,36 @@ import { Project } from "@/lib/models/Project";
 import Task from "@/lib/models/Task";
 import { Mom } from "@/lib/models/Mom";
 import { projectForMember } from "@/lib/projectAccess";
+import { User } from "@/lib/models/User";
+import { Contact } from "@/lib/models/Contact";
+import { sendMail, inviteEmail } from "@/lib/mailer";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
+
+/**
+ * A readable name for each email, so a project shows people rather than a wall of addresses.
+ * Two sources, in order: the User record, which everyone with an account shares and so reads
+ * the same for every teammate; then your own Contact, which is private to you — your nickname
+ * for someone stays yours. Falls back to the email, which is always better than nothing.
+ */
+async function displayNames(emails: string[], userId: string) {
+  const wanted = [...new Set(emails.filter(Boolean).map(e => e.toLowerCase()))];
+  if (!wanted.length) return new Map<string, { name?: string; hasAccount: boolean }>();
+
+  const [users, contacts] = await Promise.all([
+    User.find({ email: { $in: wanted } }).select('email name').lean(),
+    Contact.find({ userId, email: { $in: wanted } }).select('email name').lean(),
+  ]);
+  const byContact = new Map(contacts.map((c: any) => [String(c.email).toLowerCase(), c.name]));
+
+  const out = new Map<string, { name?: string; hasAccount: boolean }>();
+  for (const email of wanted) out.set(email, { name: byContact.get(email), hasAccount: false });
+  for (const u of users as any[]) {
+    const email = String(u.email).toLowerCase();
+    out.set(email, { name: u.name || byContact.get(email), hasAccount: true });
+  }
+  return out;
+}
 
 export async function getProjects() {
   try {
@@ -20,9 +48,21 @@ export async function getProjects() {
         { ownerId: session.user.id },
         { memberEmails: (session.user.email || '').toLowerCase() },
       ],
-    }).populate('ownerId', 'email').sort({ createdAt: 1 }).lean();
+    }).populate('ownerId', 'email name').sort({ createdAt: 1 }).lean();
 
-    return { success: true, projects: JSON.parse(JSON.stringify(projects)) };
+    // One lookup for every member of every project rather than one per project
+    const names = await displayNames(
+      (projects as any[]).flatMap(p => [p.ownerId?.email, ...(p.memberEmails || [])]),
+      session.user.id,
+    );
+    const withPeople = (projects as any[]).map(p => ({
+      ...p,
+      people: [...new Set([String(p.ownerId?.email || '').toLowerCase(), ...(p.memberEmails || [])])]
+        .filter(Boolean)
+        .map(email => ({ email, ...(names.get(email) || { hasAccount: false }) })),
+    }));
+
+    return { success: true, projects: JSON.parse(JSON.stringify(withPeople)) };
   } catch (error) {
     console.error('Failed to get projects:', error);
     return { success: false, error: 'Failed to fetch projects' };
@@ -59,6 +99,10 @@ export async function addMember(projectId: string, email: string) {
     const normalized = email.trim().toLowerCase();
     if (!/^\S+@\S+\.\S+$/.test(normalized)) return { success: false, error: 'Invalid email' };
 
+    if (normalized === (session.user.email || '').toLowerCase()) {
+      return { success: false, error: "You're already on this project" };
+    }
+
     // Owner only
     const res = await Project.findOneAndUpdate(
       { _id: projectId, ownerId: session.user.id },
@@ -66,8 +110,28 @@ export async function addMember(projectId: string, email: string) {
     );
     if (!res) return { success: false, error: 'Project not found or not owner' };
 
+    // Tell them. Adding an email silently was the whole reason invites never worked: a typo
+    // looked identical to success, and someone without an account was never asked to make one.
+    const invitee = await User.findOne({ email: normalized }).select('name').lean() as any;
+    const base = (process.env.NEXTAUTH_URL || '').replace(/\/$/, '');
+    const link = invitee
+      ? `${base}/projects/${projectId}`
+      : `${base}/auth/signup?email=${encodeURIComponent(normalized)}`;
+    const mail = inviteEmail({
+      projectName: res.name,
+      inviterName: session.user.name || session.user.email || 'A teammate',
+      link,
+      hasAccount: !!invitee,
+      name: invitee?.name,
+    });
+    // Never fail the invite over mail: they are on the project either way, and SMTP being
+    // down or unconfigured should not roll that back. mailConfigured=false just logs.
+    const sent = await sendMail({ to: normalized, ...mail })
+      .catch(error => { console.error('Invite email failed:', normalized, error); return { delivered: false as const }; });
+
     revalidatePath('/tasks');
-    return { success: true };
+    revalidatePath('/projects');
+    return { success: true, invited: normalized, emailed: sent.delivered };
   } catch (error) {
     console.error('Failed to add member:', error);
     return { success: false, error: 'Failed to add member' };

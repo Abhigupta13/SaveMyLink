@@ -8,6 +8,7 @@ import { getMyOpenTasks } from '@/actions/task';
 import { getProjects } from '@/actions/project';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useUser } from '@/components/UserContext';
+import ThemeToggle from '@/components/ThemeToggle';
 
 export default function ProfilePage() {
   const { confirm, toast } = useFeedback();
@@ -49,6 +50,11 @@ export default function ProfilePage() {
         ))}
       </div>
 
+      <div className="card" style={{ marginBottom: '14px' }}>
+        <span style={{ display: 'block', fontWeight: 700, marginBottom: '10px' }}>Appearance</span>
+        <ThemeToggle />
+      </div>
+
       {/* Private Safe: unlocking needs the PIN, locking never does */}
       <div className="card safe-row">
         <span className={`safe-icon ${privateSafe ? 'on' : ''}`}>
@@ -70,7 +76,7 @@ export default function ProfilePage() {
       </div>
 
       <button onClick={async () => { if (await confirm({ title: 'Log out?', message: 'You can sign back in anytime.', confirmLabel: 'Log out' })) signOut({ callbackUrl: '/' }); }}
-        style={{ marginTop: '18px', width: '100%', height: '48px', borderRadius: '14px', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', fontWeight: 800, border: '1px solid rgba(239, 68, 68, 0.25)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+        style={{ marginTop: '18px', width: '100%', height: '48px', borderRadius: '14px', background: 'var(--danger-soft)', color: 'var(--danger-color)', fontWeight: 800, border: '1px solid color-mix(in srgb, var(--danger-color) 25%, transparent)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
         <LogOut size={18} /> Log out
       </button>
     </div>

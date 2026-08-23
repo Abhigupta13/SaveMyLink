@@ -1,10 +1,44 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSession } from 'next-auth/react';
-import { Plus, Pin, Trash2, X } from 'lucide-react';
-import { getNotes, createNote, updateNote, deleteNote } from '@/actions/note';
+import { Plus, Pin, Trash2, X, Paperclip, Camera, FileText, Image as ImageIcon } from 'lucide-react';
+import { getNotes, createNote, updateNote, deleteNote, attachToNote, removeAttachment } from '@/actions/note';
+import { getProjects, createProject } from '@/actions/project';
+import ProjectPicker from '@/components/ProjectPicker';
 import { useFeedback } from '@/components/ui/Feedback';
+
+const isImage = (a: any) => (a.mimeType || '').startsWith('image/');
+const sizeOf = (b?: number) => !b ? '' : b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
+
+/**
+ * Phone cameras produce 3-8MB files and Vercel rejects a request body over ~4.5MB, so a photo
+ * taken in the app would fail to upload untouched. Downscaling here also means a note full of
+ * receipts costs kilobytes of S3 rather than megabytes.
+ *
+ * imageOrientation honours the EXIF rotation phones write rather than baking in a sideways
+ * photo, which is what you get from a naive canvas redraw.
+ */
+const MAX_EDGE = 1920;
+async function shrinkImage(file: File): Promise<File> {
+  // GIFs would lose their animation, and non-images are left entirely alone
+  if (!file.type.startsWith('image/') || file.type === 'image/gif') return file;
+  try {
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+    if (scale === 1 && file.size < 1_500_000) { bmp.close(); return file; }   // already small
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+    const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+    if (!blob || blob.size >= file.size) return file;   // re-encoding made it worse — keep the original
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+  } catch {
+    return file;   // unsupported codec or no canvas — let the server's size guard decide
+  }
+}
 
 const preview = (b: string) => b.replace(/\s+/g, ' ').slice(0, 160);
 const when = (iso: string) => {
@@ -16,33 +50,83 @@ const when = (iso: string) => {
 
 export default function NotesPage() {
   const { toast, confirm } = useFeedback();
-  const { status } = useSession();
+  const { data: session, status } = useSession();
+  const myEmail = (session?.user?.email || '').toLowerCase();
   const [notes, setNotes] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [scope, setScope] = useState<any | null>(null);   // null = Personal, same as Tasks and Meetings
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<any | null>(null); // note being edited, or {} for new
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [noteProject, setNoteProject] = useState('');   // project of the note being edited
   const [q, setQ] = useState('');
+  const [attachments, setAttachments] = useState<any[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [hasCamera, setHasCamera] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  // Attaching creates the note server-side if it did not exist, so later saves target that row
+  const noteIdRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await getNotes();
+    const [res, p] = await Promise.all([getNotes(), getProjects()]);
     if (res.success) setNotes(res.notes || []);
+    if (p.success) setProjects(p.projects || []);
     setLoading(false);
   }, []);
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
+  // `capture` is ignored on desktop, where the button would just be a second file picker.
+  // Checked after mount so the server and first client render agree.
+  useEffect(() => { setHasCamera(window.matchMedia('(pointer: coarse)').matches); }, []);
 
   const open = (note: any | null) => {
     setEditing(note || {});
     setTitle(note?.title || '');
     setBody(note?.body || '');
+    // A new note lands in whatever scope you are looking at — that is what you meant by being there
+    setNoteProject(note ? (note.projectId?._id || '') : (scope?._id || ''));
+    setAttachments(note?.attachments || []);
+    noteIdRef.current = note?._id || null;
   };
 
   const save = async () => {
-    if (!title.trim() && !body.trim()) { setEditing(null); return; }
-    const res = editing?._id
-      ? await updateNote(editing._id, { title: title.trim(), body: body.trim() })
-      : await createNote({ title: title.trim(), body: body.trim() });
+    const id = noteIdRef.current;
+    // An attachment alone is a note worth keeping, even with no words in it
+    if (!title.trim() && !body.trim() && !attachments.length) {
+      if (id) await deleteNote(id);   // created by an attach that was then removed again
+      setEditing(null); load(); return;
+    }
+    const res = id
+      ? await updateNote(id, { title: title.trim(), body: body.trim(), projectId: noteProject })
+      : await createNote({ title: title.trim(), body: body.trim(), projectId: noteProject });
     if (res.success) { setEditing(null); load(); } else toast(res.error || 'Something went wrong', 'error');
+  };
+
+  const attach = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setUploading(true);
+    for (const picked of Array.from(files)) {
+      const file = await shrinkImage(picked);
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await attachToNote(noteIdRef.current, fd);
+      if (res.success) {
+        noteIdRef.current = res.noteId!;   // first attach on a new note creates it
+        setAttachments(a => [...a, res.attachment]);
+      } else toast(res.error || 'Could not attach that', 'error');
+    }
+    setUploading(false);
+    // Cleared so picking the same file twice in a row still fires onChange
+    if (fileRef.current) fileRef.current.value = '';
+    if (cameraRef.current) cameraRef.current.value = '';
+  };
+
+  const detach = async (key: string) => {
+    if (!noteIdRef.current) return;
+    setAttachments(a => a.filter(x => x.key !== key));
+    const res = await removeAttachment(noteIdRef.current, key);
+    if (!res.success) toast(res.error || 'Could not remove it', 'error');
   };
 
   const remove = async (id: string) => {
@@ -59,7 +143,14 @@ export default function NotesPage() {
     load();
   };
 
-  const filtered = notes.filter(n => !q || `${n.title || ''} ${n.body}`.toLowerCase().includes(q.toLowerCase()));
+  const inScope = notes.filter(n => (scope ? n.projectId?._id === scope._id : !n.projectId));
+  const filtered = inScope.filter(n => !q || `${n.title || ''} ${n.body}`.toLowerCase().includes(q.toLowerCase()));
+  // Chip counts, so you can see where the notes are without switching scope
+  const counts = notes.reduce((acc: Record<string, number>, n) => {
+    const key = n.projectId?._id || 'personal';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
 
   if (editing) {
     return (
@@ -69,13 +160,62 @@ export default function NotesPage() {
           <span style={{ flex: 1, fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
             {editing._id ? `Edited ${when(editing.updatedAt)}` : 'New note'}
           </span>
-          {editing._id && <button className="icon-btn danger" onClick={() => remove(editing._id)} title="Delete"><Trash2 size={16} /></button>}
+          <input ref={fileRef} type="file" multiple hidden accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx"
+            onChange={e => attach(e.target.files)} />
+          {/* Separate input: `capture` on the one above would force the camera for PDFs too.
+              The attribute opens the system camera directly — no plugin, no CAMERA permission. */}
+          <input ref={cameraRef} type="file" hidden accept="image/*" capture="environment"
+            onChange={e => attach(e.target.files)} />
+          {hasCamera && (
+            <button className="icon-btn" onClick={() => cameraRef.current?.click()} disabled={uploading}
+              title="Take a photo" aria-label="Take a photo">
+              <Camera size={16} />
+            </button>
+          )}
+          <button className="icon-btn" onClick={() => fileRef.current?.click()} disabled={uploading}
+            title="Attach image or document" aria-label="Attach image or document">
+            <Paperclip size={16} />
+          </button>
+          {noteIdRef.current && <button className="icon-btn danger" onClick={() => remove(noteIdRef.current!)} title="Delete"><Trash2 size={16} /></button>}
           <button className="btn-primary" onClick={save} style={{ padding: '9px 20px', borderRadius: '12px', fontWeight: 800 }}>Done</button>
         </div>
         <input className="field" placeholder="Title" value={title} onChange={e => setTitle(e.target.value)}
           style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '10px', background: 'transparent', border: 'none', padding: '4px 0' }} autoFocus={!editing._id} />
+
+        {projects.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+            <select className="field" value={noteProject} onChange={e => setNoteProject(e.target.value)}
+              style={{ fontSize: '0.8rem', fontWeight: 700, padding: '7px 10px', width: 'auto' }}>
+              <option value="">Personal — only me</option>
+              {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
+            </select>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', fontWeight: 600 }}>
+              {noteProject ? 'Everyone in this project can see and edit it.' : 'Private to you.'}
+            </span>
+          </div>
+        )}
         <textarea className="field" placeholder="Write anything…" value={body} onChange={e => setBody(e.target.value)}
-          rows={16} style={{ background: 'transparent', border: 'none', padding: '4px 0', resize: 'vertical', lineHeight: 1.65, fontSize: '0.95rem' }} />
+          rows={attachments.length ? 10 : 16} style={{ background: 'transparent', border: 'none', padding: '4px 0', resize: 'vertical', lineHeight: 1.65, fontSize: '0.95rem' }} />
+
+        {(attachments.length > 0 || uploading) && (
+          <div className="note-attachments">
+            {attachments.map(a => (
+              <div key={a.key} className="note-attach">
+                <a href={a.url} target="_blank" rel="noreferrer" className="note-attach-open" title={a.name}>
+                  {isImage(a)
+                    ? <img src={a.url} alt="" loading="lazy" />
+                    : <span className="note-attach-glyph">{(a.mimeType || '').includes('pdf') ? <FileText size={20} /> : <ImageIcon size={20} />}</span>}
+                  <span className="note-attach-name">{a.name}</span>
+                  <span className="note-attach-size">{sizeOf(a.size)}</span>
+                </a>
+                <button className="note-attach-del" onClick={() => detach(a.key)} title="Remove" aria-label="Remove attachment">
+                  <X size={13} />
+                </button>
+              </div>
+            ))}
+            {uploading && <div className="note-attach uploading">Uploading…</div>}
+          </div>
+        )}
       </div>
     );
   }
@@ -84,15 +224,34 @@ export default function NotesPage() {
     <div className="container" style={{ padding: '24px 16px 120px' }}>
       <header style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '18px', gap: '12px' }}>
         <div>
-          <h1 className="page-title">Notes</h1>
-          <p className="page-subtitle">{notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : 'Anything you want to remember'}</p>
+          <h1 className="page-title">{scope ? scope.name : 'Notes'}</h1>
+          <p className="page-subtitle">
+            {inScope.length
+              ? `${inScope.length} note${inScope.length === 1 ? '' : 's'}${scope ? ' · shared with the project' : ' · private to you'}`
+              : 'Anything you want to remember'}
+          </p>
         </div>
         <button className="btn-primary" onClick={() => open(null)} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px', borderRadius: '12px', fontWeight: 800 }}>
           <Plus size={18} /> New
         </button>
       </header>
 
-      {notes.length > 5 && (
+      <div style={{ marginBottom: '16px' }}>
+        <ProjectPicker
+          projects={projects}
+          activeId={scope?._id || null}
+          counts={counts}
+          onSelect={setScope}
+          onCreate={async (name) => {
+            const res = await createProject(name);
+            if (res.success) { setProjects(ps => [...ps, res.project]); setScope(res.project); }
+            else toast(res.error || 'Something went wrong', 'error');
+            return res;
+          }}
+        />
+      </div>
+
+      {inScope.length > 5 && (
         <input className="field" placeholder="Search notes…" value={q} onChange={e => setQ(e.target.value)} style={{ marginBottom: '16px' }} />
       )}
 
@@ -100,7 +259,7 @@ export default function NotesPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
       ) : filtered.length === 0 ? (
         <div className="empty-state">
-          <p style={{ fontWeight: 800, marginBottom: '4px' }}>{q ? 'No matches' : 'No notes yet'}</p>
+          <p style={{ fontWeight: 800, marginBottom: '4px' }}>{q ? 'No matches' : scope ? `No notes in ${scope.name}` : 'No notes yet'}</p>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{q ? 'Try a different search.' : 'Tap New — or just tell Jarvis to note something down.'}</p>
         </div>
       ) : (
@@ -112,7 +271,16 @@ export default function NotesPage() {
               </button>
               {n.title && <div className="note-title">{n.title}</div>}
               {n.body && <div className="note-body">{preview(n.body)}</div>}
-              <div className="note-time">{when(n.updatedAt)}</div>
+              {n.attachments?.length > 0 && (
+                <div className="note-clip"><Paperclip size={11} /> {n.attachments.length}</div>
+              )}
+              <div className="note-time">
+                {/* Whose it is only matters once a note is shared — in Personal it is always mine */}
+                {n.projectId && n.userId?.email && n.userId.email.toLowerCase() !== myEmail && (
+                  <span className="chip" style={{ marginRight: '6px' }}>{n.userId.name || n.userId.email}</span>
+                )}
+                {when(n.updatedAt)}
+              </div>
             </div>
           ))}
         </div>

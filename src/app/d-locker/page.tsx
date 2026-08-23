@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { getDocuments, addDocument, deleteDocument, moveDocument } from '@/actions/document';
+import { getDocuments, addDocument, deleteDocument, moveDocument, fileDocumentUnderProject } from '@/actions/document';
 import { getProjects } from '@/actions/project';
 import { ExternalLink, Download, X } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
@@ -12,6 +12,7 @@ interface DocType {
   _id: string;
   name: string;
   folder?: string;
+  projectId?: { _id: string; name: string } | null;   // populated when shared with a project
   type: 'file' | 'link';
   url: string;
   mimeType?: string;
@@ -28,7 +29,7 @@ export default function DLockerPage() {
   const router = useRouter();
   
   const [docs, setDocs] = useState<DocType[]>([]);
-  const [projectNames, setProjectNames] = useState<string[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
   const [activeFolder, setActiveFolder] = useState<string>(ALL);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddingDoc, setIsAddingDoc] = useState(false);
@@ -39,6 +40,7 @@ export default function DLockerPage() {
   const [docType, setDocType] = useState<'file' | 'link'>('file');
   const [docName, setDocName] = useState('');
   const [docFolder, setDocFolder] = useState(DEFAULT_FOLDER);
+  const [docProject, setDocProject] = useState('');   // '' = my locker only
   const [externalLink, setExternalLink] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
@@ -54,18 +56,16 @@ export default function DLockerPage() {
       router.push('/auth/signin');
     } else if (status === 'authenticated') {
       fetchDocs();
-      // Your projects are offered as folder names, so a locker can be filed the way work is
-      getProjects().then(r => {
-        if (r.success) setProjectNames((r.projects || []).map((p: any) => p.name));
-      }).catch(() => {});
+      getProjects().then(r => { if (r.success) setProjects(r.projects || []); }).catch(() => {});
     }
   }, [status, router, fetchDocs]);
 
   // Folders in use, straight off the documents — anything saved before folders existed has no
   // folder field at all, so it reads as Personal here and in the filter below, consistently.
   const folders = [...new Set(docs.map(d => d.folder || DEFAULT_FOLDER))].sort((a, b) => a.localeCompare(b));
-  // Everything you could file something under: what exists, your projects, and a sane default
-  const folderOptions = [...new Set([DEFAULT_FOLDER, ...folders, ...projectNames])];
+  // Folders are personal filing. Sharing with a project is a separate, real thing now —
+  // it used to be faked by naming a folder after a project, which shared nothing.
+  const folderOptions = [...new Set([DEFAULT_FOLDER, ...folders])];
   const visibleDocs = activeFolder === ALL ? docs : docs.filter(d => (d.folder || DEFAULT_FOLDER) === activeFolder);
 
   const handleMove = async (id: string, folder: string) => {
@@ -74,6 +74,15 @@ export default function DLockerPage() {
     const res = await moveDocument(id, target);
     if (res.success) { setPreview((p: any) => p && { ...p, folder: target }); fetchDocs(); }
     else toast(res.error || 'Could not move it', 'error');
+  };
+
+  const handleShareWithProject = async (id: string, projectId: string) => {
+    const res = await fileDocumentUnderProject(id, projectId);
+    if (res.success) {
+      const project = projects.find(p => p._id === projectId) || null;
+      setPreview((p: any) => p && { ...p, projectId: project && { _id: project._id, name: project.name } });
+      fetchDocs();
+    } else toast(res.error || 'Could not share it', 'error');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -85,6 +94,7 @@ export default function DLockerPage() {
     formData.append('name', docName);
     formData.append('type', docType);
     formData.append('folder', docFolder);
+    formData.append('projectId', docProject);
 
     if (docType === 'file' && selectedFile) {
       formData.append('file', selectedFile);
@@ -209,6 +219,7 @@ export default function DLockerPage() {
                 <h3>{doc.name}</h3>
                 <div className="doc-card-meta">
                   <span className={`doc-tag ${doc.type}`}>{doc.type === 'link' ? 'link' : extOf(doc)}</span>
+                  {doc.projectId?.name && <span className="doc-tag">{doc.projectId.name}</span>}
                   {activeFolder === ALL && <span className="doc-size-text">{doc.folder || DEFAULT_FOLDER}</span>}
                   {doc.type === 'file' && <span className="doc-size-text">{formatSize(doc.size)}</span>}
                 </div>
@@ -239,6 +250,13 @@ export default function DLockerPage() {
                 <input className="preview-folder" type="text" list="folder-options" title="Move to folder"
                   defaultValue={preview.folder || DEFAULT_FOLDER}
                   onBlur={e => { if (e.target.value.trim() !== (preview.folder || DEFAULT_FOLDER)) handleMove(preview._id, e.target.value); }} />
+                {projects.length > 0 && (
+                  <select className="preview-folder" title="Share with a project"
+                    value={preview.projectId?._id || ''} onChange={e => handleShareWithProject(preview._id, e.target.value)}>
+                    <option value="">Just me</option>
+                    {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
+                  </select>
+                )}
                 <a className="icon-btn" href={preview.url} target="_blank" rel="noreferrer" title="Open in new tab"><ExternalLink size={16} /></a>
                 {preview.type === 'file' && (
                   <a className="icon-btn" href={preview.url} download={preview.name} title="Download"><Download size={16} /></a>
@@ -287,9 +305,22 @@ export default function DLockerPage() {
               <div>
                 <label className="field-label">Folder</label>
                 {/* Native datalist: pick an existing folder or type a new one — that is how a folder gets created */}
-                <input className="field" type="text" list="folder-options" placeholder="Personal, or a project name"
+                <input className="field" type="text" list="folder-options" placeholder="Personal, Taxes, Passport…"
                   value={docFolder} onChange={(e) => setDocFolder(e.target.value)} />
               </div>
+
+              {projects.length > 0 && (
+                <div>
+                  <label className="field-label">Share with a project</label>
+                  <select className="field" value={docProject} onChange={(e) => setDocProject(e.target.value)}>
+                    <option value="">Just me</option>
+                    {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
+                  </select>
+                  <p style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', fontWeight: 600, margin: '6px 2px 0' }}>
+                    {docProject ? 'Everyone in that project can see and open this file.' : 'Only you can see it.'}
+                  </p>
+                </div>
+              )}
 
               <div className="seg-group">
                 {(['file', 'link'] as const).map(t => (

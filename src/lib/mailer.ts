@@ -20,6 +20,66 @@ export async function sendMail({ to, subject, html, text }: { to: string; subjec
   return { delivered: true as const };
 }
 
+/**
+ * Sent when someone is added to a project. Two audiences, one template: a person who already
+ * has an account lands on the project, a new person lands on signup with their email prefilled
+ * — the address has to match for `memberEmails` to let them in, so it is not theirs to retype.
+ */
+export function inviteEmail(opts: { projectName: string; inviterName: string; link: string; hasAccount: boolean; name?: string }) {
+  const { projectName, inviterName, link, hasAccount, name } = opts;
+  const cta = hasAccount ? 'Open the project' : 'Create your account';
+  const lead = hasAccount
+    ? `You now have access to everything in it — tasks, meeting notes and files.`
+    : `Create an account with this email address and the project will be waiting for you, along with anything already assigned to you.`;
+
+  const text = `Hi${name ? ` ${name}` : ''},
+
+${inviterName} added you to the project "${projectName}" on ALL YOU NEED.
+
+${lead}
+
+${cta}: ${link}
+
+If you weren't expecting this, you can ignore this email.`;
+
+  const html = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#0f1117;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0">${inviterName} added you to ${projectName}.</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1117;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#161922;border:1px solid #262b39;border-radius:20px;overflow:hidden;">
+
+        <tr><td style="padding:28px 32px 0;">
+          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#7c83ff;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
+        </td></tr>
+
+        <tr><td style="padding:22px 32px 0;">
+          <h1 style="margin:0 0 8px;font-size:22px;line-height:1.3;font-weight:800;color:#f1f3f9;letter-spacing:-0.02em;">You've been added to a project</h1>
+          <p style="margin:0;font-size:14px;line-height:1.6;color:#9aa3b8;">Hi${name ? ` ${name}` : ''}, <strong style="color:#c9d0e0;">${inviterName}</strong> added you to <strong style="color:#c9d0e0;">${projectName}</strong>. ${lead}</p>
+        </td></tr>
+
+        <tr><td style="padding:24px 32px 0;">
+          <a href="${link}" style="display:block;text-align:center;padding:14px 20px;background:#6366f1;color:#ffffff;text-decoration:none;border-radius:14px;font-weight:800;font-size:15px;">${cta}</a>
+        </td></tr>
+
+        <tr><td style="padding:18px 32px 28px;">
+          <p style="margin:0;font-size:12px;line-height:1.6;color:#6f7891;">Button not working? Paste this into your browser:<br><span style="color:#8b93a7;word-break:break-all;">${link}</span></p>
+        </td></tr>
+
+        <tr><td style="padding:16px 32px;border-top:1px solid #262b39;">
+          <p style="margin:0;font-size:11px;color:#5a6274;">Sent by ALL YOU NEED · your personal vault</p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+  return { subject: `${inviterName} added you to "${projectName}"`, html, text };
+}
+
 export function otpEmail(code: string, name?: string) {
   const text = `Hi${name ? ` ${name}` : ''},
 

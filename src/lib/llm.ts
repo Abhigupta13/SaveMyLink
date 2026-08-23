@@ -12,11 +12,33 @@
  */
 
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/openai';
-// An alias, deliberately, not a pinned version: Google ships Flash releases faster than this
-// file gets edited (gemini-3-flash was already gone — 404 — by the time it was written), and
-// the newest pinned model is usually the most capacity-constrained. Pin via env if you need
-// reproducibility; ListModels shows what exists.
-const MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+
+// Pinned, not an alias. gemini-flash-latest looked like the safe choice — it survives Google's
+// renames, and gemini-3-flash was already a 404 by the time this file was written — but measured
+// against real-sized requests it answered 1 of 4 and returned 503 for the rest, while 3.6 and 3.5
+// took every one. The alias evidently points at whatever is most contended. Reliability beats
+// rename-proofing: a 404 is one obvious env change, a 75% failure rate is a broken assistant.
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+
+// Contention differs sharply between models at any given moment, so a busy one falls through
+// to another rather than costing the turn. Ordered by measured reliability.
+const FALLBACKS = ['gemini-3.5-flash', 'gemini-3.7-flash'];
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Google's message, whichever envelope it arrives in — an error body is sometimes the bare
+ * object and sometimes a single-element array wrapping it. Reading only the object shape
+ * threw away the half that says what actually went wrong.
+ */
+function errorReason(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body);
+    return (Array.isArray(parsed) ? parsed[0] : parsed)?.error?.message || null;
+  } catch {
+    return null;
+  }
+}
 
 export type ChatMsg = { role: 'system' | 'user' | 'assistant'; content: string };
 export type ChatResult = { ok: true; data: any } | { ok: false; error: string };
@@ -41,46 +63,68 @@ export function parseLooseJSON(raw: string): any {
 export async function chatJSON(messages: ChatMsg[]): Promise<ChatResult> {
   if (!process.env.GEMINI_API_KEY) return { ok: false, error: 'GEMINI_API_KEY not configured' };
 
-  const call = () => fetch(`${BASE}/chat/completions`, {
+  const call = (model: string) => fetch(`${BASE}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, response_format: { type: 'json_object' }, messages }),
+    body: JSON.stringify({ model, response_format: { type: 'json_object' }, messages }),
   });
 
-  try {
-    let res = await call();
-    // A per-minute burst clears in seconds and one short wait beats a dead turn. A daily limit
-    // reports minutes — retrying into that spends another request to be refused identically.
-    if (res.status === 429) {
-      const wait = Number(res.headers.get('retry-after')) || 3;
-      if (wait <= 10) {
-        await new Promise(r => setTimeout(r, wait * 1000));
-        res = await call();
+  const models = [MODEL, ...FALLBACKS.filter(m => m !== MODEL)];
+  let lastError = 'Assistant unavailable';
+
+  for (const model of models) {
+    // Two goes at each model before moving on: 503s often clear within a second or two
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let res: Response;
+      try {
+        res = await call(model);
+      } catch (error) {
+        console.error('LLM call failed:', model, error);
+        break;   // network, not capacity — another model on the same host will not help
       }
-    }
-    // 503 is Gemini saying the model is busy, not that anything is wrong — the newer Flash
-    // releases hit this regularly. It costs nothing against the quota, so just come back.
-    if (res.status === 503) {
-      await new Promise(r => setTimeout(r, 1500));
-      res = await call();
-    }
 
-    if (!res.ok) {
-      const body = await res.text();
-      console.error('LLM error:', res.status, MODEL, body);
-      const reason = (() => { try { return JSON.parse(body)?.error?.message; } catch { return null; } })();
-      if (res.status === 429) return { ok: false, error: reason ? `Rate limited — ${reason}` : 'Rate limited. Give it a minute.' };
-      // 400/404 here is almost always a model name Google has retired — say which one we tried
-      if (res.status === 400 || res.status === 404) return { ok: false, error: `Model "${MODEL}" rejected it${reason ? ` — ${reason}` : ''}` };
-      if (res.status === 503) return { ok: false, error: 'Gemini is busy right now. Try again in a moment.' };
-      return { ok: false, error: `Assistant unavailable (${res.status})` };
-    }
+      if (res.status === 503) {
+        lastError = 'Gemini is busy right now. Try again in a moment.';
+        console.warn(`LLM busy: ${model} (attempt ${attempt + 1})`);
+        if (attempt === 0) { await sleep(1200); continue; }
+        break;   // this model is saturated — fall through to the next one
+      }
 
-    const data = parseLooseJSON((await res.json()).choices?.[0]?.message?.content || '');
-    if (!data) return { ok: false, error: 'Assistant returned something unreadable' };
-    return { ok: true, data };
-  } catch (error) {
-    console.error('LLM call failed:', error);
-    return { ok: false, error: 'Assistant unavailable' };
+      if (res.status === 429) {
+        const wait = Number(res.headers.get('retry-after')) || 3;
+        const body = await res.text();
+        const reason = errorReason(body);
+        console.warn('LLM rate limited:', model, reason);
+        lastError = reason ? `Rate limited — ${reason}` : 'Rate limited. Give it a minute.';
+
+        // A short per-minute burst on this model clears in seconds — one wait beats a dead turn
+        if (wait <= 10 && attempt === 0) { await sleep(wait * 1000); continue; }
+
+        // Then fall through to the next model. The free quota is per MODEL, not per project —
+        // verified directly: with 3.6-flash returning 429, both 3.5 and 3.7 answered 200 while
+        // 3.6 stayed limited. So three models is three separate allowances, and only when all
+        // of them are exhausted is the turn actually lost.
+        break;
+      }
+
+      if (!res.ok) {
+        const body = await res.text();
+        console.error('LLM error:', res.status, model, body);
+        const reason = errorReason(body);
+        // 400/404 is a retired model name — the next one in the list may well work
+        if (res.status === 400 || res.status === 404) {
+          lastError = `Model "${model}" rejected it${reason ? ` — ${reason}` : ''}`;
+          break;
+        }
+        lastError = `Assistant unavailable (${res.status})`;
+        break;
+      }
+
+      const data = parseLooseJSON((await res.json()).choices?.[0]?.message?.content || '');
+      if (!data) return { ok: false, error: 'Assistant returned something unreadable' };
+      return { ok: true, data };
+    }
   }
+
+  return { ok: false, error: lastError };
 }

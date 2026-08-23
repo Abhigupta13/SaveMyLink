@@ -5,21 +5,8 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import AddLinkForm from './AddLinkForm';
 import PinModal from './PinModal';
 import { useSession } from 'next-auth/react';
-import { Search, Plus, Home, Link as LinkIcon, Library, CheckSquare, Mic, Users, Newspaper, Upload, StickyNote, FolderOpen, X } from 'lucide-react';
-
-const NAV = [
-  { label: 'Links', path: '/links', Icon: LinkIcon },
-  { label: 'Notes', path: '/notes', Icon: StickyNote },
-  { label: 'Tasks', path: '/tasks', Icon: CheckSquare },
-  { label: 'Projects', path: '/projects', Icon: FolderOpen },
-  { label: 'MOM', path: '/mom', Icon: Mic },
-  { label: 'Digi Locker', path: '/d-locker', Icon: Library },
-  { label: 'Contacts', path: '/contacts', Icon: Users },
-  { label: 'Digest', path: '/digest', Icon: Newspaper },
-  { label: 'Import', path: '/import', Icon: Upload },
-];
-// Phone bottom bar: the daily-use four + menu for everything else
-const MOBILE_NAV = ['/links', '/notes', '/tasks', '/projects'];
+import { Search, Plus, Home, X } from 'lucide-react';
+import { NAV, MOBILE_NAV } from '@/lib/nav';
 
 export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
   const { data: session } = useSession();
@@ -85,9 +72,9 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
           <Home size={20} strokeWidth={2.2} /><span>Home</span>
         </button>
         <nav className="rail-scroll">
-          {NAV.map(({ label, path, Icon }) => (
-            <button key={path} className={`rail-item ${isActive(path) ? 'active' : ''}`} onClick={() => router.push(path)} title={label}>
-              <Icon size={20} strokeWidth={2.2} /><span>{label}</span>
+          {NAV.map(({ title, href, Icon }) => (
+            <button key={href} className={`rail-item ${isActive(href) ? 'active' : ''}`} onClick={() => router.push(href)} title={title}>
+              <Icon size={20} strokeWidth={2.2} /><span>{title}</span>
             </button>
           ))}
         </nav>
@@ -96,14 +83,17 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
         </div>
       </aside>
 
+      {/* Phone: brand header on every tab except Home (Home has it in the greeting) */}
+      {pathname !== '/' && <a href="/" className="phone-wordmark">ALL <span>YOU NEED</span></a>}
+
       {/* Phone: bottom tabs only — no top bar */}
       <nav className="bottom-nav">
         <button className={`bottom-item ${isActive('/') ? 'active' : ''}`} onClick={() => router.push('/')}><Home size={21} strokeWidth={2.2} /><span>Home</span></button>
-        {NAV.filter(n => MOBILE_NAV.includes(n.path)).map(({ label, path, Icon }) => (
-          <button key={path} className={`bottom-item ${isActive(path) ? 'active' : ''}`} onClick={() => router.push(path)}><Icon size={21} strokeWidth={2.2} /><span>{label}</span></button>
+        {NAV.filter(n => MOBILE_NAV.includes(n.href)).map(({ title, href, Icon }) => (
+          <button key={href} className={`bottom-item ${isActive(href) ? 'active' : ''}`} onClick={() => router.push(href)}><Icon size={21} strokeWidth={2.2} /><span>{title}</span></button>
         ))}
         <button className={`bottom-item ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')}>
-          <span className="bottom-avatar">{initial}</span><span>You</span>
+          <span className="bottom-avatar">{initial}</span>
         </button>
       </nav>
 

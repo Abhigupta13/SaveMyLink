@@ -30,20 +30,26 @@ function matchProject(name: string, projects: any[]) {
       || null;
 }
 
-async function memberSession(projectId: string) {
+// No projectId = a personal meeting: it belongs to the recorder alone, and every
+// item is routed from the transcript instead of inheriting a project.
+async function memberSession(projectId?: string | null) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return null;
   await connectToDatabase();
+  if (!projectId) return { session, project: null };
   const project = await projectForMember(projectId, session.user.id, session.user.email);
   if (!project) return null;
   return { session, project };
 }
 
-export async function getMoms(projectId: string) {
+const momScope = (mom: any) => (mom.projectId ? String(mom.projectId) : null);
+
+export async function getMoms(projectId?: string | null) {
   try {
     const ctx = await memberSession(projectId);
     if (!ctx) return { success: false, error: 'Not a member' };
-    const moms = await Mom.find({ projectId }).sort({ createdAt: -1 }).lean();
+    const moms = await Mom.find(projectId ? { projectId } : { projectId: null, userId: ctx.session.user.id })
+      .sort({ createdAt: -1 }).lean();
     return { success: true, moms: JSON.parse(JSON.stringify(moms)) };
   } catch (error) {
     console.error('Failed to get MOMs:', error);
@@ -59,7 +65,7 @@ export async function getMoms(projectId: string) {
  */
 export async function uploadMomAudio(formData: FormData) {
   try {
-    const projectId = formData.get('projectId') as string;
+    const projectId = (formData.get('projectId') as string) || '';   // empty = personal meeting
     const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString()}`;
     const audio = formData.get('audio') as File | null;
     if (!audio || audio.size < 1000) return { success: false, error: 'Nothing was recorded' };
@@ -86,7 +92,7 @@ export async function uploadMomAudio(formData: FormData) {
     const { text } = await res.json();
 
     const mom = await Mom.create({
-      projectId,
+      projectId: projectId || undefined,
       userId: ctx.session.user.id,
       title,
       transcript: String(text || ''),
@@ -105,7 +111,7 @@ export async function extractMomTasks(momId: string, timeZone = 'UTC') {
     await connectToDatabase();
     const mom = await Mom.findById(momId);
     if (!mom?.transcript) return { success: false, error: 'No transcript yet' };
-    const ctx = await memberSession(String(mom.projectId));
+    const ctx = await memberSession(momScope(mom));
     if (!ctx) return { success: false, error: 'Not a member' };
 
     const myEmail = (ctx.session.user.email || '').toLowerCase();
@@ -125,12 +131,19 @@ export async function extractMomTasks(momId: string, timeZone = 'UTC') {
         .filter((e, i, a) => a.indexOf(e) === i && e !== myEmail).map(e => `- ${e}`),
     ].join('\n');
 
+    const homeProject = mom.projectId
+      ? (projects as any[]).find(p => String(p._id) === String(mom.projectId)) : null;
+
     const meetingDate = new Date(mom.createdAt).toLocaleString('en-GB', { timeZone, weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
     const system = `You turn a meeting transcript into minutes plus actionable items.
 The meeting happened on ${meetingDate} (timezone ${timeZone}). The transcript may be Hinglish (mixed Hindi/English).
 
 ONE recording often covers SEVERAL topics, projects and people. Split it accordingly — produce a separate item per distinct action or decision, and route each one to the project and person it belongs to.
+
+${homeProject
+  ? `This meeting was recorded inside the project "${homeProject.name}". Items belong to that project by default — only set a different projectName when the transcript clearly puts an item somewhere else, and omit projectName entirely to leave it in "${homeProject.name}".`
+  : `This meeting was NOT recorded inside any project. Work out the project for each item from the transcript alone, and omit projectName when it isn't clear — a personal item with no project is a perfectly valid answer.`}
 
 PROJECTS the user has:
 ${projectLines || '(none)'}
@@ -139,7 +152,7 @@ PEOPLE (name = email):
 ${peopleLines || '(none)'}
 
 For every item work out, ONLY from what was actually said:
-- kind: "task" if someone must do something; "note" for decisions, facts or context worth keeping.
+- kind: "task" if someone must do something; "note" for decisions, facts or context worth keeping; "brief" ONLY when someone explicitly asks for it to go into the project's own notes / description / brief ("add this to the project notes", "isko project ke notes me daal do"). Never choose "brief" on your own — it edits the project itself.
 - title: short imperative for tasks ("Send the proposal to Morphle"), a clear line for notes.
 - detail: one sentence of context from the transcript (who said it / why).
 - projectName: the project it belongs to, copied EXACTLY from the list above. Omit if the transcript doesn't make it clear.
@@ -150,7 +163,7 @@ For every item work out, ONLY from what was actually said:
 Never guess a project or person that isn't in the lists. Never invent deadlines. It is correct and expected to return missing entries.
 
 Reply ONLY with JSON:
-{"summary":"concise minutes in English: what was discussed and decided, grouped by topic","items":[{"kind":"task|note","title":"...","detail":"...","projectName":"...","assigneeEmail":"...","dueAt":"YYYY-MM-DDTHH:mm","missing":["project","assignee","due"]}]}`;
+{"summary":"concise minutes in English: what was discussed and decided, grouped by topic","items":[{"kind":"task|note|brief","title":"...","detail":"...","projectName":"...","assigneeEmail":"...","dueAt":"YYYY-MM-DDTHH:mm","missing":["project","assignee","due"]}]}`;
 
     const res = await chatJSON([
       { role: 'system', content: system },
@@ -165,21 +178,23 @@ Reply ONLY with JSON:
     mom.tasksConfirmed = false; // re-opening the review
     mom.summary = parsed.summary || '';
     mom.candidates = (parsed.items || []).filter((i: any) => i?.title).slice(0, 25).map((i: any) => {
-      const project = matchProject(i.projectName, projects as any[]);
+      // A meeting recorded inside a project already knows where its items go — the model
+      // only has to name a project when it wants a *different* one, or when there is no home.
+      const projectId = matchProject(i.projectName, projects as any[])?._id || mom.projectId || null;
       const assignee = i.assigneeEmail && knownEmails.has(String(i.assigneeEmail).toLowerCase())
         ? String(i.assigneeEmail).toLowerCase() : undefined;
       const due = i.dueAt ? new Date(i.dueAt) : null;
       const dueValid = due && !isNaN(due.getTime()) ? due : null;
-      const kind = i.kind === 'note' ? 'note' : 'task';
+      const kind = i.kind === 'note' || i.kind === 'brief' ? i.kind : 'task';
 
       // Recompute the gaps ourselves rather than trusting the model's own list
       const missing: string[] = [];
-      if (!project) missing.push('project');
+      if (!projectId) missing.push('project');
       if (kind === 'task' && !assignee) missing.push('assignee');
       if (kind === 'task' && !dueValid) missing.push('due');
 
       return { kind, title: String(i.title), detail: i.detail ? String(i.detail) : undefined,
-        dueAt: dueValid, assigneeEmail: assignee, projectId: project?._id || null, missing };
+        dueAt: dueValid, assigneeEmail: assignee, projectId, missing };
     });
     await mom.save();
     return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
@@ -191,7 +206,7 @@ Reply ONLY with JSON:
 
 export async function confirmMomTasks(
   momId: string,
-  items: { kind?: 'task' | 'note'; title: string; detail?: string; assigneeEmail?: string; dueAt?: string; projectId?: string }[]
+  items: { kind?: 'task' | 'note' | 'brief'; title: string; detail?: string; assigneeEmail?: string; dueAt?: string; projectId?: string }[]
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -199,27 +214,41 @@ export async function confirmMomTasks(
     await connectToDatabase();
     const mom = await Mom.findById(momId);
     if (!mom) return { success: false, error: 'MOM not found' };
-    const ctx = await memberSession(String(mom.projectId));
+    const ctx = await memberSession(momScope(mom));
     if (!ctx) return { success: false, error: 'Not a member' };
 
     const myEmail = (ctx.session.user.email || '').toLowerCase();
-    let tasks = 0, notes = 0;
+    let tasks = 0, notes = 0, briefs = 0;
 
     for (const item of items) {
       if (!item.title?.trim()) continue;
 
-      if (item.kind === 'note') {
-        await Note.create({ userId: session.user.id, title: item.title.trim(), body: item.detail || '' });
-        notes++;
-        continue;
-      }
-
-      // Each task can land in a different project — verify membership for each
-      let projectId = mom.projectId;
+      // Each item can land in a different project — verify membership for each.
+      // '' means the user picked Personal; undefined means it was never asked, so inherit the meeting's.
+      let projectId: any = item.projectId === undefined ? mom.projectId : undefined;
       if (item.projectId) {
         const allowed = await projectForMember(item.projectId, session.user.id, myEmail);
         if (!allowed) continue; // silently skip projects the user isn't in
         projectId = allowed._id as any;
+      }
+
+      // Appended, never overwritten — the brief is shared, and a meeting should not be able
+      // to wipe what the team wrote there.
+      if (item.kind === 'brief') {
+        if (!projectId) continue;   // nothing to append to without a project
+        const line = [item.title.trim(), item.detail].filter(Boolean).join(' — ');
+        const proj = await Project.findById(projectId);
+        if (!proj) continue;
+        proj.notes = [proj.notes?.trim(), line].filter(Boolean).join('\n');
+        await proj.save();
+        briefs++;
+        continue;
+      }
+
+      if (item.kind === 'note') {
+        await Note.create({ userId: session.user.id, projectId: projectId || undefined, title: item.title.trim(), body: item.detail || '' });
+        notes++;
+        continue;
       }
 
       let assigneeId;
@@ -234,7 +263,7 @@ export async function confirmMomTasks(
         description: item.detail,
         dueAt: due && !isNaN(due.getTime()) ? due : undefined,
         userId: session.user.id,
-        projectId,
+        projectId: projectId || undefined,
         assigneeId,
         assigneeEmail: item.assigneeEmail?.toLowerCase(),
         momId: mom._id,
@@ -246,7 +275,8 @@ export async function confirmMomTasks(
     await mom.save();
     revalidatePath('/tasks');
     revalidatePath('/notes');
-    return { success: true, tasks, notes };
+    revalidatePath('/projects');
+    return { success: true, tasks, notes, briefs };
   } catch (error) {
     console.error('Failed to confirm MOM items:', error);
     return { success: false, error: 'Failed to create items' };
@@ -277,7 +307,7 @@ export async function updateMom(momId: string, data: { title?: string; summary?:
     await connectToDatabase();
     const mom = await Mom.findById(momId);
     if (!mom) return { success: false, error: 'MOM not found' };
-    const ctx = await memberSession(String(mom.projectId));
+    const ctx = await memberSession(momScope(mom));
     if (!ctx) return { success: false, error: 'Not a member' };
 
     if (data.title !== undefined) mom.title = data.title.trim() || mom.title;

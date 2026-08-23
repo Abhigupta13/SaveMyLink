@@ -4,10 +4,13 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { ArrowLeft, Trash2, X, Check, UserPlus, Download, Pencil, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText } from 'lucide-react';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask } from '@/actions/task';
 import { getProjects, addMember, removeMember, deleteProject, updateProjectNotes, renameProject } from '@/actions/project';
 import { getMoms } from '@/actions/mom';
+import { getNotes } from '@/actions/note';
+import { getDocuments } from '@/actions/document';
+import PersonPicker from '@/components/PersonPicker';
 import MomSection from '@/components/MomSection';
 import { useFeedback } from '@/components/ui/Feedback';
 
@@ -24,7 +27,7 @@ function fmtDue(iso: string) {
 }
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
-type Section = 'tasks' | 'meetings' | 'notes' | 'people';
+type Section = 'tasks' | 'meetings' | 'notes' | 'files' | 'about' | 'people';
 
 export default function ProjectWorkspace() {
   const { toast, confirm } = useFeedback();
@@ -36,14 +39,16 @@ export default function ProjectWorkspace() {
   const [project, setProject] = useState<any | null>(null);
   const [tasks, setTasks] = useState<any[]>([]);
   const [moms, setMoms] = useState<any[]>([]);
+  const [notes, setNotes] = useState<any[]>([]);
+  const [files, setFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [openSections, setOpenSections] = useState<Record<Section, boolean>>({ tasks: true, meetings: true, notes: true, people: true });
+  const [openSections, setOpenSections] = useState<Record<Section, boolean>>({ tasks: true, meetings: true, notes: true, files: true, about: false, people: true });
 
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
   const [assignee, setAssignee] = useState('');
-  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviting, setInviting] = useState(false);
   const [notesDraft, setNotesDraft] = useState('');
   const [notesSaved, setNotesSaved] = useState(true);
   const [renaming, setRenaming] = useState('');
@@ -56,6 +61,17 @@ export default function ProjectWorkspace() {
   const memberOptions = useMemo(
     () => (project ? [...new Set([project.ownerId?.email, ...(project.memberEmails || [])])].filter(Boolean) as string[] : []),
     [project]
+  );
+  // email -> { name, hasAccount }, resolved server-side from User then your own Contacts
+  const people = useMemo(
+    () => new Map<string, any>((project?.people || []).map((p: any) => [p.email, p])),
+    [project]
+  );
+  /** Their name if we know one, otherwise the address — never an empty label. */
+  const nameOf = useCallback((email: string) => people.get(email)?.name || email, [people]);
+  const shortOf = useCallback(
+    (email: string) => people.get(email)?.name?.split(' ')[0] || email.split('@')[0],
+    [people]
   );
 
   const toLocalInput = (iso?: string | null) => {
@@ -75,6 +91,18 @@ export default function ProjectWorkspace() {
     if (res.success) setMoms(res.moms || []);
   }, [projectId]);
 
+  // Notes and documents are fetched whole and filtered here — both actions already return
+  // only what I may see, and neither list is big enough to be worth a project-scoped query.
+  const fetchNotes = useCallback(async () => {
+    const res = await getNotes();
+    if (res.success) setNotes((res.notes || []).filter((n: any) => n.projectId?._id === projectId));
+  }, [projectId]);
+
+  const fetchFiles = useCallback(async () => {
+    const res = await getDocuments();
+    setFiles((res.docs || []).filter((d: any) => d.projectId?._id === projectId));
+  }, [projectId]);
+
   const load = useCallback(async () => {
     const res = await getProjects();
     const found = res.success ? (res.projects || []).find((p: any) => String(p._id) === projectId) : null;
@@ -83,11 +111,28 @@ export default function ProjectWorkspace() {
     setProject(found);
     setNotesDraft(found.notes || '');
     setRenaming(found.name);
-    await Promise.all([fetchTasks(), fetchMoms()]);
+    await Promise.all([fetchTasks(), fetchMoms(), fetchNotes(), fetchFiles()]);
     setLoading(false);
-  }, [projectId, fetchTasks, fetchMoms]);
+  }, [projectId, fetchTasks, fetchMoms, fetchNotes, fetchFiles]);
 
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
+
+  /**
+   * A shared project changes under you — someone ticks off a task, adds a meeting, joins.
+   * Re-fetch whenever you come back to the tab. Catches nearly everything a poll would, with
+   * no timer hitting the database while the page sits open in the background.
+   * ponytail: focus-only; add polling or sockets if people are ever in here simultaneously.
+   */
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+    const refresh = () => { if (document.visibilityState === 'visible') load(); };
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [status, load]);
 
   // ---------- tasks ----------
   const handleCreate = async (e: React.FormEvent) => {
@@ -151,18 +196,24 @@ export default function ProjectWorkspace() {
     else toast(res.error || 'Something went wrong', 'error');
   };
 
-  const handleInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const email = inviteEmail.trim().toLowerCase();
+  const handleInvite = async (raw: string) => {
+    const email = raw.trim().toLowerCase();
+    if (!email) return;
+    setInviting(true);
     const res = await addMember(projectId, email);
+    setInviting(false);
     if (res.success) {
-      setProject((p: any) => ({ ...p, memberEmails: [...new Set([...(p.memberEmails || []), email])] }));
-      setInviteEmail('');
+      // Reload rather than patch: the server resolved their name and whether they have an
+      // account, and neither is knowable from here.
+      await load();
+      // Say plainly whether mail actually went out — SMTP being unconfigured is silent otherwise
+      toast(res.emailed ? `Invite emailed to ${email}` : `${email} added — no invite email sent (SMTP not configured)`,
+        res.emailed ? 'success' : 'error');
     } else toast(res.error || 'Something went wrong', 'error');
   };
 
   const handleRemove = async (email: string) => {
-    if (!await confirm({ title: `Remove ${email}?`, message: 'Their tasks stay in the project but become unassigned.', danger: true, confirmLabel: 'Remove' })) return;
+    if (!await confirm({ title: `Remove ${nameOf(email)}?`, message: 'Their tasks stay in the project but become unassigned.', danger: true, confirmLabel: 'Remove' })) return;
     const res = await removeMember(projectId, email);
     if (res.success) { setProject((p: any) => ({ ...p, memberEmails: (p.memberEmails || []).filter((e: string) => e !== email) })); fetchTasks(); }
     else toast(res.error || 'Something went wrong', 'error');
@@ -211,7 +262,7 @@ export default function ProjectWorkspace() {
 
   return (
     <>
-      <div className="container print-hide" style={{ padding: '24px 16px 120px' }}>
+      <div className="container ws-page print-hide" style={{ padding: '24px 16px 120px' }}>
         <Link href="/projects" className="subtle-link" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
           <ArrowLeft size={15} /> Projects
         </Link>
@@ -229,6 +280,9 @@ export default function ProjectWorkspace() {
           {isOwner && <button className="icon-btn danger" onClick={handleDeleteProject} title="Delete project"><Trash2 size={16} /></button>}
         </header>
 
+        <div className="ws-grid">
+          <div className="ws-main">
+
         {/* ---------- Tasks ---------- */}
         <section className="ws-section">
           {sectionHead('tasks', 'Tasks', open.length)}
@@ -244,7 +298,7 @@ export default function ProjectWorkspace() {
                     style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
                   <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)}>
                     <option value="">Assign to me</option>
-                    {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{email}</option>)}
+                    {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{nameOf(email)}</option>)}
                   </select>
                 </div>
               </form>
@@ -265,7 +319,7 @@ export default function ProjectWorkspace() {
                         {t.description && <div className="task-desc">{t.description}</div>}
                         <div className="task-meta">
                           {t.dueAt && <span className={`chip ${isOverdue ? 'overdue' : ''}`}>{fmtDue(t.dueAt)}</span>}
-                          {who && <span className={`chip ${who === myEmail ? 'me' : ''}`} title={who}>{who === myEmail ? 'me' : who.split('@')[0]}</span>}
+                          {who && <span className={`chip ${who === myEmail ? 'me' : ''}`} title={who}>{who === myEmail ? 'me' : shortOf(who)}</span>}
                         </div>
                       </div>
                       <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>
@@ -287,25 +341,42 @@ export default function ProjectWorkspace() {
           {sectionHead('meetings', 'Meetings', moms.length)}
           {openSections.meetings && (
             <MomSection project={project} projects={projects} myEmail={myEmail} memberOptions={memberOptions}
-              onTasksCreated={() => { fetchTasks(); fetchMoms(); }} />
+              onTasksCreated={() => { fetchTasks(); fetchMoms(); fetchNotes(); load(); }} />
           )}
         </section>
 
         {/* ---------- Notes ---------- */}
         <section className="ws-section">
-          {sectionHead('notes', 'Notes', notesDraft ? 1 : 0)}
+          {sectionHead('notes', 'Notes', notes.length)}
           {openSections.notes && (
             <>
-              <textarea className="field" rows={8} placeholder="Project notes — context, decisions, links…" value={notesDraft}
-                onChange={e => { setNotesDraft(e.target.value); setNotesSaved(false); }} style={{ resize: 'vertical', lineHeight: 1.6 }} />
-              <button onClick={handleSaveNotes} disabled={notesSaved} className="btn-primary"
-                style={{ marginTop: '10px', padding: '10px 24px', borderRadius: '12px', fontWeight: 800, opacity: notesSaved ? 0.5 : 1 }}>
-                {notesSaved ? 'Saved' : 'Save notes'}
-              </button>
+              {notes.length === 0 ? (
+                <p style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.85rem', padding: '8px 0' }}>
+                  No notes yet — meetings file them here automatically.
+                </p>
+              ) : notes.map(n => (
+                <Link key={n._id} href="/notes" className="task-row" style={{ textDecoration: 'none', alignItems: 'flex-start' }}>
+                  <StickyNote size={15} style={{ flexShrink: 0, marginTop: '3px', color: 'var(--text-tertiary)' }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="task-title">{n.title || 'Untitled note'}</div>
+                    {n.body && <div className="task-desc">{n.body.replace(/\s+/g, ' ').slice(0, 140)}</div>}
+                    <div className="task-meta">
+                      <span className="chip">{n.userId?.name || n.userId?.email || 'me'}</span>
+                      <span className="chip">{fmtDate(n.updatedAt)}</span>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+              <Link href="/notes" className="subtle-link" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem' }}>
+                Write a note →
+              </Link>
             </>
           )}
         </section>
 
+          </div>{/* /ws-main */}
+
+          <aside className="ws-rail">
         {/* ---------- People ---------- */}
         <section className="ws-section">
           {sectionHead('people', 'People', memberOptions.length)}
@@ -316,31 +387,73 @@ export default function ProjectWorkspace() {
                 const load = open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length;
                 return (
                   <div key={email} className="task-row">
-                    <span className="avatar-xs" style={{ width: '28px', height: '28px', fontSize: '0.75rem' }}>{email[0].toUpperCase()}</span>
+                    <span className="avatar-xs" style={{ width: '28px', height: '28px', fontSize: '0.75rem' }}>{nameOf(email)[0].toUpperCase()}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="task-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {email === myEmail ? `${email} (you)` : email}
+                        {email === myEmail ? `${nameOf(email)} (you)` : nameOf(email)}
                       </div>
                       <div className="task-meta">
+                        {/* The address still matters — it is what an invite was sent to */}
+                        {people.get(email)?.name && <span className="chip" title={email}>{email}</span>}
                         {owner && <span className="chip">owner</span>}
                         <span className="chip">{load} open</span>
+                        {/* "pending", not "invite sent" — members added before invite emails
+                            existed never got one, and the chip should not claim otherwise */}
+                        {!people.get(email)?.hasAccount && <span className="chip" title="No account yet — they see the project once they sign up with this address">pending</span>}
                       </div>
                     </div>
                     {isOwner && !owner && <button className="task-del" onClick={() => handleRemove(email)} title="Remove">×</button>}
                   </div>
                 );
               })}
+              {/* Owner only — addMember is owner-scoped server-side, so showing this to a
+                  member would just fail. Picking beats typing: a typo'd address silently
+                  emails a stranger, or nobody. */}
               {isOwner && (
-                <form onSubmit={handleInvite} style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-                  <input className="field" type="email" placeholder="teammate@email.com" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} required />
-                  <button type="submit" className="btn-primary" style={{ padding: '10px 18px', borderRadius: '12px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
-                    <UserPlus size={15} /> Invite
-                  </button>
-                </form>
+                <PersonPicker exclude={memberOptions} onPick={handleInvite} busy={inviting} />
               )}
             </>
           )}
         </section>
+
+        {/* ---------- Files ---------- */}
+        <section className="ws-section">
+          {sectionHead('files', 'Files', files.length)}
+          {openSections.files && (
+            <>
+              {files.length === 0 ? null : files.map(d => (
+                <a key={d._id} href={d.url} target="_blank" rel="noreferrer" className="task-row" style={{ textDecoration: 'none' }}>
+                  <FileText size={15} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="task-title">{d.name}</div>
+                    <div className="task-meta"><span className="chip">{fmtDate(d.createdAt)}</span></div>
+                  </div>
+                </a>
+              ))}
+              <Link href="/d-locker" className="subtle-link" style={{ display: 'inline-block', marginTop: files.length ? '8px' : '0', fontSize: '0.8rem' }}>
+                {files.length ? 'Open the Digi Locker →' : 'Add from the Digi Locker →'}
+              </Link>
+            </>
+          )}
+        </section>
+
+        {/* ---------- About: one shared description of the project, not a note per thought ---------- */}
+        <section className="ws-section">
+          {sectionHead('about', 'About', notesDraft ? 1 : 0)}
+          {openSections.about && (
+            <>
+              <textarea className="field" rows={8} placeholder="What this project is — context, decisions, links…" value={notesDraft}
+                onChange={e => { setNotesDraft(e.target.value); setNotesSaved(false); }} style={{ resize: 'vertical', lineHeight: 1.6 }} />
+              <button onClick={handleSaveNotes} disabled={notesSaved} className="btn-primary"
+                style={{ marginTop: '10px', padding: '10px 24px', borderRadius: '12px', fontWeight: 800, opacity: notesSaved ? 0.5 : 1 }}>
+                {notesSaved ? 'Saved' : 'Save'}
+              </button>
+            </>
+          )}
+        </section>
+
+          </aside>
+        </div>{/* /ws-grid */}
 
         {editing && (
           <div className="modal-overlay" onClick={() => setEditing(null)}>

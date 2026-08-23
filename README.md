@@ -48,8 +48,15 @@ MONGODB_URI=...          # MongoDB connection string
 NEXTAUTH_SECRET=...      # also signs the private-safe cookie
 NEXTAUTH_URL=https://<your-domain>
 GEMINI_API_KEY=...       # Jarvis + MOM task extraction (aistudio.google.com/apikey)
-GEMINI_MODEL=...         # optional, defaults to gemini-flash-latest (alias — survives renames)
+GEMINI_MODEL=...         # optional, defaults to gemini-3.6-flash; falls back to 3.5/3.7 on 503
 GROQ_API_KEY=...         # voice + MOM transcription only (whisper-large-v3)
+
+# File uploads (note attachments + Digi Locker). Without these, files are written to
+# public/uploads — fine on a dev machine, broken on Vercel's read-only filesystem.
+S3_BUCKET=...            # keep the bucket PRIVATE; reads go through /api/files behind auth
+AWS_REGION=ap-south-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
 
 # Password-reset email (optional — without it the reset link is shown on screen)
 SMTP_HOST=smtp.gmail.com

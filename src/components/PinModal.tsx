@@ -193,7 +193,7 @@ export default function PinModal() {
           </div>
 
           {error && (
-            <p className={`pin-error ${error.includes('successful') ? 'success' : ''}`} style={{ textAlign: 'center', marginTop: '15px', color: error.includes('successful') ? '#10b981' : '#f43f5e', fontSize: '0.9rem' }}>
+            <p className={`pin-error ${error.includes('successful') ? 'success' : ''}`} style={{ textAlign: 'center', marginTop: '15px', color: error.includes('successful') ? 'var(--success-color)' : 'var(--danger-color)', fontSize: '0.9rem' }}>
               {error}
             </p>
           )}

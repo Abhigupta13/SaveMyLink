@@ -7,8 +7,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import fs from 'fs';
 import path from 'path';
-import { writeFile, mkdir, unlink, readFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { extractText } from '@/lib/docText';
+import { projectForMember, mineOrMyProjects } from '@/lib/projectAccess';
+import { saveUpload, deleteUpload, readBytes } from '@/lib/storage';
 
 // Not exported: a 'use server' module may only export async functions, and a stray const
 // silently strips every export in the file. Mirrors the schema default in Document.ts.
@@ -24,8 +26,9 @@ async function backfillText(userId: string) {
   const stale = await Document.find({ user: userId, type: 'file', text: { $exists: false } }).limit(4);
   for (const doc of stale) {
     try {
-      const buf = await readFile(path.join(process.cwd(), 'public', doc.url));
-      doc.text = await extractText(buf, doc.mimeType, doc.name);
+      // doc.key for anything stored since the move; the legacy path for older public/ files
+      const buf = doc.key ? await readBytes(doc.key) : await readFile(path.join(process.cwd(), 'public', doc.url));
+      doc.text = buf ? await extractText(buf, doc.mimeType, doc.name) : '';
     } catch {
       doc.text = '';   // file is gone or unreadable — mark it tried so we stop retrying it
     }
@@ -44,7 +47,11 @@ export async function getDocuments() {
     // `text` can be 12k a document — the locker page never shows it, so leave it on the server.
     // The folder list is derived from these client-side: a distinct() would miss documents
     // saved before folders existed, which have no folder field at all rather than 'Personal'.
-    const docs = await Document.find({ user: userId }).select('-text').sort({ createdAt: -1 }).lean();
+    // Mine, plus anything filed under a project I am in — a shared contract belongs to
+    // everyone working on it, not only whoever happened to upload it.
+    const scope = await mineOrMyProjects(userId, session.user.email, 'user');
+    const docs = await Document.find(scope).select('-text')
+      .populate('projectId', 'name').sort({ createdAt: -1 }).lean();
     return { docs: JSON.parse(JSON.stringify(docs)) };
   } catch (error: any) {
     console.error('Error fetching documents:', error);
@@ -72,6 +79,32 @@ export async function moveDocument(id: string, folder: string) {
   }
 }
 
+/**
+ * Share a document with a project, or pull it back to my own locker with ''. Only the
+ * uploader may do this: it changes who can see the file, so it is not a member's call.
+ */
+export async function fileDocumentUnderProject(id: string, projectId: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+  try {
+    await connectToDatabase();
+    if (projectId && !(await projectForMember(projectId, userId, session.user.email)))
+      return { error: 'Not a member of that project' };
+    const res = await Document.findOneAndUpdate(
+      { _id: id, user: userId },
+      { projectId: projectId || null },
+      { new: true },
+    );
+    if (!res) return { error: 'Document not found, or not yours to share' };
+    revalidatePath('/d-locker');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error filing document:', error);
+    return { error: error.message };
+  }
+}
+
 export async function addDocument(formData: FormData) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: 'Not authenticated' };
@@ -82,36 +115,29 @@ export async function addDocument(formData: FormData) {
   const externalLink = formData.get('externalLink') as string;
   const file = formData.get('file') as File | null;
   const folder = ((formData.get('folder') as string) || '').trim() || DEFAULT_FOLDER;
+  const projectId = ((formData.get('projectId') as string) || '').trim();
 
   try {
     await connectToDatabase();
+    if (projectId && !(await projectForMember(projectId, userId, session.user.email)))
+      return { error: 'Not a member of that project' };
 
     let url = '';
+    let key = '';
     let mimeType = '';
     let size = 0;
     let text = '';
 
     if (type === 'file' && file) {
-      const bytes = await file.arrayBuffer();
-      const buffer = Buffer.from(bytes);
-
-      const uploadDir = path.join(process.cwd(), 'public', 'uploads');
-      if (!fs.existsSync(uploadDir)) {
-        await mkdir(uploadDir, { recursive: true });
-      }
-
-      // Secure file name
-      const fileExt = path.extname(file.name);
-      const safeName = file.name.substring(0, file.name.lastIndexOf('.')).replace(/[^a-z0-9]/gi, '_').toLowerCase();
-      const fileName = `${Date.now()}-${safeName}${fileExt}`;
-      const filePath = path.join(uploadDir, fileName);
-      await writeFile(filePath, buffer);
-
-      url = `/uploads/${fileName}`;
-      mimeType = file.type;
-      size = file.size;
+      // Shared with note attachments: S3 when configured, local disk on a dev machine, and
+      // read back through /api/files so a passport scan needs a session and not just the URL
+      const saved = await saveUpload(userId, file);
+      url = saved.url;
+      key = saved.key;
+      mimeType = saved.mimeType;
+      size = saved.size;
       // Once, here, rather than on every Jarvis question
-      text = await extractText(buffer, mimeType, file.name);
+      text = await extractText(saved.buffer, mimeType, file.name);
     } else if (type === 'link') {
       url = externalLink;
       mimeType = 'text/html';
@@ -119,10 +145,12 @@ export async function addDocument(formData: FormData) {
 
     const doc = await Document.create({
       user: userId,
+      projectId: projectId || undefined,
       name,
       folder,
       type,
       url,
+      key,
       mimeType,
       size,
       text
@@ -147,9 +175,11 @@ export async function deleteDocument(id: string) {
     if (!doc) return { error: 'Document not found' };
 
     if (doc.type === 'file') {
-      const filePath = path.join(process.cwd(), 'public', doc.url);
-      if (fs.existsSync(filePath)) {
-        await unlink(filePath);
+      if (doc.key) await deleteUpload(doc.key);
+      else {
+        // Legacy public/uploads file from before the move to shared storage
+        const filePath = path.join(process.cwd(), 'public', doc.url);
+        if (fs.existsSync(filePath)) await fs.promises.unlink(filePath).catch(() => {});
       }
     }
 

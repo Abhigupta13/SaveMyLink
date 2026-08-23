@@ -2,20 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import {
-  Link as LinkIcon, StickyNote, CheckSquare, Mic, Library, Users,
-  Search, Newspaper, LayoutGrid, List,
-} from 'lucide-react';
+import { Search, LayoutGrid, List } from 'lucide-react';
+import { NAV } from '@/lib/nav';
 
+// every rail destination, plus Search which only exists as a FAB elsewhere
 const TILES = [
-  { href: '/links', Icon: LinkIcon, title: 'Links', desc: 'Saved links & categories' },
-  { href: '/notes', Icon: StickyNote, title: 'Notes', desc: 'Quick thoughts & long notes' },
-  { href: '/tasks', Icon: CheckSquare, title: 'Tasks', desc: 'Personal + project tasks with reminders' },
-  { href: '/mom', Icon: Mic, title: 'MOM', desc: 'Record meetings → summary → tasks' },
-  { href: '/d-locker', Icon: Library, title: 'Digi Locker', desc: 'Documents, PDFs & files' },
-  { href: '/contacts', Icon: Users, title: 'Contacts', desc: 'People you work with' },
+  ...NAV,
   { href: '/search', Icon: Search, title: 'Search', desc: 'Across links, tasks, notes, meetings' },
-  { href: '/digest', Icon: Newspaper, title: 'Weekly digest', desc: 'Saved this week · due next week' },
 ];
 
 export default function HomeTiles() {

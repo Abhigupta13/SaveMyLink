@@ -43,10 +43,17 @@ export async function searchAll(q: string) {
       ],
     }).sort({ completed: 1, createdAt: -1 }).limit(20).lean(),
     Mom.find({
-      projectId: { $in: projectIds },
-      $or: [{ title: regex }, { summary: regex }, { transcript: regex }],
+      $and: [
+        { $or: [{ projectId: { $in: projectIds } }, { userId }] },  // personal meetings have no project
+        { $or: [{ title: regex }, { summary: regex }, { transcript: regex }] },
+      ],
     }).select('_id title summary projectId createdAt').sort({ createdAt: -1 }).limit(10).lean(),
-    Note.find({ userId, $or: [{ title: regex }, { body: regex }] }).sort({ updatedAt: -1 }).limit(20).lean(),
+    Note.find({
+      $and: [
+        { $or: [{ userId }, { projectId: { $in: projectIds } }] },
+        { $or: [{ title: regex }, { body: regex }] },
+      ],
+    }).sort({ updatedAt: -1 }).limit(20).lean(),
   ]);
 
   const projects = myProjects.filter(p => regex.test(p.name) || regex.test(p.notes || ''));

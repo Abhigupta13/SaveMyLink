@@ -3,7 +3,6 @@
 import { useEffect, useState, Suspense } from 'react';
 import { useSession } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
-import Link from 'next/link';
 import { getProjects, createProject, deleteProject, renameProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
 import MomSection from '@/components/MomSection';
@@ -23,39 +22,32 @@ function MomPageInner() {
     getProjects().then(res => {
       const list = res.success ? res.projects || [] : [];
       setProjects(list);
+      // Landing here without ?project means Personal — the transcript decides where items go
       const wanted = params.get('project');
-      setActive(list.find((p: any) => p._id === wanted) || list[0] || null);
+      setActive(list.find((p: any) => p._id === wanted) || null);
       setLoading(false);
     });
   }, [status, params]);
 
-  const memberOptions = active
-    ? [...new Set([myEmail, active.ownerId?.email, ...(active.memberEmails || [])])].filter(Boolean)
-    : [];
+  // Personal meetings still need me in the assignee list
+  const memberOptions = [...new Set([myEmail, active?.ownerId?.email, ...(active?.memberEmails || [])])].filter(Boolean);
 
   return (
     <div className="container" style={{ padding: '24px 16px 120px' }}>
       <header style={{ marginBottom: '20px' }}>
         <h1 className="page-title">Meetings</h1>
-        <p className="page-subtitle">Record → transcribe → action items, filed under a project</p>
+        <p className="page-subtitle">Record → transcribe → action items, routed to the right project</p>
       </header>
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
-      ) : projects.length === 0 ? (
-        <div className="empty-state">
-          <p style={{ fontWeight: 700, marginBottom: '8px' }}>Meetings belong to a project.</p>
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>Create your first project in Tasks, then come back to record.</p>
-          <Link href="/tasks" className="btn-primary" style={{ display: 'inline-block', padding: '12px 24px', borderRadius: '14px', fontWeight: 800 }}>Go to Tasks</Link>
-        </div>
       ) : (
         <>
           <div style={{ marginBottom: '20px' }}>
             <ProjectPicker
               projects={projects}
               activeId={active?._id || null}
-              showPersonal={false}
-              onSelect={p => p && setActive(p)}
+              onSelect={p => setActive(p)}
               onCreate={async (name) => {
                 const res = await createProject(name);
                 if (res.success) { const list = [...projects, res.project]; setProjects(list); setActive(res.project); }
@@ -82,16 +74,20 @@ function MomPageInner() {
             />
           </div>
 
-          {active && (
-            <MomSection
-              key={active._id}
-              project={active}
-              projects={projects}
-              myEmail={myEmail}
-              memberOptions={memberOptions}
-              onTasksCreated={() => {}}
-            />
-          )}
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', fontWeight: 600, margin: '-10px 0 16px' }}>
+            {active
+              ? `Items default to ${active.name} — change any of them below before creating.`
+              : 'Personal: every item is routed from what was said, and stays personal if no project fits.'}
+          </p>
+
+          <MomSection
+            key={active?._id || 'personal'}
+            project={active}
+            projects={projects}
+            myEmail={myEmail}
+            memberOptions={memberOptions}
+            onTasksCreated={() => {}}
+          />
         </>
       )}
     </div>

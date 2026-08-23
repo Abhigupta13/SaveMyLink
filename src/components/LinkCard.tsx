@@ -160,7 +160,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
                 {categoryName}
               </span>
               {link.isDead && (
-                <span className="card-category" title="This link no longer loads" style={{ backgroundColor: '#ef4444', marginBottom: 0 }}>
+                <span className="card-category" title="This link no longer loads" style={{ backgroundColor: 'var(--danger-color)', marginBottom: 0 }}>
                   dead
                 </span>
               )}
@@ -204,7 +204,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
                   placeholder="Enter Title"
                 />
                 {status && (
-                  <div style={{ fontSize: '0.75rem', color: status.type === 'error' ? '#f87171' : '#34d399', marginLeft: '8px' }}>
+                  <div style={{ fontSize: '0.75rem', color: status.type === 'error' ? 'var(--danger-color)' : 'var(--success-color)', marginLeft: '8px' }}>
                     {status.message}
                   </div>
                 )}

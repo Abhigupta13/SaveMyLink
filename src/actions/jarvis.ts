@@ -49,10 +49,12 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
     Link.find(linkQuery).populate('category', 'name').sort({ createdAt: -1 }).limit(600).lean(),
     Task.find({ $or: [{ userId }, { assigneeId: userId }, { projectId: { $in: projectIds } }] })
       .populate('assigneeId', 'email').sort({ completed: 1, dueAt: 1 }).limit(400).lean(),
-    Mom.find({ projectId: { $in: projectIds } }).sort({ createdAt: -1 }).limit(60).lean(),
+    // my project meetings + my personal ones, which have no project to match on
+    Mom.find({ $or: [{ projectId: { $in: projectIds } }, { userId }] }).sort({ createdAt: -1 }).limit(60).lean(),
     Contact.find({ userId }).lean(),
-    Note.find({ userId }).sort({ updatedAt: -1 }).limit(300).lean(),
-    Doc.find({ user: userId }).sort({ createdAt: -1 }).limit(120).lean(),
+    // Mine plus my projects' — a shared note or contract is context I am expected to know
+    Note.find({ $or: [{ userId }, { projectId: { $in: projectIds } }] }).sort({ updatedAt: -1 }).limit(300).lean(),
+    Doc.find({ $or: [{ user: userId }, { projectId: { $in: projectIds } }] }).sort({ createdAt: -1 }).limit(120).lean(),
   ]);
 
   const lines: string[] = [];
@@ -71,7 +73,10 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
     lines.push(`MOM id=${track(m._id)} | ${m.title} | project=${pname.get(String(m.projectId)) || '-'} | date=${d(m.createdAt)} | summary=${(m.summary || '').slice(0, 600).replace(/\s+/g, ' ')} | actions=${(m.candidates || []).map((c: any) => c.title).join('; ')} | projectId=${m.projectId}`);
   }
   for (const n of notes as any[]) {
-    lines.push(`NOTE id=${track(n._id)} | ${n.title || '(untitled)'} | ${(n.body || '').slice(0, 800).replace(/\s+/g, ' ')} | updated=${d(n.updatedAt)}`);
+    // Files attached to a note are part of the note — same treatment as a DOC line
+    const att = (n.attachments || []).map((a: any) =>
+      `${a.name}${a.text ? `: ${String(a.text).slice(0, 2000)}` : ' (not readable — image or scan)'}`).join(' || ');
+    lines.push(`NOTE id=${track(n._id)} | ${n.title || '(untitled)'} | ${(n.body || '').slice(0, 800).replace(/\s+/g, ' ')} | updated=${d(n.updatedAt)}${att ? ` | attached=${att}` : ''}`);
   }
   for (const c of contacts as any[]) {
     lines.push(`CONTACT id=${track(c._id)} | ${c.name} | ${c.company || ''} | ${c.phone || ''} | ${c.email || ''} | ${c.note || ''}`);

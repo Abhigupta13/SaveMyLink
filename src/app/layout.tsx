@@ -37,6 +37,9 @@ export default async function RootLayout({
   const cookieStore = await cookies();
   const privateSafe = cookieStore.get('privateSafe')?.value === 'true';
   const columns = Number(cookieStore.get('columns')?.value) || 2;
+  // Rendered on the server so there is no flash of the wrong theme.
+  // No attribute ("system") means the CSS follows the OS.
+  const theme = cookieStore.get('theme')?.value;
 
   let categories = [];
   try {
@@ -48,6 +51,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
+      data-theme={theme === 'light' || theme === 'dark' ? theme : undefined}
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >

@@ -3,9 +3,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
-import { Plus, Mic, UserPlus, Trash2, X, Check } from 'lucide-react';
+import { Plus, Trash2, X, Check, ArrowRight } from 'lucide-react';
 import { getTasks, getMyOpenTasks, createTask, toggleTask, deleteTask, updateTask } from '@/actions/task';
-import { getProjects, createProject, addMember, deleteProject, updateProjectNotes, renameProject } from '@/actions/project';
+import { getProjects, createProject, deleteProject, renameProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
 import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
 import { useFeedback } from '@/components/ui/Feedback';
@@ -59,12 +59,7 @@ export default function TasksPage() {
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
   const [assignee, setAssignee] = useState('');
-  const [showInvite, setShowInvite] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'tasks' | 'notes'>('tasks');
-  const [notesDraft, setNotesDraft] = useState('');
-  const [notesSaved, setNotesSaved] = useState(true);
   const [showDone, setShowDone] = useState(false);
   const [editing, setEditing] = useState<any | null>(null); // task being edited
   const [draft, setDraft] = useState({ title: '', description: '', dueAt: '', assigneeEmail: '', projectId: '' });
@@ -131,10 +126,6 @@ export default function TasksPage() {
 
   const switchProject = (project: any | null) => {
     setActiveProject(project);
-    setShowInvite(false);
-    setView('tasks');
-    setNotesDraft(project?.notes || '');
-    setNotesSaved(true);
     setAssignee('');
     setLoading(true);
     fetchTasks(project?._id);
@@ -167,25 +158,6 @@ export default function TasksPage() {
     const res = await deleteTask(id);
     if (!res.success) fetchTasks(activeProject?._id);
     refreshReminders();
-  };
-
-  const handleInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const res = await addMember(activeProject._id, inviteEmail);
-    if (res.success) {
-      const updated = { ...activeProject, memberEmails: [...new Set([...(activeProject.memberEmails || []), inviteEmail.trim().toLowerCase()])] };
-      setActiveProject(updated); setProjects(ps => ps.map(p => p._id === updated._id ? updated : p));
-      setInviteEmail(''); setShowInvite(false);
-    } else toast(res.error || 'Something went wrong', 'error');
-  };
-
-  const handleSaveNotes = async () => {
-    const res = await updateProjectNotes(activeProject._id, notesDraft);
-    if (res.success) {
-      setNotesSaved(true);
-      const updated = { ...activeProject, notes: notesDraft };
-      setActiveProject(updated); setProjects(ps => ps.map(p => p._id === updated._id ? updated : p));
-    } else toast(res.error || 'Something went wrong', 'error');
   };
 
   // open-task counts per scope, refreshed with the task list
@@ -263,47 +235,17 @@ export default function TasksPage() {
             else toast(res.error || 'Something went wrong', 'error');
             return res;
           }}
-          onInvite={() => setShowInvite(true)}
         />
       </div>
 
-      {/* Project toolbar */}
+      {/* Tasks is a list with a filter. Meetings, files, people and the brief live in the
+          project workspace — one home per project instead of two half-built ones. */}
       {activeProject && (
-        <div className="card" style={{ padding: '10px 12px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flex: 1, flexWrap: 'wrap' }}>
-            {memberOptions.map(email => (
-              <span key={email} className="avatar-xs" title={email} style={{ width: '26px', height: '26px', fontSize: '0.7rem', border: '2px solid var(--bg-secondary)' }}>
-                {email[0].toUpperCase()}
-              </span>
-            ))}
-            <button className="icon-btn" style={{ width: '26px', height: '26px', borderRadius: '50%' }} onClick={() => setShowInvite(v => !v)} title="Invite teammate"><UserPlus size={13} /></button>
-          </div>
-          <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-tertiary)', padding: '3px', borderRadius: '10px' }}>
-            {(['tasks', 'notes'] as const).map(v => (
-              <button key={v} onClick={() => setView(v)} style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em', background: view === v ? 'var(--bg-secondary)' : 'transparent', color: view === v ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                {v}
-              </button>
-            ))}
-          </div>
-          <Link href={`/mom?project=${activeProject._id}`} className="icon-btn" title="Meetings (MOM)"><Mic size={15} /></Link>
-        </div>
-      )}
-
-      {showInvite && activeProject && (
-        <form onSubmit={handleInvite} style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-          <input className="field" type="email" placeholder="teammate@email.com" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} required autoFocus />
-          <button type="submit" className="btn-primary" style={{ padding: '10px 20px', borderRadius: '12px', fontWeight: 800 }}>Invite</button>
-        </form>
-      )}
-
-      {activeProject && view === 'notes' && (
-        <div>
-          <textarea className="field" rows={12} placeholder="Project notes — context, decisions, links…" value={notesDraft}
-            onChange={e => { setNotesDraft(e.target.value); setNotesSaved(false); }} style={{ resize: 'vertical', lineHeight: 1.6 }} />
-          <button onClick={handleSaveNotes} disabled={notesSaved} className="btn-primary" style={{ marginTop: '10px', padding: '10px 24px', borderRadius: '12px', fontWeight: 800, opacity: notesSaved ? 0.5 : 1 }}>
-            {notesSaved ? 'Saved' : 'Save notes'}
-          </button>
-        </div>
+        <Link href={`/projects/${activeProject._id}`} className="card"
+          style={{ padding: '10px 14px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '0.82rem', color: 'var(--text-secondary)', textDecoration: 'none' }}>
+          Open the {activeProject.name} workspace — meetings, files, notes, people
+          <ArrowRight size={15} style={{ marginLeft: 'auto', flexShrink: 0 }} />
+        </Link>
       )}
 
       {editing && (
@@ -353,64 +295,60 @@ export default function TasksPage() {
         </div>
       )}
 
-      {(!activeProject || view === 'tasks') && (
-        <>
-          <form onSubmit={handleCreate} className="quick-add">
-            <div className="quick-add-main">
-              <input type="text" placeholder={activeProject ? `Add a task to ${activeProject.name}…` : 'Add a task…'} value={title} onChange={e => setTitle(e.target.value)} />
-              <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
-            </div>
-            <div className="quick-add-meta">
-              <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic" style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
-              {activeProject && (
-                <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)}>
-                  <option value="">Assign to me</option>
-                  {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{email}</option>)}
-                </select>
-              )}
-            </div>
-          </form>
-
-          {loading ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
-          ) : tasks.length === 0 ? (
-            <div className="empty-state">
-              <p style={{ fontWeight: 800, marginBottom: '4px' }}>Nothing here yet</p>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Add a task above. Give it a due time and you'll get reminders.</p>
-            </div>
-          ) : (
-            groups.map(g => (
-              <section key={g.key} className="task-group">
-                <div className={`task-group-label ${g.cls || ''}`} style={{ cursor: g.key === 'done' ? 'pointer' : 'default' }} onClick={() => g.key === 'done' && setShowDone(v => !v)}>
-                  {g.label} <span className="count">{g.tasks.length}</span>
-                  {g.key === 'done' && <span style={{ marginLeft: 'auto', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>{showDone ? 'hide' : 'show'}</span>}
-                </div>
-                {(g.key !== 'done' || showDone) && g.tasks.map(t => {
-                  const overdue = t.dueAt && !t.completed && new Date(t.dueAt).getTime() < Date.now();
-                  const isToday = t.dueAt && !overdue && startOfDay(new Date(t.dueAt)).getTime() === startOfDay(new Date()).getTime();
-                  return (
-                    <div key={t._id} className={`task-row ${t.completed ? 'done' : ''}`} style={{ opacity: t.isTemp ? 0.5 : undefined }}>
-                      <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)} aria-label="toggle">
-                        {t.completed && <svg width="12" height="9" viewBox="0 0 14 10" fill="none"><path d="M1.5 5L5.5 9L12.5 1.5" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                      </button>
-                      <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => !t.isTemp && openEdit(t)}>
-                        <div className="task-title">{t.title}</div>
-                        {t.description && <div className="task-desc">{t.description}</div>}
-                        {(t.dueAt || activeProject) && (
-                          <div className="task-meta">
-                            {t.dueAt && <span className={`chip ${overdue ? 'overdue' : isToday ? 'today' : ''}`}>{fmtDue(t.dueAt)}</span>}
-                            {activeProject && assigneeLabel(t)}
-                          </div>
-                        )}
-                      </div>
-                      <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>
-                    </div>
-                  );
-                })}
-              </section>
-            ))
+      <form onSubmit={handleCreate} className="quick-add">
+        <div className="quick-add-main">
+          <input type="text" placeholder={activeProject ? `Add a task to ${activeProject.name}…` : 'Add a task…'} value={title} onChange={e => setTitle(e.target.value)} />
+          <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
+        </div>
+        <div className="quick-add-meta">
+          <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic" style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+          {activeProject && (
+            <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)}>
+              <option value="">Assign to me</option>
+              {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{email}</option>)}
+            </select>
           )}
-        </>
+        </div>
+      </form>
+
+      {loading ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
+      ) : tasks.length === 0 ? (
+        <div className="empty-state">
+          <p style={{ fontWeight: 800, marginBottom: '4px' }}>Nothing here yet</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Add a task above. Give it a due time and you'll get reminders.</p>
+        </div>
+      ) : (
+        groups.map(g => (
+          <section key={g.key} className="task-group">
+            <div className={`task-group-label ${g.cls || ''}`} style={{ cursor: g.key === 'done' ? 'pointer' : 'default' }} onClick={() => g.key === 'done' && setShowDone(v => !v)}>
+              {g.label} <span className="count">{g.tasks.length}</span>
+              {g.key === 'done' && <span style={{ marginLeft: 'auto', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>{showDone ? 'hide' : 'show'}</span>}
+            </div>
+            {(g.key !== 'done' || showDone) && g.tasks.map(t => {
+              const overdue = t.dueAt && !t.completed && new Date(t.dueAt).getTime() < Date.now();
+              const isToday = t.dueAt && !overdue && startOfDay(new Date(t.dueAt)).getTime() === startOfDay(new Date()).getTime();
+              return (
+                <div key={t._id} className={`task-row ${t.completed ? 'done' : ''}`} style={{ opacity: t.isTemp ? 0.5 : undefined }}>
+                  <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)} aria-label="toggle">
+                    {t.completed && <svg width="12" height="9" viewBox="0 0 14 10" fill="none"><path d="M1.5 5L5.5 9L12.5 1.5" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  </button>
+                  <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => !t.isTemp && openEdit(t)}>
+                    <div className="task-title">{t.title}</div>
+                    {t.description && <div className="task-desc">{t.description}</div>}
+                    {(t.dueAt || activeProject) && (
+                      <div className="task-meta">
+                        {t.dueAt && <span className={`chip ${overdue ? 'overdue' : isToday ? 'today' : ''}`}>{fmtDue(t.dueAt)}</span>}
+                        {activeProject && assigneeLabel(t)}
+                      </div>
+                    )}
+                  </div>
+                  <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>
+                </div>
+              );
+            })}
+          </section>
+        ))
       )}
     </div>
   );
