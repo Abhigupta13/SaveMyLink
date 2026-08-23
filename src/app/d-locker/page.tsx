@@ -3,13 +3,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { getDocuments, addDocument, deleteDocument } from '@/actions/document';
+import { getDocuments, addDocument, deleteDocument, moveDocument } from '@/actions/document';
+import { getProjects } from '@/actions/project';
 import { ExternalLink, Download, X } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
 
 interface DocType {
   _id: string;
   name: string;
+  folder?: string;
   type: 'file' | 'link';
   url: string;
   mimeType?: string;
@@ -17,12 +19,17 @@ interface DocType {
   createdAt: string;
 }
 
+const ALL = 'All';
+const DEFAULT_FOLDER = 'Personal';
+
 export default function DLockerPage() {
   const { toast, confirm } = useFeedback();
   const { data: session, status } = useSession();
   const router = useRouter();
   
   const [docs, setDocs] = useState<DocType[]>([]);
+  const [projectNames, setProjectNames] = useState<string[]>([]);
+  const [activeFolder, setActiveFolder] = useState<string>(ALL);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddingDoc, setIsAddingDoc] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -31,15 +38,14 @@ export default function DLockerPage() {
   // Form state
   const [docType, setDocType] = useState<'file' | 'link'>('file');
   const [docName, setDocName] = useState('');
+  const [docFolder, setDocFolder] = useState(DEFAULT_FOLDER);
   const [externalLink, setExternalLink] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const fetchDocs = useCallback(async () => {
     setIsLoading(true);
     const res = await getDocuments();
-    if (res.docs) {
-      setDocs(res.docs);
-    }
+    if (res.docs) setDocs(res.docs);
     setIsLoading(false);
   }, []);
 
@@ -48,8 +54,27 @@ export default function DLockerPage() {
       router.push('/auth/signin');
     } else if (status === 'authenticated') {
       fetchDocs();
+      // Your projects are offered as folder names, so a locker can be filed the way work is
+      getProjects().then(r => {
+        if (r.success) setProjectNames((r.projects || []).map((p: any) => p.name));
+      }).catch(() => {});
     }
   }, [status, router, fetchDocs]);
+
+  // Folders in use, straight off the documents — anything saved before folders existed has no
+  // folder field at all, so it reads as Personal here and in the filter below, consistently.
+  const folders = [...new Set(docs.map(d => d.folder || DEFAULT_FOLDER))].sort((a, b) => a.localeCompare(b));
+  // Everything you could file something under: what exists, your projects, and a sane default
+  const folderOptions = [...new Set([DEFAULT_FOLDER, ...folders, ...projectNames])];
+  const visibleDocs = activeFolder === ALL ? docs : docs.filter(d => (d.folder || DEFAULT_FOLDER) === activeFolder);
+
+  const handleMove = async (id: string, folder: string) => {
+    const target = folder.trim();
+    if (!target) return;
+    const res = await moveDocument(id, target);
+    if (res.success) { setPreview((p: any) => p && { ...p, folder: target }); fetchDocs(); }
+    else toast(res.error || 'Could not move it', 'error');
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,7 +84,8 @@ export default function DLockerPage() {
     const formData = new FormData();
     formData.append('name', docName);
     formData.append('type', docType);
-    
+    formData.append('folder', docFolder);
+
     if (docType === 'file' && selectedFile) {
       formData.append('file', selectedFile);
     } else if (docType === 'link') {
@@ -78,6 +104,7 @@ export default function DLockerPage() {
       setDocName('');
       setExternalLink('');
       setSelectedFile(null);
+      setActiveFolder(docFolder);   // land on the folder you just filed into
       fetchDocs();
     } else {
       toast(res.error || 'Failed to add document', 'error');
@@ -135,6 +162,11 @@ export default function DLockerPage() {
 
   return (
     <main className="container d-locker-container">
+      {/* Shared by the add form and the move-to-folder box in the preview, so it lives out here */}
+      <datalist id="folder-options">
+        {folderOptions.map(f => <option key={f} value={f} />)}
+      </datalist>
+
       <header className="d-locker-header">
         <div className="header-info">
           <h1 className="page-title">Digi Locker</h1>
@@ -146,9 +178,20 @@ export default function DLockerPage() {
         </button>
       </header>
 
+      {folders.length > 1 && (
+        <div className="folder-bar">
+          {[ALL, ...folders].map(f => (
+            <button key={f} className={`folder-chip ${activeFolder === f ? 'on' : ''}`} onClick={() => setActiveFolder(f)}>
+              {f}
+              <span className="folder-count">{f === ALL ? docs.length : docs.filter(d => (d.folder || DEFAULT_FOLDER) === f).length}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="doc-grid">
-        {docs.length > 0 ? (
-          docs.map((doc) => (
+        {visibleDocs.length > 0 ? (
+          visibleDocs.map((doc) => (
             <div key={doc._id} className="doc-card" onClick={() => setPreview(doc)}>
               <button className="doc-delete-btn" onClick={(e) => handleDelete(e, doc._id)} title="Delete">&times;</button>
 
@@ -166,6 +209,7 @@ export default function DLockerPage() {
                 <h3>{doc.name}</h3>
                 <div className="doc-card-meta">
                   <span className={`doc-tag ${doc.type}`}>{doc.type === 'link' ? 'link' : extOf(doc)}</span>
+                  {activeFolder === ALL && <span className="doc-size-text">{doc.folder || DEFAULT_FOLDER}</span>}
                   {doc.type === 'file' && <span className="doc-size-text">{formatSize(doc.size)}</span>}
                 </div>
               </div>
@@ -174,9 +218,13 @@ export default function DLockerPage() {
         ) : (
           <div className="empty-locker-state">
             <div className="empty- locker-icon">🗄️</div>
-            <h2>Your Digi Locker is empty</h2>
-            <p>Store PDFs, images, or important links and access them from any device.</p>
-            <button className="btn-explore" onClick={() => setIsAddingDoc(true)}>Upload your first document</button>
+            <h2>{docs.length ? `Nothing in ${activeFolder} yet` : 'Your Digi Locker is empty'}</h2>
+            <p>{docs.length
+              ? 'Add a document here, or pick another folder above.'
+              : 'Store PDFs, images, or important links and access them from any device.'}</p>
+            <button className="btn-explore" onClick={() => { setDocFolder(activeFolder === ALL ? DEFAULT_FOLDER : activeFolder); setIsAddingDoc(true); }}>
+              {docs.length ? 'Add a document' : 'Upload your first document'}
+            </button>
           </div>
         )}
       </div>
@@ -188,6 +236,9 @@ export default function DLockerPage() {
             <div className="preview-shell" onClick={e => e.stopPropagation()}>
               <div className="preview-bar">
                 <span className="preview-name">{preview.name}</span>
+                <input className="preview-folder" type="text" list="folder-options" title="Move to folder"
+                  defaultValue={preview.folder || DEFAULT_FOLDER}
+                  onBlur={e => { if (e.target.value.trim() !== (preview.folder || DEFAULT_FOLDER)) handleMove(preview._id, e.target.value); }} />
                 <a className="icon-btn" href={preview.url} target="_blank" rel="noreferrer" title="Open in new tab"><ExternalLink size={16} /></a>
                 {preview.type === 'file' && (
                   <a className="icon-btn" href={preview.url} download={preview.name} title="Download"><Download size={16} /></a>
@@ -231,6 +282,13 @@ export default function DLockerPage() {
                 <label className="field-label">Document name</label>
                 <input className="field" type="text" placeholder="e.g. My Resume, Passport Copy"
                   value={docName} onChange={(e) => setDocName(e.target.value)} required autoFocus />
+              </div>
+
+              <div>
+                <label className="field-label">Folder</label>
+                {/* Native datalist: pick an existing folder or type a new one — that is how a folder gets created */}
+                <input className="field" type="text" list="folder-options" placeholder="Personal, or a project name"
+                  value={docFolder} onChange={(e) => setDocFolder(e.target.value)} />
               </div>
 
               <div className="seg-group">

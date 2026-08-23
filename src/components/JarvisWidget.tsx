@@ -28,6 +28,7 @@ function itemHref(i: JarvisItem) {
   if (i.type === 'mom') return '/mom';
   if (i.type === 'contact') return '/contacts';
   if (i.type === 'note') return '/notes';
+  if (i.type === 'document') return '/d-locker';
   return '/links';
 }
 const speakable = (s: string) => s.replace(/^[-*•]\s*/gm, '').replace(/\s+/g, ' ').trim();
@@ -61,7 +62,8 @@ export default function JarvisWidget() {
   const recRef = useRef<any>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const finalRef = useRef('');
+  const finalRef = useRef('');        // finals of the live recognition session, rebuilt each event
+  const committedRef = useRef('');    // finals banked from earlier sessions this turn
   const silenceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppingRef = useRef(false);
   const heardRef = useRef(false);        // has the user actually said anything this turn?
@@ -139,6 +141,7 @@ export default function JarvisWidget() {
     if (!question) return;
     setQ('');
     finalRef.current = '';
+    committedRef.current = '';
     stopSpeaking();
     const history: JarvisTurn[] = msgsRef.current.map(m => ({ role: m.role, content: m.content }));
     setMsgs(m => [...m, { role: 'user', content: question }]);
@@ -167,7 +170,8 @@ export default function JarvisWidget() {
   // ---------- listening ----------
   const submitNow = useCallback(() => {
     clearSilence();
-    const text = finalRef.current.trim();
+    const text = (committedRef.current + finalRef.current).trim();
+    committedRef.current = '';
     finalRef.current = '';
     stoppingRef.current = true;
     try { recRef.current?.stop(); } catch {}
@@ -215,6 +219,7 @@ export default function JarvisWidget() {
     startedRef.current = false;
     setHeardBoth(false);
     finalRef.current = '';
+    committedRef.current = '';
     setModeBoth('capturing');
 
     rec.onstart = () => { startedRef.current = true; retriedRef.current = false; setVoiceBlocked(false); };
@@ -222,19 +227,22 @@ export default function JarvisWidget() {
     rec.onresult = (e: any) => {
       // Ignore our own voice coming back through the mic
       if (speakingRef.current) return;
+      if (modeRef.current !== 'capturing') return;
 
-      let interim = '';
+      // Rebuild the transcript from the whole result list rather than appending this event's
+      // slice. e.results is cumulative for the session and Chrome re-fires over indices it has
+      // already settled, so appending turned "do you have any contact about Sarabjit Bal" into
+      // "do do you do you have do you have any…". Deriving it fresh makes this handler
+      // idempotent: however many times an index is replayed, the text cannot double up.
       let finals = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
+      let interim = '';
+      for (let i = 0; i < e.results.length; i++) {
         const r = e.results[i];
         if (r.isFinal) finals += r[0].transcript + ' ';
         else interim += r[0].transcript;
       }
-      const heard = (finals + interim).trim();
-
-      if (modeRef.current !== 'capturing') return;
-      finalRef.current += finals;
-      const shown = (finalRef.current + interim).trim();
+      finalRef.current = finals;
+      const shown = (committedRef.current + finals + interim).trim();
       setQ(shown);
       if (shown) { setHeardBoth(true); armSubmit(); }   // pause timer starts only once you speak
     };
@@ -253,7 +261,11 @@ export default function JarvisWidget() {
         setTimeout(() => { try { rec.start(); } catch { setModeBoth('idle'); setVoiceBlocked(true); } }, 250);
         return;
       }
-      try { rec.start(); } catch { setModeBoth('idle'); }   // sessions are short-lived; keep it alive
+      // Sessions are short-lived; keep it alive. The new one starts with an empty results list,
+      // so bank what this one finalised or rebuilding from e.results would drop it.
+      committedRef.current += finalRef.current;
+      finalRef.current = '';
+      try { rec.start(); } catch { setModeBoth('idle'); }
     };
 
     recRef.current = rec;

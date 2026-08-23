@@ -8,6 +8,7 @@ import { Project } from "@/lib/models/Project";
 import { Mom } from "@/lib/models/Mom";
 import { Contact } from "@/lib/models/Contact";
 import { Note } from "@/lib/models/Note";
+import { Document as Doc } from "@/lib/models/Document";
 import { JarvisSession } from "@/lib/models/JarvisSession";
 import { hasSafe } from "@/lib/safeCookie";
 import { User } from "@/lib/models/User";
@@ -16,7 +17,7 @@ import { revalidatePath } from "next/cache";
 
 export interface JarvisItem {
   id: string;
-  type: 'link' | 'note' | 'task' | 'project' | 'mom' | 'contact';
+  type: 'link' | 'note' | 'task' | 'project' | 'mom' | 'contact' | 'document';
   title: string;
   url?: string | null;
   detail?: string;
@@ -43,13 +44,14 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   const projectIds = projects.map(p => p._id);
   const pname = new Map(projects.map(p => [String(p._id), p.name]));
 
-  const [links, tasks, moms, contacts, notes] = await Promise.all([
+  const [links, tasks, moms, contacts, notes, docs] = await Promise.all([
     Link.find(linkQuery).populate('category', 'name').sort({ createdAt: -1 }).limit(600).lean(),
     Task.find({ $or: [{ userId }, { assigneeId: userId }, { projectId: { $in: projectIds } }] })
       .populate('assigneeId', 'email').sort({ completed: 1, dueAt: 1 }).limit(400).lean(),
     Mom.find({ projectId: { $in: projectIds } }).sort({ createdAt: -1 }).limit(60).lean(),
     Contact.find({ userId }).lean(),
     Note.find({ userId }).sort({ updatedAt: -1 }).limit(300).lean(),
+    Doc.find({ user: userId }).sort({ createdAt: -1 }).limit(120).lean(),
   ]);
 
   const lines: string[] = [];
@@ -73,19 +75,28 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   for (const c of contacts as any[]) {
     lines.push(`CONTACT id=${track(c._id)} | ${c.name} | ${c.company || ''} | ${c.phone || ''} | ${c.email || ''} | ${c.note || ''}`);
   }
+  for (const doc of docs as any[]) {
+    // Contents where we could read them; a scan or a video still gets a line so it can be cited
+    const body = (doc.text || '').slice(0, 4000);
+    lines.push(`DOC id=${track(doc._id)} | ${doc.name} | folder=${doc.folder || 'Personal'} | ${doc.type === 'link' ? doc.url : (doc.mimeType || 'file')} | added=${d(doc.createdAt)} | contents=${body || '(not readable — image, video or scan)'}`);
+  }
   return { text: lines.join('\n'), ids, projects };
 }
 
 // Groq rate-limits by tokens per minute (8k on the free tier), and the whole vault goes up on
 // every turn. Under budget nothing changes; over it, keep the lines that share words with the
-// question — plus every task and project, which is what "what's urgent" needs and stays small.
+// question. Tasks and projects get a nudge so they outrank unmatched clutter — "what's urgent
+// today" carries no words that match anything — but not enough to outrank a line that actually
+// answers the question, or one long document would never fit beside a long task list.
 const MAX_CONTEXT_CHARS = 24000;
+const TASK_BIAS = 0.5;
 function trimContext(text: string, question: string) {
   if (text.length <= MAX_CONTEXT_CHARS) return text;
   const terms = [...new Set(question.toLowerCase().match(/[a-z0-9]{3,}/g) || [])];
   const scored = text.split('\n').map((line, i) => {
     const l = line.toLowerCase();
-    return { line, i, score: line.startsWith('TASK ') || line.startsWith('PROJECT ') ? 999 : terms.reduce((n, t) => n + (l.includes(t) ? 1 : 0), 0) };
+    const hits = terms.reduce((n, t) => n + (l.includes(t) ? 1 : 0), 0);
+    return { line, i, score: hits + (line.startsWith('TASK ') || line.startsWith('PROJECT ') ? TASK_BIAS : 0) };
   });
   scored.sort((a, b) => b.score - a.score || a.i - b.i);
   const kept: typeof scored = [];
@@ -111,8 +122,13 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     const email = (session.user.email || '').toLowerCase();
     const ctx = await gatherContext(userId, email, await hasSafe(userId));
 
-    const system = `You are Jarvis, the personal assistant inside the user's own vault app. Now is ${d(new Date())} (${TZ}); dates in DATA use the same timezone.
-Answer ONLY from the DATA below — it is everything the user has saved (links, notes, tasks, projects, meeting minutes "MOM", contacts). Never invent items.
+    // Everything down to DATA is byte-identical every turn, on purpose. Groq caches repeated
+    // prompt prefixes and cached tokens do not count against the rate limit — but any variable
+    // near the top (the clock used to be the very first line) invalidates everything behind it.
+    // The current time now lives at the END, after DATA, where it costs only itself.
+    const system = `You are Jarvis, the personal assistant inside the user's own vault app.
+Answer ONLY from the DATA below — it is everything the user has saved (links, notes, tasks, projects, meeting minutes "MOM", contacts, and "DOC" files in their Digi Locker). Never invent items.
+A DOC line carries the file's actual contents where they could be read, so answer from what is inside it, not just its name — quote the figure, date or clause the user asks for. DOCs are filed in folders (Personal, a project name, whatever they chose); "what is in my Personal folder" means the DOCs with that folder. Contents may be cut off partway through a long file, and a scan, photo or video says so instead — in that case say you can see the document but cannot read inside it rather than guessing.
 Match meaning, not just words (e.g. "site that turns code into pretty images" should match a saved ray.so link; "anything about Morphle Labs" should match links, tasks, meetings, contacts, notes mentioning it).
 LANGUAGE — you understand English and Hindi, and you always answer in English.
 Hindi reaches you in Devanagari or as Hinglish (Latin script, mixed with English); understand all of it, including transcription slips, then reply in plain English. Never answer in Hindi, Devanagari or Hinglish, even when that is what the user wrote.
@@ -138,7 +154,7 @@ WHAT YOU CAN DO
    You cannot delete anything — not a contact, task, note or project. If asked, say the user has to do it from the page itself.
    Emit an action whenever the user asks to add/remind/save/note something, or to change/rename/reschedule/append to/tick off something that already exists.
    Only send the fields that change — omitted fields are left alone. To add a point or line to an existing task or note, use appendDescription / appendText; only use description / text when the user wants the whole thing rewritten.
-   Resolve relative times ("tomorrow 5pm", "in 2 hours", "move it to Friday") against the current time given above.
+   Resolve relative times ("tomorrow 5pm", "in 2 hours", "move it to Friday") against NOW, given at the very end of this message.
    Match the item the user means by its meaning, not exact wording ("my website redesign task" → the TASK whose title is about redesigning the website), and copy its id from DATA.
 
 HARD RULES — breaking these is a serious failure:
@@ -147,11 +163,13 @@ HARD RULES — breaking these is a serious failure:
 - Every id in "items" MUST be copied character-for-character from DATA. Never invent an id, a title, or an item that is not in DATA.
 - If DATA has no match, say so plainly. Do not fabricate a result to be helpful.
 
-Reply ONLY with JSON: {"answer": "plain text that fully answers the question on its own, short paragraphs, may use bullet lines starting with -", "items": [{"id": "<id from DATA>", "type": "link|note|task|project|mom|contact", "title": "...", "url": "<for links: the saved url, else null>", "detail": "one line: why it matters / key facts (due date, status, summary)", "urgent": true|false}], "actions": []}
+Reply ONLY with JSON: {"answer": "plain text that fully answers the question on its own, short paragraphs, may use bullet lines starting with -", "items": [{"id": "<id from DATA>", "type": "link|note|task|project|mom|contact|document", "title": "...", "url": "<for links: the saved url, else null>", "detail": "one line: why it matters / key facts (due date, status, summary)", "urgent": true|false}], "actions": []}
 Put at most 12 items, most relevant first; mark urgent=true only for open tasks overdue or due within 48h.
 
 DATA:
-${trimContext(ctx.text, question) || '(empty — the user has not saved anything yet)'}`;
+${trimContext(ctx.text, question) || '(empty — the user has not saved anything yet)'}
+
+NOW: ${d(new Date())} (${TZ}). Dates in DATA use this same timezone.`;
 
     const call = () => fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -161,18 +179,25 @@ ${trimContext(ctx.text, question) || '(empty — the user has not saved anything
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: system },
-          ...history.slice(-6).map(h => ({ role: h.role, content: h.content })),
+          // History is only here to resolve "it" and "that one" against the last few turns.
+          // Answers are long by design now, so they ride along trimmed — the full text is in
+          // DATA anyway, and six verbose replies re-sent every turn is most of a wasted budget.
+          ...history.slice(-4).map(h => ({ role: h.role, content: h.content.slice(0, 500) })),
           { role: 'user', content: question },
         ],
       }),
     });
 
     let res = await call();
-    // Groq rate-limits per minute and says how long to wait. One short wait beats a dead turn.
+    // A per-minute burst clears in seconds, and one short wait beats a dead turn. A daily-token
+    // limit reports minutes — retrying into that spends another request and another few thousand
+    // tokens to be refused identically, so take Groq at its word and give up.
     if (res.status === 429) {
-      const wait = Math.min(Number(res.headers.get('retry-after')) || 3, 8);
-      await new Promise(r => setTimeout(r, wait * 1000));
-      res = await call();
+      const wait = Number(res.headers.get('retry-after')) || 3;
+      if (wait <= 10) {
+        await new Promise(r => setTimeout(r, wait * 1000));
+        res = await call();
+      }
     }
     if (!res.ok) {
       const body = await res.text();
