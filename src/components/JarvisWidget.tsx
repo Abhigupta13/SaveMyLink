@@ -27,6 +27,8 @@ function itemHref(i: JarvisItem) {
   return '/links';
 }
 const speakable = (s: string) => s.replace(/^[-*•]\s*/gm, '').replace(/\s+/g, ' ').trim();
+// Speak Hindi replies with a Hindi voice; Hinglish comes back in Latin script and stays on en-IN.
+const voiceLang = (s: string) => /[ऀ-ॿ]/.test(s) ? 'hi-IN' : 'en-IN';
 
 export default function JarvisWidget() {
   const { status } = useSession();
@@ -44,6 +46,7 @@ export default function JarvisWidget() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const fabRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const recRef = useRef<any>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -61,6 +64,8 @@ export default function JarvisWidget() {
   msgsRef.current = msgs;
   const openRef = useRef(false);
   openRef.current = open;
+  const loopRef = useRef(false);              // conversation mode: reopen the mic after each answer
+  const listenAgainRef = useRef<() => void>(() => {});   // set below; breaks the ask ⇄ startRecognition cycle
   const setModeBoth = (m: Mode) => { modeRef.current = m; setMode(m); };
   const setHeardBoth = (v: boolean) => { heardRef.current = v; setHeard(v); };
 
@@ -69,6 +74,8 @@ export default function JarvisWidget() {
 
   useEffect(() => { try { const m = localStorage.getItem('jarvisMuted') === '1'; setMuted(m); mutedRef.current = m; } catch {} }, []);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, busy]);
+  // Keep the tail of a long dictation visible instead of the first few words
+  useEffect(() => { const el = inputRef.current; if (el) el.scrollLeft = el.scrollWidth; }, [q]);
 
   // Prompt examples that name the user's own projects, not made-up ones
   useEffect(() => {
@@ -102,7 +109,7 @@ export default function JarvisWidget() {
     if (!hasTTS || mutedRef.current || !text) { speakingRef.current = false; return resolve(); }
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(speakable(text));
-    u.lang = 'en-IN';
+    u.lang = voiceLang(text);
     u.rate = 1.02;
     u.onstart = () => { speakingRef.current = true; setSpeaking(true); };
     u.onend = () => { speakingRef.current = false; setSpeaking(false); resolve(); };
@@ -128,6 +135,7 @@ export default function JarvisWidget() {
       : { role: 'assistant', content: res.error || 'Something went wrong.' };
     setMsgs(m => [...m, reply]);
     await speak(reply.content);
+    listenAgainRef.current();   // keep the conversation going until you stop the mic or close
   }, [speak, stopSpeaking]);
 
   // ---------- listening ----------
@@ -157,6 +165,7 @@ export default function JarvisWidget() {
       try { recRef.current?.stop(); } catch {}
       setModeBoth('idle');
       setQ('');
+      loopRef.current = false;           // you went quiet — stop reopening the mic
     }, WAIT_FOR_SPEECH_MS);
   }, []);
 
@@ -169,7 +178,9 @@ export default function JarvisWidget() {
     try { recRef.current?.stop(); } catch {}
 
     const rec = new SR();
-    rec.lang = 'en-IN';
+    // Web Speech takes exactly one language. hi-IN copes with Hinglish code-switching and still
+    // returns English words; en-IN drops Hindi entirely. Whisper (Android path) auto-detects.
+    rec.lang = 'hi-IN';
     rec.interimResults = true;
     rec.continuous = true;
     stoppingRef.current = false;
@@ -277,32 +288,38 @@ export default function JarvisWidget() {
   // Mic button: start listening; once you've spoken it doubles as "send now"
   const micTap = () => {
     if (mode === 'capturing') {
-      if (!heardRef.current) return;      // already listening and you haven't spoken — leave the mic open
-      clearSilence(); submitNow(); return;
+      if (heardRef.current) { clearSilence(); submitNow(); return; }   // mid-sentence: send what you said
+      loopRef.current = false;                                          // silent tap = mic off, conversation over
+      stopListening();
+      return;
     }
     stopSpeaking();
     setVoiceBlocked(false); retriedRef.current = false;
+    loopRef.current = true;
+    listenAgainRef.current();
+  };
+
+  // Reopen the mic after each answer so you can just keep talking.
+  listenAgainRef.current = () => {
+    if (!openRef.current || !loopRef.current) return;
     if (hasSR) { startRecognition(); armWaitForSpeech(); }
-    else recordOnce();
+    else recordOnce();                                    // Android webview: no Web Speech API
   };
 
   // ---------- panel lifecycle ----------
-  const closePanel = useCallback(() => { stopListening(); stopSpeaking(); setOpen(false); }, [stopListening, stopSpeaking]);
+  const closePanel = useCallback(() => { loopRef.current = false; stopListening(); stopSpeaking(); setOpen(false); }, [stopListening, stopSpeaking]);
 
-  /** First open = greet, then listen on its own. Every turn after that is tap-to-talk. */
+  /** Greets, then listens; every answer reopens the mic until you stop it or close the panel. */
   const openPanel = useCallback(() => {
     setOpen(true);
     openRef.current = true;
+    loopRef.current = true;
     stopSpeaking();
     setVoiceBlocked(false);
     retriedRef.current = false;
     // Mic opens only once the greeting has finished playing, so it captures you and not Jarvis
-    speak(GREETING).then(() => {
-      if (!openRef.current) return;                       // closed while greeting
-      if (hasSR) { startRecognition(); armWaitForSpeech(); }
-      else recordOnce();                                  // Android webview: no Web Speech API
-    });
-  }, [hasSR, startRecognition, speak, stopSpeaking, armWaitForSpeech, recordOnce]);
+    speak(GREETING).then(() => listenAgainRef.current());
+  }, [speak, stopSpeaking]);
 
   const toggleOpen = () => (openRef.current ? closePanel() : openPanel());
 
@@ -341,7 +358,7 @@ export default function JarvisWidget() {
 
   const statusLabel =
     busy ? 'Thinking…'
-    : mode === 'capturing' ? (q ? 'Listening… pause when you\'re done' : 'Listening… go ahead')
+    : mode === 'capturing' ? (q ? 'Listening… pause when you\'re done' : 'Listening… go ahead, or tap the mic to stop')
     : speaking ? 'Speaking… tap to interrupt'
     : voiceBlocked ? 'Tap the mic to enable voice'
     : 'Tap the mic to speak';
@@ -418,7 +435,7 @@ export default function JarvisWidget() {
               {mode === 'capturing' && heard ? <Square size={18} fill="currentColor" /> : <Mic size={20} />}
             </button>
             <form style={{ display: 'flex', gap: '8px', flex: 1 }} onSubmit={e => { e.preventDefault(); ask(q); }}>
-              <input value={q} onChange={e => setQ(e.target.value)}
+              <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
                 placeholder={mode === 'capturing' ? 'Listening…' : 'Ask anything…'} />
               <button type="submit" disabled={!q.trim() || busy || mode === 'capturing'} aria-label="Send"><Send size={16} /></button>
             </form>
