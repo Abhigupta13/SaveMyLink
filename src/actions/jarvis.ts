@@ -8,6 +8,7 @@ import { Project } from "@/lib/models/Project";
 import { Mom } from "@/lib/models/Mom";
 import { Contact } from "@/lib/models/Contact";
 import { Note } from "@/lib/models/Note";
+import { JarvisSession } from "@/lib/models/JarvisSession";
 import { hasSafe } from "@/lib/safeCookie";
 import { User } from "@/lib/models/User";
 import { getServerSession } from "next-auth";
@@ -22,6 +23,8 @@ export interface JarvisItem {
   urgent?: boolean;
 }
 export interface JarvisTurn { role: 'user' | 'assistant'; content: string }
+export type Msg = JarvisTurn & { items?: JarvisItem[] };
+export interface JarvisSessionMeta { id: string; title: string; updatedAt: string }
 
 let TZ = 'UTC';
 const d = (v?: Date | string | null) => {
@@ -73,6 +76,28 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   return { text: lines.join('\n'), ids, projects };
 }
 
+// Groq rate-limits by tokens per minute (8k on the free tier), and the whole vault goes up on
+// every turn. Under budget nothing changes; over it, keep the lines that share words with the
+// question — plus every task and project, which is what "what's urgent" needs and stays small.
+const MAX_CONTEXT_CHARS = 24000;
+function trimContext(text: string, question: string) {
+  if (text.length <= MAX_CONTEXT_CHARS) return text;
+  const terms = [...new Set(question.toLowerCase().match(/[a-z0-9]{3,}/g) || [])];
+  const scored = text.split('\n').map((line, i) => {
+    const l = line.toLowerCase();
+    return { line, i, score: line.startsWith('TASK ') || line.startsWith('PROJECT ') ? 999 : terms.reduce((n, t) => n + (l.includes(t) ? 1 : 0), 0) };
+  });
+  scored.sort((a, b) => b.score - a.score || a.i - b.i);
+  const kept: typeof scored = [];
+  let size = 0;
+  for (const s of scored) {
+    if (size + s.line.length > MAX_CONTEXT_CHARS) break;
+    kept.push(s); size += s.line.length + 1;
+  }
+  kept.sort((a, b) => a.i - b.i);   // back into the original order so the sections read normally
+  return kept.map(s => s.line).join('\n');
+}
+
 export async function askJarvis(question: string, history: JarvisTurn[] = [], timeZone = 'UTC') {
   try {
     const session = await getServerSession(authOptions);
@@ -93,7 +118,10 @@ LANGUAGE — you understand English and Hindi, and you always answer in English.
 Hindi reaches you in Devanagari or as Hinglish (Latin script, mixed with English); understand all of it, including transcription slips, then reply in plain English. Never answer in Hindi, Devanagari or Hinglish, even when that is what the user wrote.
 Text the user dictates to be saved is translated to English too, so the vault stays in one language: "kal shaam tak vendor ko call karna hai" becomes the task "Call the vendor by tomorrow evening". Titles of items already saved are quoted exactly as they are stored, never re-translated.
 No other language exists here — not Urdu, not Punjabi, not Marathi, nothing. Spoken Hindi is often mis-transcribed as Urdu, so treat Perso-Arabic script as mis-transcribed Hindi. If asked what languages you handle: you understand English and Hindi and reply in English.
-Be concise and direct, like a sharp assistant: lead with the answer ("Yes — you saved ray.so…" / "Found 4 things about Morphle Labs:"), then what's urgent (overdue/due-soon tasks first), then useful details. If nothing matches, say so plainly and suggest what to save.
+Be concise and direct, like a sharp assistant: lead with the answer, then what's urgent (overdue/due-soon tasks first), then useful details. If nothing matches, say so plainly and suggest what to save.
+"answer" IS THE ANSWER — it is read aloud, and the user may never look at the screen. It must stand on its own with the actual facts in it: the titles, who is assigned, when things are due, what the meeting decided. "items" is only a set of tappable shortcuts to things you already said; it is never where the substance lives.
+So never write a pointer sentence and stop. NOT "Here are the items related to the block tray elevator:" — instead say it: "Three things on the block tray elevator. The Aug 23 meeting decided to add it to the Mogli robot home, with actions for Abhishek, Bistu and Sikha. Abhishek has 'Walk on block tray elevator' due 26 Aug at 5pm. Two more from that meeting — 'Work on cartridge' and 'Do mapping', same deadline, both still unassigned."
+Cover every item you cite, grouped sensibly rather than listed one by one, and keep it natural to listen to.
 WHAT YOU CAN DO
 1. Answer questions from DATA.
 2. Create or change things, ONLY by emitting an "actions" entry — you have no other way to touch anything:
@@ -101,9 +129,13 @@ WHAT YOU CAN DO
    - {"type":"create_note","title":"<short title, optional>","text":"the note body"}
    - {"type":"update_task","id":"<TASK id from DATA>","title":"<optional>","description":"<optional, REPLACES the whole description>","appendDescription":"<optional, adds this as a new line at the end>","dueAt":"YYYY-MM-DDTHH:mm | none (clears it)","completed":true|false}
    - {"type":"update_note","id":"<NOTE id from DATA>","title":"<optional>","text":"<optional, REPLACES the whole body>","appendText":"<optional, adds this as a new line at the end>"}
+   - {"type":"create_contact","name":"...","phone":"<optional>","email":"<optional>","company":"<optional>","note":"<optional, anything worth remembering about them>"}
+   - {"type":"update_contact","id":"<CONTACT id from DATA>","name":"<optional>","phone":"<optional>","email":"<optional>","company":"<optional>","note":"<optional, REPLACES the whole note>","appendNote":"<optional, adds this as a new line at the end>"}
    - {"type":"create_project","name":"..."}
    - {"type":"update_project","id":"<PROJECT id from DATA>","name":"<optional, renames it>","notes":"<optional, REPLACES the whole notes>","appendNotes":"<optional, adds this as a new line at the end>","addMember":"<optional email>","removeMember":"<optional email>"}
    A project groups tasks, meetings and people. Only its owner can rename it or change who is on it; any member can edit its notes. If the user asks for something you are not allowed to do, say so rather than pretending it worked.
+   A contact is a person the user knows. Write phone numbers as plain digits, no spaces or words ("nine eight seven six" dictated becomes "9876"). Saving someone who is already in DATA fills in the missing fields on that contact instead of making a second one — so prefer update_contact with their id, and only use create_contact for someone genuinely new.
+   You cannot delete anything — not a contact, task, note or project. If asked, say the user has to do it from the page itself.
    Emit an action whenever the user asks to add/remind/save/note something, or to change/rename/reschedule/append to/tick off something that already exists.
    Only send the fields that change — omitted fields are left alone. To add a point or line to an existing task or note, use appendDescription / appendText; only use description / text when the user wants the whole thing rewritten.
    Resolve relative times ("tomorrow 5pm", "in 2 hours", "move it to Friday") against the current time given above.
@@ -115,13 +147,13 @@ HARD RULES — breaking these is a serious failure:
 - Every id in "items" MUST be copied character-for-character from DATA. Never invent an id, a title, or an item that is not in DATA.
 - If DATA has no match, say so plainly. Do not fabricate a result to be helpful.
 
-Reply ONLY with JSON: {"answer": "plain text, short paragraphs, may use bullet lines starting with -", "items": [{"id": "<id from DATA>", "type": "link|note|task|project|mom|contact", "title": "...", "url": "<for links: the saved url, else null>", "detail": "one line: why it matters / key facts (due date, status, summary)", "urgent": true|false}], "actions": []}
+Reply ONLY with JSON: {"answer": "plain text that fully answers the question on its own, short paragraphs, may use bullet lines starting with -", "items": [{"id": "<id from DATA>", "type": "link|note|task|project|mom|contact", "title": "...", "url": "<for links: the saved url, else null>", "detail": "one line: why it matters / key facts (due date, status, summary)", "urgent": true|false}], "actions": []}
 Put at most 12 items, most relevant first; mark urgent=true only for open tasks overdue or due within 48h.
 
 DATA:
-${ctx.text || '(empty — the user has not saved anything yet)'}`;
+${trimContext(ctx.text, question) || '(empty — the user has not saved anything yet)'}`;
 
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const call = () => fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -134,8 +166,22 @@ ${ctx.text || '(empty — the user has not saved anything yet)'}`;
         ],
       }),
     });
+
+    let res = await call();
+    // Groq rate-limits per minute and says how long to wait. One short wait beats a dead turn.
+    if (res.status === 429) {
+      const wait = Math.min(Number(res.headers.get('retry-after')) || 3, 8);
+      await new Promise(r => setTimeout(r, wait * 1000));
+      res = await call();
+    }
     if (!res.ok) {
-      console.error('Jarvis LLM error:', await res.text());
+      const body = await res.text();
+      console.error('Jarvis LLM error:', res.status, body);
+      if (res.status === 429) {
+        // Surface Groq's own wording — it names which limit was hit (requests, tokens, daily)
+        const reason = (() => { try { return JSON.parse(body)?.error?.message; } catch { return null; } })();
+        return { success: false, error: reason ? `Rate limited — ${reason}` : 'Rate limited. Give it a minute.' };
+      }
       return { success: false, error: `Assistant unavailable (${res.status})` };
     }
     const data = await res.json();
@@ -144,10 +190,19 @@ ${ctx.text || '(empty — the user has not saved anything yet)'}`;
     const created: JarvisItem[] = [];
     const createdTasks: { _id: string; title: string; dueAt?: string | null; completed?: boolean }[] = [];
     const str = (v: any) => String(v ?? '').trim();
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const CONTACT_FIELDS = { name: str, phone: str, email: (v: any) => str(v).toLowerCase(), company: str, note: str };
+    const contactLine = (c: any) => [c.phone, c.email, c.company].filter(Boolean).join(' · ') || 'no details yet';
     // Only the fields the model actually sent get written; everything else is left alone.
+    // An empty string counts as "not sent" — a model that echoes back "phone":"" must never
+    // wipe a saved number. Clearing is always explicit instead (dueAt: "none").
     const patch = (a: any, map: Record<string, (v: any) => any>) => {
       const set: any = {};
-      for (const [key, take] of Object.entries(map)) if (a[key] !== undefined && a[key] !== null) set[key] = take(a[key]);
+      for (const [key, take] of Object.entries(map)) {
+        if (a[key] === undefined || a[key] === null) continue;
+        const v = take(a[key]);
+        if (v !== '') set[key] = v;
+      }
       return set;
     };
     for (const a of (parsed.actions || []).slice(0, 5)) {
@@ -180,6 +235,27 @@ ${ctx.text || '(empty — the user has not saved anything yet)'}`;
           if (!note.isModified()) continue;
           await note.save();
           created.push({ id: String(note._id), type: 'note', title: note.title || note.body.slice(0, 60), detail: 'Updated in Notes' });
+        } else if (a?.type === 'update_contact' && a.id && ctx.ids.has(String(a.id))) {
+          const contact = await Contact.findOne({ _id: a.id, userId });
+          if (!contact) continue;
+          Object.assign(contact, patch(a, CONTACT_FIELDS));
+          const add = str(a.appendNote);
+          if (add) contact.note = [str(contact.note), add].filter(Boolean).join('\n');
+          if (!contact.isModified()) continue;
+          await contact.save();
+          created.push({ id: String(contact._id), type: 'contact', title: contact.name, detail: `Updated · ${contactLine(contact)}` });
+        } else if (a?.type === 'create_contact' && a.name) {
+          const set = patch(a, CONTACT_FIELDS);
+          // "save Abhishek's number" when Abhishek is already saved should fill him in, not clone him
+          const byEmail = str(a.email).toLowerCase();
+          const existing = await Contact.findOne({
+            userId,
+            $or: [{ name: new RegExp(`^${esc(str(a.name))}$`, 'i') }, ...(byEmail ? [{ email: byEmail }] : [])],
+          });
+          const contact = existing || new Contact({ userId });
+          Object.assign(contact, set);
+          await contact.save();
+          created.push({ id: String(contact._id), type: 'contact', title: contact.name, detail: `${existing ? 'Updated' : 'Saved to Contacts'} · ${contactLine(contact)}` });
         } else if (a?.type === 'create_project' && a.name) {
           const name = str(a.name);
           const dup = ctx.projects.find((p: any) => p.name?.toLowerCase() === name.toLowerCase());
@@ -241,7 +317,7 @@ ${ctx.text || '(empty — the user has not saved anything yet)'}`;
         }
       } catch (e) { console.error('Jarvis action failed:', e); }
     }
-    if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); }
+    if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); revalidatePath('/contacts'); }
 
     // Anti-hallucination: keep only items whose id really exists (or that we just created)
     const validIds = new Set([...ctx.ids, ...created.map(c => c.id)]);
@@ -279,11 +355,81 @@ export async function transcribeQuestion(formData: FormData) {
       headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
       body: form,
     });
-    if (!res.ok) { console.error('Jarvis transcription failed:', await res.text()); return { success: false, error: 'Transcription failed' }; }
+    if (!res.ok) {
+      console.error('Jarvis transcription failed:', res.status, await res.text());
+      return { success: false, error: res.status === 429 ? 'Rate limited. Give it a minute.' : 'Transcription failed' };
+    }
     const { text } = await res.json();
     return { success: true, text: String(text || '').trim() };
   } catch (error) {
     console.error('transcribeQuestion failed:', error);
     return { success: false, error: 'Transcription failed' };
+  }
+}
+
+// ---------- chat sessions ----------
+// One session per time the panel is opened. The row is created on the first message rather
+// than on open, so closing the panel without asking anything leaves nothing behind.
+
+export async function getJarvisSessions() {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    const rows = await JarvisSession.find({ userId: session.user.id })
+      .select('title updatedAt').sort({ updatedAt: -1 }).limit(50).lean();
+    return { success: true, sessions: rows.map(r => ({ id: String(r._id), title: r.title, updatedAt: String(r.updatedAt) })) };
+  } catch (error) {
+    console.error('getJarvisSessions failed:', error);
+    return { success: false, error: 'Failed to load chats' };
+  }
+}
+
+export async function getJarvisSession(id: string) {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    const row = await JarvisSession.findOne({ _id: id, userId: session.user.id }).lean();
+    if (!row) return { success: false, error: 'Chat not found' };
+    return { success: true, messages: JSON.parse(JSON.stringify(row.messages || [])) };
+  } catch (error) {
+    console.error('getJarvisSession failed:', error);
+    return { success: false, error: 'Failed to load chat' };
+  }
+}
+
+/** Upsert: pass null to start a session, then pass back the id it returns. */
+export async function saveJarvisSession(id: string | null, messages: Msg[]) {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    if (!messages?.length) return { success: false, error: 'Nothing to save' };
+    const title = (messages.find(m => m.role === 'user')?.content || 'New chat').slice(0, 80);
+    const trimmed = messages.slice(-60);   // a session is a conversation, not an archive
+    if (id) {
+      const row = await JarvisSession.findOneAndUpdate({ _id: id, userId: session.user.id }, { messages: trimmed }, { new: true });
+      if (row) return { success: true, id: String(row._id) };
+    }
+    const row = await JarvisSession.create({ userId: session.user.id, title, messages: trimmed });
+    return { success: true, id: String(row._id) };
+  } catch (error) {
+    console.error('saveJarvisSession failed:', error);
+    return { success: false, error: 'Failed to save chat' };
+  }
+}
+
+export async function deleteJarvisSession(id?: string) {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    // No id means "all of mine" — scoped by userId either way, so it can never reach someone else's
+    await JarvisSession.deleteMany(id ? { _id: id, userId: session.user.id } : { userId: session.user.id });
+    return { success: true };
+  } catch (error) {
+    console.error('deleteJarvisSession failed:', error);
+    return { success: false, error: 'Failed to delete' };
   }
 }

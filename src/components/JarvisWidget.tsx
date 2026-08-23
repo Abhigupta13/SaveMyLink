@@ -3,13 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { Sparkles, X, Send, ArrowUpRight, Mic, Square, Volume2, VolumeX } from 'lucide-react';
-import { askJarvis, transcribeQuestion, JarvisItem, JarvisTurn } from '@/actions/jarvis';
+import { Sparkles, X, Send, ArrowUpRight, Mic, Square, Volume2, VolumeX, Trash2, MessageSquare } from 'lucide-react';
+import {
+  askJarvis, transcribeQuestion, getJarvisSessions, getJarvisSession, saveJarvisSession,
+  deleteJarvisSession, JarvisItem, JarvisTurn, Msg, JarvisSessionMeta,
+} from '@/actions/jarvis';
 import { syncTask } from '@/lib/taskNotifications';
 import { getProjects } from '@/actions/project';
 
-type Msg = JarvisTurn & { items?: JarvisItem[] };
 type Mode = 'idle' | 'capturing';
+type Tab = 'chat' | 'sessions';
 
 const GREETING = "What's on your mind?";
 const BASE_SUGGESTIONS = ['What is urgent today?', 'What did I save this week?'];
@@ -30,6 +33,11 @@ function itemHref(i: JarvisItem) {
 const speakable = (s: string) => s.replace(/^[-*•]\s*/gm, '').replace(/\s+/g, ' ').trim();
 // Speak Hindi replies with a Hindi voice; Hinglish comes back in Latin script and stays on en-IN.
 const voiceLang = (s: string) => /[ऀ-ॿ]/.test(s) ? 'hi-IN' : 'en-IN';
+const when = (iso: string) => {
+  const t = new Date(iso);
+  return t.toLocaleDateString(undefined, { day: '2-digit', month: 'short' }) + ' · ' +
+    t.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+};
 
 export default function JarvisWidget() {
   const { status } = useSession();
@@ -43,6 +51,8 @@ export default function JarvisWidget() {
   const [muted, setMuted] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>(BASE_SUGGESTIONS);
   const [heard, setHeard] = useState(false);   // have you said anything this turn?
+  const [tab, setTab] = useState<Tab>('chat');
+  const [sessions, setSessions] = useState<JarvisSessionMeta[]>([]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -63,6 +73,7 @@ export default function JarvisWidget() {
   const speakingRef = useRef(false);     // our own flag: speechSynthesis.speaking gets stuck in Chrome
   const msgsRef = useRef<Msg[]>([]);
   msgsRef.current = msgs;
+  const sessionIdRef = useRef<string | null>(null);   // null until this conversation's first save
   const openRef = useRef(false);
   openRef.current = open;
   const loopRef = useRef(false);              // conversation mode: reopen the mic after each answer
@@ -112,9 +123,13 @@ export default function JarvisWidget() {
     const u = new SpeechSynthesisUtterance(speakable(text));
     u.lang = voiceLang(text);
     u.rate = 1.02;
+    // Chrome silently stops an utterance after ~15s unless it's nudged, which truncates any
+    // answer longer than a couple of sentences. resume() on a speaking synth is a no-op elsewhere.
+    const keepAlive = setInterval(() => { try { window.speechSynthesis.resume(); } catch {} }, 9000);
+    const done = () => { clearInterval(keepAlive); speakingRef.current = false; setSpeaking(false); resolve(); };
     u.onstart = () => { speakingRef.current = true; setSpeaking(true); };
-    u.onend = () => { speakingRef.current = false; setSpeaking(false); resolve(); };
-    u.onerror = () => { speakingRef.current = false; setSpeaking(false); resolve(); };
+    u.onend = done;
+    u.onerror = done;
     window.speechSynthesis.speak(u);
   }), [hasTTS, stopListening]);
 
@@ -135,7 +150,17 @@ export default function JarvisWidget() {
       ? { role: 'assistant', content: res.answer || '…', items: res.items }
       : { role: 'assistant', content: res.error || 'Something went wrong.' };
     setMsgs(m => [...m, reply]);
+    // A failed turn ends the loop — otherwise a rate limit would keep firing more requests at it
+    if (!res.success) loopRef.current = false;
+    // The session row is born here, on the first turn, and updated in place after that
+    saveJarvisSession(sessionIdRef.current, [...history, { role: 'user', content: question }, reply])
+      .then(r => { if (r.success && r.id) sessionIdRef.current = r.id; })
+      .catch(() => {});
     await speak(reply.content);
+    // A beat before the mic reopens — otherwise it starts capturing the moment Jarvis stops,
+    // which reads as being cut off. Muted means nothing was spoken at all, so leave roughly
+    // the time it takes to read the reply instead.
+    await new Promise(r => setTimeout(r, mutedRef.current ? Math.min(8000, 1200 + reply.content.length * 28) : 900));
     listenAgainRef.current();   // keep the conversation going until you stop the mic or close
   }, [speak, stopSpeaking]);
 
@@ -179,9 +204,11 @@ export default function JarvisWidget() {
     try { recRef.current?.stop(); } catch {}
 
     const rec = new SR();
-    // Web Speech takes exactly one language. hi-IN copes with Hinglish code-switching and still
-    // returns English words; en-IN drops Hindi entirely. Whisper (Android path) auto-detects.
-    rec.lang = 'hi-IN';
+    // Web Speech takes exactly one language — there is no both. hi-IN transliterated spoken
+    // English into Devanagari, which is the wrong way round for a vault kept in English, so
+    // en-IN it is: English is exact and Hindi comes back as Latin-script Hinglish, which the
+    // system prompt already reads. Whisper (Android path) auto-detects and handles both.
+    rec.lang = 'en-IN';
     rec.interimResults = true;
     rec.continuous = true;
     stoppingRef.current = false;
@@ -251,6 +278,12 @@ export default function JarvisWidget() {
         const tr = await transcribeQuestion(fd);
         setBusy(false);
         if (tr.success && tr.text) { setQ(tr.text); ask(tr.text); }
+        else if (tr.error) {   // rate limit or server error — stop, don't retry straight into it
+          setQ('');
+          loopRef.current = false;
+          setMsgs(m => [...m, { role: 'assistant', content: tr.error! }]);
+          await speak(tr.error!);
+        }
         else { setQ(''); speak("Sorry, I didn't catch that."); }
       };
       mediaRef.current = rec;
@@ -315,6 +348,10 @@ export default function JarvisWidget() {
     setOpen(true);
     openRef.current = true;
     loopRef.current = true;
+    // Every open is a fresh conversation; the previous one is already saved under Chats
+    setMsgs([]);
+    sessionIdRef.current = null;
+    setTab('chat');
     stopSpeaking();
     setVoiceBlocked(false);
     retriedRef.current = false;
@@ -348,6 +385,31 @@ export default function JarvisWidget() {
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openPanel, closePanel]);
+
+  // ---------- saved chats ----------
+  const showSessions = () => {
+    loopRef.current = false;                // browsing history, not talking
+    stopListening(); stopSpeaking();
+    setTab('sessions');
+    getJarvisSessions().then(r => { if (r.success) setSessions(r.sessions || []); }).catch(() => {});
+  };
+
+  const openSession = async (id: string) => {
+    const r = await getJarvisSession(id);
+    if (!r.success) return;
+    sessionIdRef.current = id;
+    setMsgs(r.messages || []);
+    setTab('chat');
+  };
+
+  const removeSession = async (id?: string) => {
+    const r = await deleteJarvisSession(id);
+    if (!r.success) return;
+    setSessions(s => (id ? s.filter(x => x.id !== id) : []));
+    // Deleting the chat you're in leaves the transcript on screen but detached — the next
+    // turn starts a new row rather than resurrecting the deleted one.
+    if (!id || id === sessionIdRef.current) sessionIdRef.current = null;
+  };
 
   const toggleMute = () => {
     const next = !muted; setMuted(next); mutedRef.current = next;
@@ -389,6 +451,35 @@ export default function JarvisWidget() {
             </button>
           </div>
 
+          <div className="jarvis-tabs">
+            <button className={`jarvis-tab ${tab === 'chat' ? 'on' : ''}`} onClick={() => setTab('chat')}>Chat</button>
+            <button className={`jarvis-tab ${tab === 'sessions' ? 'on' : ''}`} onClick={showSessions}>
+              <MessageSquare size={13} /> Chats
+            </button>
+          </div>
+
+          {tab === 'sessions' ? (
+            <div className="jarvis-body">
+              {sessions.length === 0
+                ? <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No saved chats yet.</p>
+                : <>
+                    <button className="jarvis-sess-all" onClick={() => removeSession()}>
+                      <Trash2 size={13} /> Delete all {sessions.length}
+                    </button>
+                    {sessions.map(s => (
+                      <div key={s.id} className="jarvis-sess">
+                        <button className="jarvis-sess-open" onClick={() => openSession(s.id)}>
+                          <span style={{ display: 'block', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</span>
+                          <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{when(s.updatedAt)}</span>
+                        </button>
+                        <button className="jarvis-sess-del" onClick={() => removeSession(s.id)} aria-label="Delete chat" title="Delete chat">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </>}
+            </div>
+          ) : (
           <div className="jarvis-body">
             {msgs.length === 0 && (
               <div>
@@ -429,7 +520,9 @@ export default function JarvisWidget() {
             {busy && <div className="jarvis-msg assistant"><div className="jarvis-bubble" style={{ opacity: 0.6 }}>Looking through your vault…</div></div>}
             <div ref={bottomRef} />
           </div>
+          )}
 
+          {tab === 'chat' && (
           <div className="jarvis-input">
             <button type="button" className={`jarvis-mic ${mode === 'capturing' ? 'on' : ''}`}
               onClick={micTap} disabled={busy} aria-label={mode === 'capturing' && heard ? 'Send' : 'Speak'}>
@@ -441,6 +534,7 @@ export default function JarvisWidget() {
               <button type="submit" disabled={!q.trim() || busy || mode === 'capturing'} aria-label="Send"><Send size={16} /></button>
             </form>
           </div>
+          )}
         </div>
       )}
     </>
