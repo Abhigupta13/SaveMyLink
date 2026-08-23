@@ -3,20 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { Sparkles, X, Send, ArrowUpRight, Mic, MicOff, Square, Volume2, VolumeX } from 'lucide-react';
+import { Sparkles, X, Send, ArrowUpRight, Mic, Square, Volume2, VolumeX } from 'lucide-react';
 import { askJarvis, transcribeQuestion, JarvisItem, JarvisTurn } from '@/actions/jarvis';
 import { syncTask } from '@/lib/taskNotifications';
 import { getProjects } from '@/actions/project';
 
 type Msg = JarvisTurn & { items?: JarvisItem[] };
-type Mode = 'idle' | 'standby' | 'capturing';   // standby = waiting for the wake word
+type Mode = 'idle' | 'capturing';
 
 const GREETING = "What's on your mind?";
 const BASE_SUGGESTIONS = ['What is urgent today?', 'What did I save this week?'];
 
-// "hey jarvis", "hi jarvis", "ok jarvis", "hey travis/service" (what Whisper often hears)
-const WAKE = /\b(?:hey|hi|hello|ok|okay)?\s*(jarvis|jarvish|jervis|travis|charvis)\b/i;
-const SILENCE_MS = 2600;      // quiet time before we treat your question as finished
+const SILENCE_MS = 2600;      // quiet time AFTER you've spoken before we send
+const WAIT_FOR_SPEECH_MS = 20000;  // how long the mic waits for you to begin
 const MIN_SPEECH_MS = 800;
 
 function itemHref(i: JarvisItem) {
@@ -39,8 +38,8 @@ export default function JarvisWidget() {
   const [mode, setMode] = useState<Mode>('idle');
   const [speaking, setSpeaking] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [wake, setWake] = useState(true);       // hands-free wake word on by default
   const [suggestions, setSuggestions] = useState<string[]>(BASE_SUGGESTIONS);
+  const [heard, setHeard] = useState(false);   // have you said anything this turn?
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -51,14 +50,19 @@ export default function JarvisWidget() {
   const finalRef = useRef('');
   const silenceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppingRef = useRef(false);
+  const heardRef = useRef(false);        // has the user actually said anything this turn?
   const modeRef = useRef<Mode>('idle');
   const startedRef = useRef(false);      // did the browser actually open a mic session?
   const retriedRef = useRef(false);
   const [voiceBlocked, setVoiceBlocked] = useState(false);
   const mutedRef = useRef(false);
+  const speakingRef = useRef(false);     // our own flag: speechSynthesis.speaking gets stuck in Chrome
   const msgsRef = useRef<Msg[]>([]);
   msgsRef.current = msgs;
+  const openRef = useRef(false);
+  openRef.current = open;
   const setModeBoth = (m: Mode) => { modeRef.current = m; setMode(m); };
+  const setHeardBoth = (v: boolean) => { heardRef.current = v; setHeard(v); };
 
   const hasSR = typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
   const hasTTS = typeof window !== 'undefined' && 'speechSynthesis' in window;
@@ -81,20 +85,30 @@ export default function JarvisWidget() {
 
   const clearSilence = () => { if (silenceRef.current) { clearTimeout(silenceRef.current); silenceRef.current = null; } };
 
-  // ---------- speaking ----------
-  const stopSpeaking = useCallback(() => { if (hasTTS) window.speechSynthesis.cancel(); setSpeaking(false); }, [hasTTS]);
+  const stopListening = useCallback(() => {
+    stoppingRef.current = true;
+    clearSilence();
+    try { recRef.current?.stop(); } catch {}
+    if (mediaRef.current?.state === 'recording') mediaRef.current.stop();
+    setModeBoth('idle');
+  }, []);
 
+  // ---------- speaking ----------
+  const stopSpeaking = useCallback(() => { if (hasTTS) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false); }, [hasTTS]);
+
+  /** Closes the mic first — Jarvis must never hear itself. Callers reopen it when they want you back. */
   const speak = useCallback((text: string) => new Promise<void>(resolve => {
-    if (!hasTTS || mutedRef.current || !text) return resolve();
+    stopListening();
+    if (!hasTTS || mutedRef.current || !text) { speakingRef.current = false; return resolve(); }
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(speakable(text));
     u.lang = 'en-IN';
     u.rate = 1.02;
-    u.onstart = () => setSpeaking(true);
-    u.onend = () => { setSpeaking(false); resolve(); };
-    u.onerror = () => { setSpeaking(false); resolve(); };
+    u.onstart = () => { speakingRef.current = true; setSpeaking(true); };
+    u.onend = () => { speakingRef.current = false; setSpeaking(false); resolve(); };
+    u.onerror = () => { speakingRef.current = false; setSpeaking(false); resolve(); };
     window.speechSynthesis.speak(u);
-  }), [hasTTS]);
+  }), [hasTTS, stopListening]);
 
   // ---------- asking ----------
   const ask = useCallback(async (text: string) => {
@@ -121,28 +135,37 @@ export default function JarvisWidget() {
     clearSilence();
     const text = finalRef.current.trim();
     finalRef.current = '';
-    if (!text) { setModeBoth(wake ? 'standby' : 'idle'); return; }
-    setModeBoth(wake ? 'standby' : 'idle');   // keep the mic armed for the next "Hey Jarvis"
-    ask(text);
-  }, [ask, wake]);
+    stoppingRef.current = true;
+    try { recRef.current?.stop(); } catch {}
+    setModeBoth('idle');
+    setHeardBoth(false);
+    if (text) ask(text);
+  }, [ask]);
 
+  /** Once you've started talking, send after a pause. Before that, just wait. */
   const armSubmit = useCallback(() => {
     clearSilence();
     silenceRef.current = setTimeout(submitNow, SILENCE_MS);
   }, [submitNow]);
 
-  const stopListening = useCallback(() => {
-    stoppingRef.current = true;
+  /** Give you plenty of time to begin — nothing is sent until you speak. */
+  const armWaitForSpeech = useCallback(() => {
     clearSilence();
-    try { recRef.current?.stop(); } catch {}
-    if (mediaRef.current?.state === 'recording') mediaRef.current.stop();
-    setModeBoth('idle');
+    silenceRef.current = setTimeout(() => {
+      if (heardRef.current) return;      // speech arrived; the pause timer owns it now
+      stoppingRef.current = true;
+      try { recRef.current?.stop(); } catch {}
+      setModeBoth('idle');
+      setQ('');
+    }, WAIT_FOR_SPEECH_MS);
   }, []);
 
-  /** Continuous recognition: idles on the wake word, captures after it. */
-  const startRecognition = useCallback((initial: Mode) => {
+  /** Listens continuously and only sends after a real pause, so you can think mid-sentence. */
+  const startRecognition = useCallback(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return false;
+    if (modeRef.current === 'capturing') return true;   // already live — never run two sessions
+    clearSilence();
     try { recRef.current?.stop(); } catch {}
 
     const rec = new SR();
@@ -151,14 +174,15 @@ export default function JarvisWidget() {
     rec.continuous = true;
     stoppingRef.current = false;
     startedRef.current = false;
+    setHeardBoth(false);
     finalRef.current = '';
-    setModeBoth(initial);
+    setModeBoth('capturing');
 
     rec.onstart = () => { startedRef.current = true; retriedRef.current = false; setVoiceBlocked(false); };
 
     rec.onresult = (e: any) => {
       // Ignore our own voice coming back through the mic
-      if (hasTTS && window.speechSynthesis.speaking) return;
+      if (speakingRef.current) return;
 
       let interim = '';
       let finals = '';
@@ -169,22 +193,11 @@ export default function JarvisWidget() {
       }
       const heard = (finals + interim).trim();
 
-      if (modeRef.current === 'standby') {
-        const m = heard.match(WAKE);
-        if (!m) return;                                  // not for us — stay quiet
-        const after = heard.slice((m.index || 0) + m[0].length).trim();
-        setModeBoth('capturing');
-        finalRef.current = after ? after + ' ' : '';
-        setQ(after);
-        armSubmit();
-        return;
-      }
-
-      if (modeRef.current === 'capturing') {
-        finalRef.current += finals;
-        setQ((finalRef.current + interim).trim());
-        armSubmit();                                     // any sound resets the countdown
-      }
+      if (modeRef.current !== 'capturing') return;
+      finalRef.current += finals;
+      const shown = (finalRef.current + interim).trim();
+      setQ(shown);
+      if (shown) { setHeardBoth(true); armSubmit(); }   // pause timer starts only once you speak
     };
 
     rec.onerror = (e: any) => {
@@ -239,14 +252,18 @@ export default function JarvisWidget() {
       const buf = new Uint8Array(analyser.fftSize);
       const startedAt = Date.now();
       let quietSince: number | null = null;
+      let spoke = false;
       const tick = () => {
         if (rec.state !== 'recording') { ctx.close().catch(() => {}); return; }
         analyser.getByteTimeDomainData(buf);
         let peak = 0;
         for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
         const now = Date.now();
-        if (peak > 6) quietSince = null; else if (quietSince === null) quietSince = now;
-        if (quietSince && now - startedAt > MIN_SPEECH_MS && now - quietSince > SILENCE_MS) { rec.stop(); return; }
+        if (peak > 6) { spoke = true; quietSince = null; } else if (quietSince === null) quietSince = now;
+
+        // Only close the clip once you've actually said something and then gone quiet
+        if (spoke && quietSince && now - startedAt > MIN_SPEECH_MS && now - quietSince > SILENCE_MS) { rec.stop(); return; }
+        if (!spoke && now - startedAt > WAIT_FOR_SPEECH_MS) { rec.stop(); return; }
         if (now - startedAt > 60000) { rec.stop(); return; }
         requestAnimationFrame(tick);
       };
@@ -257,54 +274,53 @@ export default function JarvisWidget() {
     }
   }, [ask, speak]);
 
-  // Mic button: skip the wake word and capture right away (or stop if already capturing)
+  // Mic button: start listening; once you've spoken it doubles as "send now"
   const micTap = () => {
-    if (mode === 'capturing') { clearSilence(); submitNow(); return; }
+    if (mode === 'capturing') {
+      if (!heardRef.current) return;      // already listening and you haven't spoken — leave the mic open
+      clearSilence(); submitNow(); return;
+    }
     stopSpeaking();
     setVoiceBlocked(false); retriedRef.current = false;
-    if (hasSR) { startRecognition('capturing'); armSubmit(); }
+    if (hasSR) { startRecognition(); armWaitForSpeech(); }
     else recordOnce();
   };
 
   // ---------- panel lifecycle ----------
-  const toggleOpen = () => {
-    setOpen(o => {
-      const next = !o;
-      if (next) {
-        if (wake && hasSR) startRecognition('standby');   // must run in the click's gesture context
-        setTimeout(() => speak(GREETING), 150);
-      } else {
-        stopSpeaking();
-        stopListening();
-      }
-      return next;
-    });
-  };
+  const closePanel = useCallback(() => { stopListening(); stopSpeaking(); setOpen(false); }, [stopListening, stopSpeaking]);
 
-  // keep the mic armed for the wake word whenever the panel is open
-  useEffect(() => {
-    if (!open || !hasSR) return;
-    if (wake && modeRef.current === 'idle' && !busy && !voiceBlocked) startRecognition('standby');
-    if (!wake) stopListening();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, wake, busy, voiceBlocked]);
+  /** First open = greet, then listen on its own. Every turn after that is tap-to-talk. */
+  const openPanel = useCallback(() => {
+    setOpen(true);
+    openRef.current = true;
+    stopSpeaking();
+    setVoiceBlocked(false);
+    retriedRef.current = false;
+    // Mic opens only once the greeting has finished playing, so it captures you and not Jarvis
+    speak(GREETING).then(() => {
+      if (!openRef.current) return;                       // closed while greeting
+      if (hasSR) { startRecognition(); armWaitForSpeech(); }
+      else recordOnce();                                  // Android webview: no Web Speech API
+    });
+  }, [hasSR, startRecognition, speak, stopSpeaking, armWaitForSpeech, recordOnce]);
+
+  const toggleOpen = () => (openRef.current ? closePanel() : openPanel());
 
   useEffect(() => () => { stopListening(); stopSpeaking(); }, [stopListening, stopSpeaking]);
 
   // Tap outside (or Esc) closes the assistant and releases the mic
   useEffect(() => {
     if (!open) return;
-    const close = () => { stopListening(); stopSpeaking(); setOpen(false); };
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node;
       if (panelRef.current?.contains(t) || fabRef.current?.contains(t)) return;
-      close();
+      closePanel();
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closePanel(); };
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey); };
-  }, [open, stopListening, stopSpeaking]);
+  }, [open, closePanel]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -313,7 +329,7 @@ export default function JarvisWidget() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wake, muted]);
+  }, [openPanel, closePanel]);
 
   const toggleMute = () => {
     const next = !muted; setMuted(next); mutedRef.current = next;
@@ -325,11 +341,10 @@ export default function JarvisWidget() {
 
   const statusLabel =
     busy ? 'Thinking…'
-    : mode === 'capturing' ? 'Listening… pause when you\'re done'
+    : mode === 'capturing' ? (q ? 'Listening… pause when you\'re done' : 'Listening… go ahead')
     : speaking ? 'Speaking… tap to interrupt'
     : voiceBlocked ? 'Tap the mic to enable voice'
-    : mode === 'standby' ? 'Say “Hey Jarvis”'
-    : hasSR ? 'Tap the mic, or turn on Hey Jarvis' : 'Tap the mic to speak';
+    : 'Tap the mic to speak';
 
   return (
     <>
@@ -340,23 +355,17 @@ export default function JarvisWidget() {
       {open && (
         <div className="jarvis-panel" ref={panelRef}>
           <div className="jarvis-head">
-            <span className={`jarvis-dot ${mode === 'capturing' ? 'live' : mode === 'standby' ? 'armed' : ''}`} />
+            <span className={`jarvis-dot ${mode === 'capturing' ? 'live' : ''}`} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 800 }}>Jarvis</div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{statusLabel}</div>
             </div>
-            {hasSR && (
-              <button className={`icon-btn ${wake ? 'on' : ''}`} onClick={() => setWake(w => !w)}
-                title={wake ? 'Hey Jarvis is on — tap to disable' : 'Enable “Hey Jarvis”'} style={{ width: '32px', height: '32px' }}>
-                {wake ? <Mic size={15} /> : <MicOff size={15} />}
-              </button>
-            )}
             {hasTTS && (
               <button className="icon-btn" onClick={toggleMute} title={muted ? 'Unmute voice' : 'Mute voice'} style={{ width: '32px', height: '32px' }}>
                 {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
               </button>
             )}
-            <button className="icon-btn" onClick={() => { stopListening(); stopSpeaking(); setOpen(false); }}
+            <button className="icon-btn" onClick={closePanel}
               title="Close Jarvis" aria-label="Close Jarvis" style={{ width: '32px', height: '32px' }}>
               <X size={16} />
             </button>
@@ -367,7 +376,7 @@ export default function JarvisWidget() {
               <div>
                 <p style={{ fontWeight: 800, fontSize: '1.05rem', marginBottom: '4px' }}>{GREETING}</p>
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                  {wake && hasSR ? 'Say “Hey Jarvis” and ask, or tap one:' : 'Tap the mic and ask, or tap one:'}
+                  Tap the mic and ask, or tap one:
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {suggestions.map(s => <button key={s} className="jarvis-suggest" onClick={() => ask(s)}>{s}</button>)}
@@ -385,7 +394,7 @@ export default function JarvisWidget() {
                       return (
                         <a key={it.id} className={`jarvis-item ${it.urgent ? 'urgent' : ''}`} href={href}
                           target={external ? '_blank' : undefined} rel="noreferrer"
-                          onClick={e => { if (!external) { e.preventDefault(); setOpen(false); stopListening(); stopSpeaking(); router.push(href); } }}>
+                          onClick={e => { if (!external) { e.preventDefault(); closePanel(); router.push(href); } }}>
                           <span className="jarvis-type">{it.urgent ? 'URGENT' : it.type}</span>
                           <span style={{ flex: 1, minWidth: 0 }}>
                             <span style={{ display: 'block', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
@@ -404,13 +413,13 @@ export default function JarvisWidget() {
           </div>
 
           <div className="jarvis-input">
-            <button type="button" className={`jarvis-mic ${mode === 'capturing' ? 'on' : mode === 'standby' ? 'armed' : ''}`}
-              onClick={micTap} disabled={busy} aria-label={mode === 'capturing' ? 'Send' : 'Speak'}>
-              {mode === 'capturing' ? <Square size={18} fill="currentColor" /> : <Mic size={20} />}
+            <button type="button" className={`jarvis-mic ${mode === 'capturing' ? 'on' : ''}`}
+              onClick={micTap} disabled={busy} aria-label={mode === 'capturing' && heard ? 'Send' : 'Speak'}>
+              {mode === 'capturing' && heard ? <Square size={18} fill="currentColor" /> : <Mic size={20} />}
             </button>
             <form style={{ display: 'flex', gap: '8px', flex: 1 }} onSubmit={e => { e.preventDefault(); ask(q); }}>
               <input value={q} onChange={e => setQ(e.target.value)}
-                placeholder={mode === 'capturing' ? 'Listening…' : mode === 'standby' ? 'or type here…' : 'Ask anything…'} />
+                placeholder={mode === 'capturing' ? 'Listening…' : 'Ask anything…'} />
               <button type="submit" disabled={!q.trim() || busy || mode === 'capturing'} aria-label="Send"><Send size={16} /></button>
             </form>
           </div>
