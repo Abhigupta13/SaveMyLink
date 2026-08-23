@@ -143,6 +143,14 @@ export default function NotesPage() {
     load();
   };
 
+  // Notes in a project are the project owner's to delete; personal notes are mine.
+  const canRemove = (n: any) => {
+    const pid = n?.projectId?._id || n?.projectId;
+    if (!pid) return true;
+    const proj = projects.find((p: any) => String(p._id) === String(pid));
+    return (proj?.ownerId?.email || '').toLowerCase() === myEmail;
+  };
+
   const inScope = notes.filter(n => (scope ? n.projectId?._id === scope._id : !n.projectId));
   const filtered = inScope.filter(n => !q || `${n.title || ''} ${n.body}`.toLowerCase().includes(q.toLowerCase()));
   // Chip counts, so you can see where the notes are without switching scope
@@ -176,7 +184,7 @@ export default function NotesPage() {
             title="Attach image or document" aria-label="Attach image or document">
             <Paperclip size={16} />
           </button>
-          {noteIdRef.current && <button className="icon-btn danger" onClick={() => remove(noteIdRef.current!)} title="Delete"><Trash2 size={16} /></button>}
+          {noteIdRef.current && canRemove(editing) && <button className="icon-btn danger" onClick={() => remove(noteIdRef.current!)} title="Delete"><Trash2 size={16} /></button>}
           <button className="btn-primary" onClick={save} style={{ padding: '9px 20px', borderRadius: '12px', fontWeight: 800 }}>Done</button>
         </div>
         <input className="field" placeholder="Title" value={title} onChange={e => setTitle(e.target.value)}

@@ -8,7 +8,7 @@ import { Project } from "@/lib/models/Project";
 import { Contact } from "@/lib/models/Contact";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember } from "@/lib/projectAccess";
+import { projectForMember, canDelete } from "@/lib/projectAccess";
 import { chatJSON } from "@/lib/llm";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
@@ -288,9 +288,13 @@ export async function deleteMom(momId: string) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
     await connectToDatabase();
-    // Recorder only (owns the file)
-    const mom = await Mom.findOneAndDelete({ _id: momId, userId: session.user.id });
-    if (!mom) return { success: false, error: 'MOM not found or not yours' };
+    // A project meeting is the owner's to remove; a personal one, the recorder's.
+    const mom = await Mom.findById(momId);
+    if (!mom) return { success: false, error: 'MOM not found' };
+    if (!await canDelete(mom, session.user.id)) {
+      return { success: false, error: 'Only the project owner can delete this meeting' };
+    }
+    await mom.deleteOne();
     // Recordings made before transcripts replaced stored audio may still have a file
     if (mom.audioUrl) await unlink(path.join(process.cwd(), 'public', mom.audioUrl)).catch(() => {});
     return { success: true };

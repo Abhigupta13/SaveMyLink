@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember } from "@/lib/projectAccess";
+import { projectForMember, canDelete } from "@/lib/projectAccess";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 
@@ -185,7 +185,13 @@ export async function deleteTask(id: string) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
-    await Task.findOneAndDelete({ _id: id, userId: session.user.id });
+    // In a project only the owner may delete; outside one, only the person it belongs to.
+    const task = await Task.findById(id);
+    if (!task) return { success: false, error: 'Task not found' };
+    if (!await canDelete(task, session.user.id)) {
+      return { success: false, error: 'Only the project owner can delete this task' };
+    }
+    await task.deleteOne();
 
     revalidatePath('/tasks');
     return { success: true };

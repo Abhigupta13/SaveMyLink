@@ -5,7 +5,7 @@ import connectToDatabase from "@/lib/mongodb";
 import { Note } from "@/lib/models/Note";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
-import { projectForMember, mineOrMyProjects } from "@/lib/projectAccess";
+import { projectForMember, mineOrMyProjects, canDelete } from "@/lib/projectAccess";
 import { saveUpload, deleteUpload } from "@/lib/storage";
 import { extractText } from "@/lib/docText";
 
@@ -98,6 +98,10 @@ export async function deleteNote(id: string) {
     if (!who) return { success: false, error: 'Unauthorized' };
     const note = await noteIWrite(id, who.userId, who.email);
     if (!note) return { success: false, error: 'Note not found' };
+    // Editable by every member, removable only by the project owner
+    if (!await canDelete(note, who.userId)) {
+      return { success: false, error: 'Only the project owner can delete this note' };
+    }
     await note.deleteOne();
     // Attachments belong to the note, so they go with it rather than lingering as paid-for bytes
     for (const a of note.attachments || []) await deleteUpload(a.key);

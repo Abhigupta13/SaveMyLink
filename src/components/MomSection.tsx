@@ -39,6 +39,8 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   };
   const projectId: string = project?._id || '';
   const allProjects = projects.length ? projects : [project].filter(Boolean);
+  // A project meeting belongs to the project owner; a personal one to whoever recorded it.
+  const canRemove = !project || (project.ownerId?.email || '').toLowerCase() === (myEmail || '').toLowerCase();
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -258,7 +260,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                 {(mom.summary || mom.candidates?.length > 0) && (
                   <button onClick={() => handleShare(mom)} className="icon-btn" title="Share MOM"><Share2 size={15} /></button>
                 )}
-                <button onClick={() => handleDelete(mom._id)} className="icon-btn danger" title="Delete"><Trash2 size={15} /></button>
+                {canRemove && <button onClick={() => handleDelete(mom._id)} className="icon-btn danger" title="Delete"><Trash2 size={15} /></button>}
               </div>
 
               {showTranscript === mom._id && (

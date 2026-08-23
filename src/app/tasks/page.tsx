@@ -99,6 +99,14 @@ export default function TasksPage() {
   };
 
   const myEmail = (session?.user?.email || '').toLowerCase();
+  // Only a project's owner may delete work inside it; personal tasks stay mine.
+  const canRemove = (t: any) => {
+    const pid = t?.projectId?._id || t?.projectId;
+    if (!pid) return true;
+    const proj = projects.find((p: any) => String(p._id) === String(pid)) || activeProject;
+    return (proj?.ownerId?.email || '').toLowerCase() === myEmail;
+  };
+
   const memberOptions = activeProject
     ? [...new Set([myEmail, activeProject.ownerId?.email, ...(activeProject.memberEmails || [])])].filter(Boolean)
     : [];
@@ -282,10 +290,12 @@ export default function TasksPage() {
                 </>
               )}
               <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '6px' }}>
+                {canRemove(editing) ? (
                 <button className="icon-btn danger" title="Delete task"
                   onClick={async () => { if (await confirm({ title: 'Delete this task?', danger: true, confirmLabel: 'Delete' })) { handleDelete(editing._id); setEditing(null); } }}>
                   <Trash2 size={16} />
                 </button>
+                ) : <span />}
                 <button className="btn-primary" onClick={saveEdit} style={{ padding: '11px 26px', borderRadius: '12px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Check size={16} /> Save
                 </button>
@@ -343,7 +353,7 @@ export default function TasksPage() {
                       </div>
                     )}
                   </div>
-                  <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>
+                  {canRemove(t) && <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>}
                 </div>
               );
             })}

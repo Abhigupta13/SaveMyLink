@@ -322,7 +322,7 @@ export default function ProjectWorkspace() {
                           {who && <span className={`chip ${who === myEmail ? 'me' : ''}`} title={who}>{who === myEmail ? 'me' : shortOf(who)}</span>}
                         </div>
                       </div>
-                      <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>
+                      {isOwner && <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>}
                     </div>
                   );
                 })
@@ -477,10 +477,12 @@ export default function ProjectWorkspace() {
                   ))}
                 </select>
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '6px' }}>
-                  <button className="icon-btn danger" title="Delete task"
-                    onClick={async () => { if (await confirm({ title: 'Delete this task?', danger: true, confirmLabel: 'Delete' })) { handleDelete(editing._id); setEditing(null); } }}>
-                    <Trash2 size={16} />
-                  </button>
+                  {isOwner ? (
+                    <button className="icon-btn danger" title="Delete task"
+                      onClick={async () => { if (await confirm({ title: 'Delete this task?', danger: true, confirmLabel: 'Delete' })) { handleDelete(editing._id); setEditing(null); } }}>
+                      <Trash2 size={16} />
+                    </button>
+                  ) : <span />}
                   <button className="btn-primary" onClick={saveEdit} style={{ padding: '11px 26px', borderRadius: '12px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <Check size={16} /> Save
                   </button>

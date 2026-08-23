@@ -19,6 +19,16 @@ export async function myProjectIds(userId: string, email?: string | null) {
   return projects.map(p => p._id);
 }
 
+/**
+ * Deleting shared work is the project owner's call. Members can create and edit inside a
+ * project but not remove — losing a teammate's task to someone else's tidy-up is not
+ * recoverable. Personal records (no projectId) stay with whoever created them.
+ */
+export async function canDelete(doc: { projectId?: any; userId?: any }, userId: string) {
+  if (doc.projectId) return !!(await Project.exists({ _id: doc.projectId, ownerId: userId }));
+  return String(doc.userId) === String(userId);
+}
+
 /** Mine, or in one of my projects. The standard read scope for project-aware records. */
 export async function mineOrMyProjects(userId: string, email: string | null | undefined, ownerField = 'userId') {
   const ids = await myProjectIds(userId, email);
