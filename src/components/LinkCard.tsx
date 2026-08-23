@@ -3,10 +3,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePreview } from '@/components/PreviewContext';
 import { updateLink, deleteLink, toggleFavorite, refreshMetadata, toggleLinkPrivacy } from '@/actions/link';
-import { createTask } from '@/actions/task';
-import { syncTask } from '@/lib/taskNotifications';
+import { useFeedback } from '@/components/ui/Feedback';
 
 export default function LinkCard({ link, categories, privateSafe = false }: { link: any, categories: any[], privateSafe?: boolean }) {
+  const { toast, confirm } = useFeedback();
   const { showPreview } = usePreview();
   const categoryName = link.category?.name || 'Uncategorized';
   const categoryColor = link.category?.color || '#3b82f6';
@@ -22,26 +22,6 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
   const [isDeleting, setIsDeleting] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
-  const [showRemind, setShowRemind] = useState(false);
-  const [remindAt, setRemindAt] = useState('');
-
-  // Link → Task bridge: "remind me about this link"
-  const handleRemind = async () => {
-    if (!remindAt) return;
-    const res = await createTask(link.title || link.url, {
-      linkId: link._id,
-      dueAt: new Date(remindAt).toISOString(),
-    });
-    if (res.success) {
-      syncTask(res.task); // schedule on-device reminder immediately
-      setShowRemind(false);
-      setRemindAt('');
-      setStatus({ type: 'success', message: 'Reminder task created!' });
-      setTimeout(() => setStatus(null), 3000);
-    } else {
-      alert(res.error || 'Failed to create reminder');
-    }
-  };
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,17 +37,17 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
     if (res.success) {
       setIsEditing(false);
     } else {
-      alert(res.error || 'Failed to update link');
+      toast(res.error || 'Failed to update link', 'error');
     }
     setIsSaving(false);
   };
 
   const handleDelete = async () => {
-    if (!window.confirm('Are you sure you want to delete this link?')) return;
+    if (!(await confirm({ title: 'Are you sure you want to delete this link?', danger: true, confirmLabel: 'Delete' }))) return;
     setIsDeleting(true);
     const res = await deleteLink(link._id);
     if (!res.success) {
-      alert(res.error || 'Failed to delete link');
+      toast(res.error || 'Failed to delete link', 'error');
       setIsDeleting(false);
     }
   };
@@ -78,7 +58,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
     const res = await toggleFavorite(link._id, nextFavorite);
     if (!res.success) {
       setIsFavorite(!nextFavorite); // Revert on failure
-      alert(res.error || 'Failed to update favorite status');
+      toast(res.error || 'Failed to update favorite status', 'error');
     }
   };
 
@@ -86,7 +66,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
     setIsRefreshing(true);
     const res = await toggleLinkPrivacy(link._id, !link.isPrivate);
     if (!res.success) {
-      alert('Failed to update privacy: ' + res.error);
+      toast('Failed to update privacy: ' + res.error, 'error');
     }
     setIsRefreshing(false);
   };
@@ -288,22 +268,6 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
                   <span className="switch-label">Mark as Private Link 🔒</span>
                 </label>
               </div>
-
-              {showRemind && (
-                <div className="input-group" style={{ flexDirection: 'row', gap: '8px', alignItems: 'center' }}>
-                  <input
-                    type="datetime-local"
-                    value={remindAt}
-                    onChange={(e) => setRemindAt(e.target.value)}
-                    style={{ flex: 1 }}
-                  />
-                  <button type="button" className="btn-primary" onClick={handleRemind} disabled={!remindAt}
-                    style={{ padding: '10px 20px', borderRadius: '10px', fontWeight: 700 }}>
-                    Remind me
-                  </button>
-                </div>
-              )}
-
               <div className="modal-footer">
                 <button 
                   type="button" 
@@ -335,14 +299,6 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
                       style={{ background: 'var(--bg-tertiary)', width: '36px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)' }}
                     >
                       {isFavorite ? '★' : '☆'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowRemind(!showRemind)}
-                      title="Remind me about this"
-                      style={{ background: showRemind ? 'var(--accent-soft, rgba(74,222,128,0.15))' : 'var(--bg-tertiary)', width: '36px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}
-                    >
-                      ⏰
                     </button>
                     <button
                       type="button"

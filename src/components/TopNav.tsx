@@ -5,17 +5,15 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import AddLinkForm from './AddLinkForm';
 import PinModal from './PinModal';
 import { useSession } from 'next-auth/react';
-import { Search, Plus, Home, Link as LinkIcon, Library, CheckSquare, Mic, Users, Globe, Newspaper, Lock, Unlock, Upload, StickyNote, X } from 'lucide-react';
-import { useUser } from '@/components/UserContext';
+import { Search, Plus, Home, Link as LinkIcon, Library, CheckSquare, Mic, Users, Newspaper, Upload, StickyNote, X } from 'lucide-react';
 
 const NAV = [
   { label: 'Links', path: '/links', Icon: LinkIcon },
   { label: 'Notes', path: '/notes', Icon: StickyNote },
   { label: 'Tasks', path: '/tasks', Icon: CheckSquare },
   { label: 'MOM', path: '/mom', Icon: Mic },
-  { label: 'D-locker', path: '/d-locker', Icon: Library },
+  { label: 'Digi Locker', path: '/d-locker', Icon: Library },
   { label: 'Contacts', path: '/contacts', Icon: Users },
-  { label: 'Apps', path: '/social', Icon: Globe },
   { label: 'Digest', path: '/digest', Icon: Newspaper },
   { label: 'Import', path: '/import', Icon: Upload },
 ];
@@ -28,7 +26,6 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
-  const { privateSafe, setPrivateSafe, setPinModalOpen } = useUser();
   const initial = ((session?.user?.name || session?.user?.email || 'U') as string)[0].toUpperCase();
   const [categories, setCategories] = useState(initialCategories);
   useEffect(() => { setCategories(initialCategories); }, [initialCategories]);
@@ -61,10 +58,6 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
   };
 
   const isActive = (path: string) => path === '/' ? pathname === '/' : pathname.startsWith(path);
-  const toggleSafe = () => {
-    if (privateSafe) { setPrivateSafe(false); router.push('/links'); }
-    else setPinModalOpen(true);
-  };
   const goSearch = () => {
     if (pathname === '/links') setShowSearchBar(v => !v);
     else router.push('/search');
@@ -96,9 +89,6 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
               <Icon size={20} strokeWidth={2.2} /><span>{label}</span>
             </button>
           ))}
-          <button className={`rail-item ${privateSafe ? 'active' : ''}`} onClick={toggleSafe} title="Private Safe">
-            {privateSafe ? <Unlock size={20} strokeWidth={2.2} /> : <Lock size={20} strokeWidth={2.2} />}<span>Safe</span>
-          </button>
         </nav>
         <div className="rail-bottom">
           <button className={`rail-avatar ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')} title="Profile">{initial}</button>

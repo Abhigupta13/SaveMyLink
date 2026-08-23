@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document as MongooseDocument, Model } from 'mongoose';
+import { defineModel } from './registry';
 
 export interface IContact extends MongooseDocument {
   userId: mongoose.Types.ObjectId;
@@ -22,4 +23,4 @@ const ContactSchema = new Schema<IContact>({
 
 ContactSchema.index({ userId: 1, name: 1 });
 
-export const Contact: Model<IContact> = mongoose.models.Contact || mongoose.model<IContact>('Contact', ContactSchema);
+export const Contact: Model<IContact> = defineModel<IContact>('Contact', ContactSchema);

@@ -3,14 +3,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { Sparkles, X, Send, ArrowUpRight, Mic, Square, Volume2, VolumeX } from 'lucide-react';
+import { Sparkles, X, Send, ArrowUpRight, Mic, MicOff, Square, Volume2, VolumeX } from 'lucide-react';
 import { askJarvis, transcribeQuestion, JarvisItem, JarvisTurn } from '@/actions/jarvis';
 import { syncTask } from '@/lib/taskNotifications';
+import { getProjects } from '@/actions/project';
 
 type Msg = JarvisTurn & { items?: JarvisItem[] };
+type Mode = 'idle' | 'standby' | 'capturing';   // standby = waiting for the wake word
 
 const GREETING = "What's on your mind?";
-const SUGGESTIONS = ['What is urgent today?', 'Remind me to call Rohan tomorrow at 5pm', 'Did I save a site that turns code into images?'];
+const BASE_SUGGESTIONS = ['What is urgent today?', 'What did I save this week?'];
+
+// "hey jarvis", "hi jarvis", "ok jarvis", "hey travis/service" (what Whisper often hears)
+const WAKE = /\b(?:hey|hi|hello|ok|okay)?\s*(jarvis|jarvish|jervis|travis|charvis)\b/i;
+const SILENCE_MS = 2600;      // quiet time before we treat your question as finished
+const MIN_SPEECH_MS = 800;
 
 function itemHref(i: JarvisItem) {
   if (i.type === 'link' && i.url) return i.url;
@@ -20,8 +27,6 @@ function itemHref(i: JarvisItem) {
   if (i.type === 'note') return '/notes';
   return '/links';
 }
-
-// Strip markdown-ish bullets so TTS doesn't read dashes
 const speakable = (s: string) => s.replace(/^[-*•]\s*/gm, '').replace(/\s+/g, ' ').trim();
 
 export default function JarvisWidget() {
@@ -31,84 +36,181 @@ export default function JarvisWidget() {
   const [q, setQ] = useState('');
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
-  const [listening, setListening] = useState(false);
+  const [mode, setMode] = useState<Mode>('idle');
   const [speaking, setSpeaking] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [wake, setWake] = useState(true);       // hands-free wake word on by default
+  const [suggestions, setSuggestions] = useState<string[]>(BASE_SUGGESTIONS);
+
   const bottomRef = useRef<HTMLDivElement>(null);
-  const recRef = useRef<any>(null);          // SpeechRecognition instance
+  const panelRef = useRef<HTMLDivElement>(null);
+  const fabRef = useRef<HTMLButtonElement>(null);
+  const recRef = useRef<any>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const finalRef = useRef('');
+  const silenceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stoppingRef = useRef(false);
+  const modeRef = useRef<Mode>('idle');
+  const startedRef = useRef(false);      // did the browser actually open a mic session?
+  const retriedRef = useRef(false);
+  const [voiceBlocked, setVoiceBlocked] = useState(false);
+  const mutedRef = useRef(false);
   const msgsRef = useRef<Msg[]>([]);
   msgsRef.current = msgs;
+  const setModeBoth = (m: Mode) => { modeRef.current = m; setMode(m); };
 
   const hasSR = typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
   const hasTTS = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
-  useEffect(() => { try { setMuted(localStorage.getItem('jarvisMuted') === '1'); } catch {} }, []);
+  useEffect(() => { try { const m = localStorage.getItem('jarvisMuted') === '1'; setMuted(m); mutedRef.current = m; } catch {} }, []);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, busy]);
 
-  // ---- speech out ----
+  // Prompt examples that name the user's own projects, not made-up ones
+  useEffect(() => {
+    if (!open) return;
+    getProjects().then(res => {
+      const names = (res.success ? res.projects || [] : []).slice(0, 2).map((p: any) => p.name);
+      setSuggestions([
+        BASE_SUGGESTIONS[0],
+        ...names.map((n: string) => `Tell me about recent tasks in ${n}`),
+        BASE_SUGGESTIONS[1],
+      ].slice(0, 3));
+    }).catch(() => {});
+  }, [open]);
+
+  const clearSilence = () => { if (silenceRef.current) { clearTimeout(silenceRef.current); silenceRef.current = null; } };
+
+  // ---------- speaking ----------
   const stopSpeaking = useCallback(() => { if (hasTTS) window.speechSynthesis.cancel(); setSpeaking(false); }, [hasTTS]);
-  const speak = useCallback((text: string) => {
-    if (!hasTTS || muted || !text) return;
+
+  const speak = useCallback((text: string) => new Promise<void>(resolve => {
+    if (!hasTTS || mutedRef.current || !text) return resolve();
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(speakable(text));
     u.lang = 'en-IN';
     u.rate = 1.02;
     u.onstart = () => setSpeaking(true);
-    u.onend = () => setSpeaking(false);
-    u.onerror = () => setSpeaking(false);
+    u.onend = () => { setSpeaking(false); resolve(); };
+    u.onerror = () => { setSpeaking(false); resolve(); };
     window.speechSynthesis.speak(u);
-  }, [hasTTS, muted]);
+  }), [hasTTS]);
 
-  // ---- ask ----
+  // ---------- asking ----------
   const ask = useCallback(async (text: string) => {
     const question = text.trim();
     if (!question) return;
     setQ('');
+    finalRef.current = '';
     stopSpeaking();
     const history: JarvisTurn[] = msgsRef.current.map(m => ({ role: m.role, content: m.content }));
     setMsgs(m => [...m, { role: 'user', content: question }]);
     setBusy(true);
     const res = await askJarvis(question, history, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setBusy(false);
-    // Tasks Jarvis just created need their on-device reminders scheduled
     if (res.success) for (const t of res.createdTasks || []) syncTask(t);
     const reply: Msg = res.success
       ? { role: 'assistant', content: res.answer || '…', items: res.items }
       : { role: 'assistant', content: res.error || 'Something went wrong.' };
     setMsgs(m => [...m, reply]);
-    speak(reply.content);
+    await speak(reply.content);
   }, [speak, stopSpeaking]);
 
-  // ---- speech in ----
+  // ---------- listening ----------
+  const submitNow = useCallback(() => {
+    clearSilence();
+    const text = finalRef.current.trim();
+    finalRef.current = '';
+    if (!text) { setModeBoth(wake ? 'standby' : 'idle'); return; }
+    setModeBoth(wake ? 'standby' : 'idle');   // keep the mic armed for the next "Hey Jarvis"
+    ask(text);
+  }, [ask, wake]);
+
+  const armSubmit = useCallback(() => {
+    clearSilence();
+    silenceRef.current = setTimeout(submitNow, SILENCE_MS);
+  }, [submitNow]);
+
   const stopListening = useCallback(() => {
-    recRef.current?.stop();
+    stoppingRef.current = true;
+    clearSilence();
+    try { recRef.current?.stop(); } catch {}
     if (mediaRef.current?.state === 'recording') mediaRef.current.stop();
-    setListening(false);
+    setModeBoth('idle');
   }, []);
 
-  const startListening = useCallback(async () => {
-    if (listening || busy) return;
-    stopSpeaking();
+  /** Continuous recognition: idles on the wake word, captures after it. */
+  const startRecognition = useCallback((initial: Mode) => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SR) {
-      const rec = new SR();
-      rec.lang = 'en-IN';
-      rec.interimResults = true;
-      rec.onresult = (e: any) => {
-        const text = [...e.results].map((r: any) => r[0].transcript).join('');
-        setQ(text);
-        if (e.results[e.results.length - 1].isFinal) { rec.stop(); ask(text); }
-      };
-      rec.onend = () => setListening(false);
-      rec.onerror = () => setListening(false);
-      recRef.current = rec;
-      setListening(true);
-      rec.start();
-      return;
-    }
-    // Fallback (Android WebView): record → Whisper
+    if (!SR) return false;
+    try { recRef.current?.stop(); } catch {}
+
+    const rec = new SR();
+    rec.lang = 'en-IN';
+    rec.interimResults = true;
+    rec.continuous = true;
+    stoppingRef.current = false;
+    startedRef.current = false;
+    finalRef.current = '';
+    setModeBoth(initial);
+
+    rec.onstart = () => { startedRef.current = true; retriedRef.current = false; setVoiceBlocked(false); };
+
+    rec.onresult = (e: any) => {
+      // Ignore our own voice coming back through the mic
+      if (hasTTS && window.speechSynthesis.speaking) return;
+
+      let interim = '';
+      let finals = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finals += r[0].transcript + ' ';
+        else interim += r[0].transcript;
+      }
+      const heard = (finals + interim).trim();
+
+      if (modeRef.current === 'standby') {
+        const m = heard.match(WAKE);
+        if (!m) return;                                  // not for us — stay quiet
+        const after = heard.slice((m.index || 0) + m[0].length).trim();
+        setModeBoth('capturing');
+        finalRef.current = after ? after + ' ' : '';
+        setQ(after);
+        armSubmit();
+        return;
+      }
+
+      if (modeRef.current === 'capturing') {
+        finalRef.current += finals;
+        setQ((finalRef.current + interim).trim());
+        armSubmit();                                     // any sound resets the countdown
+      }
+    };
+
+    rec.onerror = (e: any) => {
+      if (e?.error === 'no-speech' || e?.error === 'aborted') return;
+      stoppingRef.current = true;
+      setModeBoth('idle');
+    };
+    rec.onend = () => {
+      if (stoppingRef.current) { setModeBoth('idle'); return; }
+      // Chrome ends instantly (no onstart) when the call had no user gesture — retry once, then ask for a tap
+      if (!startedRef.current) {
+        if (retriedRef.current) { setModeBoth('idle'); setVoiceBlocked(true); return; }
+        retriedRef.current = true;
+        setTimeout(() => { try { rec.start(); } catch { setModeBoth('idle'); setVoiceBlocked(true); } }, 250);
+        return;
+      }
+      try { rec.start(); } catch { setModeBoth('idle'); }   // sessions are short-lived; keep it alive
+    };
+
+    recRef.current = rec;
+    try { rec.start(); } catch { return false; }
+    return true;
+  }, [armSubmit, hasTTS]);
+
+  /** Fallback for the Android app (no Web Speech API): tap-to-talk, stops on silence. */
+  const recordOnce = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const rec = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : undefined });
@@ -116,8 +218,9 @@ export default function JarvisWidget() {
       rec.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
       rec.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
-        setListening(false);
+        setModeBoth('idle');
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        if (blob.size < 1200) { setQ(''); return; }
         setQ('Transcribing…'); setBusy(true);
         const fd = new FormData(); fd.append('audio', blob, 'q.webm');
         const tr = await transcribeQuestion(fd);
@@ -126,26 +229,82 @@ export default function JarvisWidget() {
         else { setQ(''); speak("Sorry, I didn't catch that."); }
       };
       mediaRef.current = rec;
-      setListening(true);
+      setModeBoth('capturing');
       rec.start();
-      // safety stop after 20s of talking
-      setTimeout(() => { if (rec.state === 'recording') rec.stop(); }, 20000);
+
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      const startedAt = Date.now();
+      let quietSince: number | null = null;
+      const tick = () => {
+        if (rec.state !== 'recording') { ctx.close().catch(() => {}); return; }
+        analyser.getByteTimeDomainData(buf);
+        let peak = 0;
+        for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
+        const now = Date.now();
+        if (peak > 6) quietSince = null; else if (quietSince === null) quietSince = now;
+        if (quietSince && now - startedAt > MIN_SPEECH_MS && now - quietSince > SILENCE_MS) { rec.stop(); return; }
+        if (now - startedAt > 60000) { rec.stop(); return; }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
     } catch {
       speak('Microphone is not available.');
+      setModeBoth('idle');
     }
-  }, [listening, busy, stopSpeaking, ask, speak]);
+  }, [ask, speak]);
 
-  // Open: greet aloud and start listening (voice-first)
+  // Mic button: skip the wake word and capture right away (or stop if already capturing)
+  const micTap = () => {
+    if (mode === 'capturing') { clearSilence(); submitNow(); return; }
+    stopSpeaking();
+    setVoiceBlocked(false); retriedRef.current = false;
+    if (hasSR) { startRecognition('capturing'); armSubmit(); }
+    else recordOnce();
+  };
+
+  // ---------- panel lifecycle ----------
   const toggleOpen = () => {
     setOpen(o => {
       const next = !o;
       if (next) {
-        setTimeout(() => { speak(GREETING); }, 150);
-        setTimeout(() => { startListening(); }, muted ? 200 : 1400);
-      } else { stopSpeaking(); stopListening(); }
+        if (wake && hasSR) startRecognition('standby');   // must run in the click's gesture context
+        setTimeout(() => speak(GREETING), 150);
+      } else {
+        stopSpeaking();
+        stopListening();
+      }
       return next;
     });
   };
+
+  // keep the mic armed for the wake word whenever the panel is open
+  useEffect(() => {
+    if (!open || !hasSR) return;
+    if (wake && modeRef.current === 'idle' && !busy && !voiceBlocked) startRecognition('standby');
+    if (!wake) stopListening();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, wake, busy, voiceBlocked]);
+
+  useEffect(() => () => { stopListening(); stopSpeaking(); }, [stopListening, stopSpeaking]);
+
+  // Tap outside (or Esc) closes the assistant and releases the mic
+  useEffect(() => {
+    if (!open) return;
+    const close = () => { stopListening(); stopSpeaking(); setOpen(false); };
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (panelRef.current?.contains(t) || fabRef.current?.contains(t)) return;
+      close();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open, stopListening, stopSpeaking]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -154,46 +313,64 @@ export default function JarvisWidget() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [muted]);
+  }, [wake, muted]);
 
   const toggleMute = () => {
-    const next = !muted; setMuted(next);
+    const next = !muted; setMuted(next); mutedRef.current = next;
     try { localStorage.setItem('jarvisMuted', next ? '1' : '0'); } catch {}
     if (next) stopSpeaking();
   };
 
   if (status !== 'authenticated') return null;
 
-  const micLabel = listening ? 'Listening… tap to stop' : busy ? 'Thinking…' : speaking ? 'Speaking… tap to interrupt' : 'Tap to speak';
+  const statusLabel =
+    busy ? 'Thinking…'
+    : mode === 'capturing' ? 'Listening… pause when you\'re done'
+    : speaking ? 'Speaking… tap to interrupt'
+    : voiceBlocked ? 'Tap the mic to enable voice'
+    : mode === 'standby' ? 'Say “Hey Jarvis”'
+    : hasSR ? 'Tap the mic, or turn on Hey Jarvis' : 'Tap the mic to speak';
 
   return (
     <>
-      <button className={`jarvis-fab ${listening ? 'listening' : ''}`} onClick={toggleOpen} title="Jarvis (Ctrl+J)" aria-label="Jarvis">
+      <button ref={fabRef} className={`jarvis-fab ${open ? 'is-open' : ''} ${mode === 'capturing' ? 'listening' : ''}`} onClick={toggleOpen} title="Jarvis (Ctrl+J)" aria-label="Jarvis">
         {open ? <X size={22} /> : <Sparkles size={22} />}
       </button>
 
       {open && (
-        <div className="jarvis-panel">
+        <div className="jarvis-panel" ref={panelRef}>
           <div className="jarvis-head">
-            <span className={`jarvis-dot ${listening ? 'live' : ''}`} />
-            <div style={{ flex: 1 }}>
+            <span className={`jarvis-dot ${mode === 'capturing' ? 'live' : mode === 'standby' ? 'armed' : ''}`} />
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 800 }}>Jarvis</div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{micLabel}</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{statusLabel}</div>
             </div>
+            {hasSR && (
+              <button className={`icon-btn ${wake ? 'on' : ''}`} onClick={() => setWake(w => !w)}
+                title={wake ? 'Hey Jarvis is on — tap to disable' : 'Enable “Hey Jarvis”'} style={{ width: '32px', height: '32px' }}>
+                {wake ? <Mic size={15} /> : <MicOff size={15} />}
+              </button>
+            )}
             {hasTTS && (
               <button className="icon-btn" onClick={toggleMute} title={muted ? 'Unmute voice' : 'Mute voice'} style={{ width: '32px', height: '32px' }}>
                 {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
               </button>
             )}
+            <button className="icon-btn" onClick={() => { stopListening(); stopSpeaking(); setOpen(false); }}
+              title="Close Jarvis" aria-label="Close Jarvis" style={{ width: '32px', height: '32px' }}>
+              <X size={16} />
+            </button>
           </div>
 
           <div className="jarvis-body">
             {msgs.length === 0 && (
               <div>
                 <p style={{ fontWeight: 800, fontSize: '1.05rem', marginBottom: '4px' }}>{GREETING}</p>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>Speak, or tap one of these:</p>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                  {wake && hasSR ? 'Say “Hey Jarvis” and ask, or tap one:' : 'Tap the mic and ask, or tap one:'}
+                </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {SUGGESTIONS.map(s => <button key={s} className="jarvis-suggest" onClick={() => ask(s)}>{s}</button>)}
+                  {suggestions.map(s => <button key={s} className="jarvis-suggest" onClick={() => ask(s)}>{s}</button>)}
                 </div>
               </div>
             )}
@@ -208,7 +385,7 @@ export default function JarvisWidget() {
                       return (
                         <a key={it.id} className={`jarvis-item ${it.urgent ? 'urgent' : ''}`} href={href}
                           target={external ? '_blank' : undefined} rel="noreferrer"
-                          onClick={e => { if (!external) { e.preventDefault(); setOpen(false); stopSpeaking(); router.push(href); } }}>
+                          onClick={e => { if (!external) { e.preventDefault(); setOpen(false); stopListening(); stopSpeaking(); router.push(href); } }}>
                           <span className="jarvis-type">{it.urgent ? 'URGENT' : it.type}</span>
                           <span style={{ flex: 1, minWidth: 0 }}>
                             <span style={{ display: 'block', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
@@ -227,12 +404,14 @@ export default function JarvisWidget() {
           </div>
 
           <div className="jarvis-input">
-            <button type="button" className={`jarvis-mic ${listening ? 'on' : ''}`} onClick={listening ? stopListening : startListening} disabled={busy} aria-label={listening ? 'Stop' : 'Speak'}>
-              {listening ? <Square size={18} fill="currentColor" /> : <Mic size={20} />}
+            <button type="button" className={`jarvis-mic ${mode === 'capturing' ? 'on' : mode === 'standby' ? 'armed' : ''}`}
+              onClick={micTap} disabled={busy} aria-label={mode === 'capturing' ? 'Send' : 'Speak'}>
+              {mode === 'capturing' ? <Square size={18} fill="currentColor" /> : <Mic size={20} />}
             </button>
             <form style={{ display: 'flex', gap: '8px', flex: 1 }} onSubmit={e => { e.preventDefault(); ask(q); }}>
-              <input value={q} onChange={e => setQ(e.target.value)} placeholder={listening ? 'Listening…' : 'or type here…'} />
-              <button type="submit" disabled={!q.trim() || busy || listening} aria-label="Send"><Send size={16} /></button>
+              <input value={q} onChange={e => setQ(e.target.value)}
+                placeholder={mode === 'capturing' ? 'Listening…' : mode === 'standby' ? 'or type here…' : 'Ask anything…'} />
+              <button type="submit" disabled={!q.trim() || busy || mode === 'capturing'} aria-label="Send"><Send size={16} /></button>
             </form>
           </div>
         </div>

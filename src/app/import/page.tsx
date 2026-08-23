@@ -7,7 +7,7 @@ import BulkImportModal from '@/components/BulkImportModal';
 export default function ImportPage() {
   const router = useRouter();
   return (
-    <div className="container" style={{ maxWidth: '640px', padding: '24px 16px 120px' }}>
+    <div className="container" style={{ padding: '24px 16px 120px' }}>
       <header style={{ marginBottom: '18px' }}>
         <h1 className="page-title">Import links</h1>
         <p className="page-subtitle">Paste a list of URLs or upload a CSV</p>

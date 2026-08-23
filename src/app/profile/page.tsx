@@ -2,12 +2,16 @@
 
 import { useEffect, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut } from 'lucide-react';
+import { LogOut, Lock, Unlock } from 'lucide-react';
 import { getContacts } from '@/actions/contact';
 import { getMyOpenTasks } from '@/actions/task';
 import { getProjects } from '@/actions/project';
+import { useFeedback } from '@/components/ui/Feedback';
+import { useUser } from '@/components/UserContext';
 
 export default function ProfilePage() {
+  const { confirm, toast } = useFeedback();
+  const { privateSafe, setPrivateSafe, setPinModalOpen } = useUser();
   const { data: session, status } = useSession();
   const [stats, setStats] = useState<{ tasks: number; projects: number; contacts: number } | null>(null);
   const user = session?.user;
@@ -25,7 +29,7 @@ export default function ProfilePage() {
   }, [status]);
 
   return (
-    <div className="container" style={{ maxWidth: '520px', padding: '32px 16px 120px' }}>
+    <div className="page narrow">
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', marginBottom: '28px' }}>
         <div className="user-avatar-large" style={{ width: '86px', height: '86px', fontSize: '2.1rem', marginBottom: '14px' }}>{initial}</div>
         <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '2px' }}>{user?.name || 'You'}</h1>
@@ -45,8 +49,28 @@ export default function ProfilePage() {
         ))}
       </div>
 
-      <button onClick={() => { if (window.confirm('Log out?')) signOut({ callbackUrl: '/' }); }}
-        style={{ width: '100%', height: '48px', borderRadius: '14px', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', fontWeight: 800, border: '1px solid rgba(239, 68, 68, 0.25)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+      {/* Private Safe: unlocking needs the PIN, locking never does */}
+      <div className="card safe-row">
+        <span className={`safe-icon ${privateSafe ? 'on' : ''}`}>
+          {privateSafe ? <Unlock size={18} /> : <Lock size={18} />}
+        </span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontWeight: 700 }}>Private Safe</span>
+          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            {privateSafe ? 'Unlocked — private links are visible' : 'Locked — enter your PIN to view private links'}
+          </span>
+        </span>
+        <label className="switch" title={privateSafe ? 'Lock the safe' : 'Unlock with PIN'}>
+          <input type="checkbox" checked={privateSafe} onChange={() => {
+            if (privateSafe) { setPrivateSafe(false); toast('Private Safe locked', 'success'); }
+            else setPinModalOpen(true);          // PIN required only to turn it on
+          }} />
+          <span className="slider round"></span>
+        </label>
+      </div>
+
+      <button onClick={async () => { if (await confirm({ title: 'Log out?', message: 'You can sign back in anytime.', confirmLabel: 'Log out' })) signOut({ callbackUrl: '/' }); }}
+        style={{ marginTop: '18px', width: '100%', height: '48px', borderRadius: '14px', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', fontWeight: 800, border: '1px solid rgba(239, 68, 68, 0.25)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
         <LogOut size={18} /> Log out
       </button>
     </div>

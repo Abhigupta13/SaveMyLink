@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
+import { defineModel } from './registry';
 import { ICategory } from './Category';
 
 export interface ILink extends Document {
@@ -34,4 +35,4 @@ const LinkSchema: Schema<ILink> = new Schema({
 
 LinkSchema.index({ userId: 1, isPrivate: 1, createdAt: -1 });
 
-export const Link: Model<ILink> = mongoose.models.Link || mongoose.model<ILink>('Link', LinkSchema);
+export const Link: Model<ILink> = defineModel<ILink>('Link', LinkSchema);

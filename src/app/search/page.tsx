@@ -43,7 +43,7 @@ function SearchPageInner() {
   );
 
   return (
-    <div className="container" style={{ maxWidth: '640px', padding: '24px 16px 120px' }}>
+    <div className="container" style={{ padding: '24px 16px 120px' }}>
       <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--text-primary)', marginBottom: '20px' }}>Search everything</h1>
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '4px 4px 4px 18px', background: 'var(--bg-secondary)', borderRadius: '20px', border: '1px solid var(--border-color)', marginBottom: '32px' }}>
         <Search size={20} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />

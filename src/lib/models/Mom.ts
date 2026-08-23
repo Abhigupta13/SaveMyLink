@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document as MongooseDocument, Model } from 'mongoose';
+import { defineModel } from './registry';
 
 // Minutes-of-meeting recording. Pipeline state is inferred from field presence:
 // audioUrl only → uploaded; +transcript → transcribed; +summary/candidates → ready
@@ -10,7 +11,15 @@ export interface IMom extends MongooseDocument {
   audioUrl: string;
   transcript?: string;
   summary?: string;
-  candidates: { title: string; assigneeEmail?: string }[];
+  candidates: {
+    kind: 'task' | 'note';
+    title: string;
+    detail?: string;
+    dueAt?: Date | null;
+    assigneeEmail?: string;
+    projectId?: mongoose.Types.ObjectId | null;
+    missing?: string[];   // fields the transcript didn't specify — user is asked to fill these
+  }[];
   tasksConfirmed: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -23,10 +32,18 @@ const MomSchema = new Schema<IMom>({
   audioUrl: { type: String, required: true },
   transcript: { type: String },
   summary: { type: String },
-  candidates: [{ title: String, assigneeEmail: String }],
+  candidates: [{
+    kind: { type: String, enum: ['task', 'note'], default: 'task' },
+    title: String,
+    detail: String,
+    dueAt: Date,
+    assigneeEmail: String,
+    projectId: { type: Schema.Types.ObjectId, ref: 'Project' },
+    missing: [String],
+  }],
   tasksConfirmed: { type: Boolean, default: false },
 }, { timestamps: true });
 
 MomSchema.index({ projectId: 1, createdAt: -1 });
 
-export const Mom: Model<IMom> = mongoose.models.Mom || mongoose.model<IMom>('Mom', MomSchema);
+export const Mom: Model<IMom> = defineModel<IMom>('Mom', MomSchema);

@@ -109,3 +109,19 @@ export async function deleteProject(projectId: string) {
     return { success: false, error: 'Failed to delete project' };
   }
 }
+
+export async function renameProject(projectId: string, name: string) {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    if (!name.trim()) return { success: false, error: 'Name required' };
+    const res = await Project.findOneAndUpdate({ _id: projectId, ownerId: session.user.id }, { name: name.trim() }, { new: true });
+    if (!res) return { success: false, error: 'Only the project owner can rename it' };
+    revalidatePath('/tasks');
+    return { success: true, project: JSON.parse(JSON.stringify(res)) };
+  } catch (error) {
+    console.error('Failed to rename project:', error);
+    return { success: false, error: 'Failed to rename project' };
+  }
+}

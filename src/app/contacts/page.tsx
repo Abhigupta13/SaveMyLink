@@ -4,11 +4,13 @@ import { useEffect, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { Phone, Mail, MessageCircle, Plus, Pencil, Trash2, X } from 'lucide-react';
 import { getContacts, createContact, updateContact, deleteContact, ContactInput } from '@/actions/contact';
+import { useFeedback } from '@/components/ui/Feedback';
 
 const EMPTY: ContactInput = { name: '', phone: '', email: '', company: '', note: '' };
 const digits = (s?: string) => (s || '').replace(/\D/g, '');
 
 export default function ContactsPage() {
+  const { toast, confirm } = useFeedback();
   const { status } = useSession();
   const [contacts, setContacts] = useState<any[]>([]);
   const [team, setTeam] = useState<any[]>([]);
@@ -31,13 +33,14 @@ export default function ContactsPage() {
     e.preventDefault();
     if (!form) return;
     const res = editingId ? await updateContact(editingId, form) : await createContact(form);
-    if (res.success) { setForm(null); setEditingId(null); load(); } else alert(res.error);
+    if (res.success) { setForm(null); setEditingId(null); load(); } else toast(res.error || 'Something went wrong', 'error');
   };
 
   const remove = async () => {
-    if (!editingId || !window.confirm('Delete this contact?')) return;
+    if (!editingId) return;
+    if (!(await confirm({ title: 'Delete this contact?', danger: true, confirmLabel: 'Delete' }))) return;
     const res = await deleteContact(editingId);
-    if (res.success) { setForm(null); setEditingId(null); load(); } else alert(res.error);
+    if (res.success) { setForm(null); setEditingId(null); load(); } else toast(res.error || 'Something went wrong', 'error');
   };
 
   const filtered = contacts.filter(c => !q || [c.name, c.company, c.email, c.phone].join(' ').toLowerCase().includes(q.toLowerCase()));
@@ -51,7 +54,7 @@ export default function ContactsPage() {
   );
 
   return (
-    <div className="container" style={{ maxWidth: '640px', padding: '24px 16px 120px' }}>
+    <div className="container" style={{ padding: '24px 16px 120px' }}>
       <header style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '20px', gap: '12px' }}>
         <div>
           <h1 className="page-title">Contacts</h1>

@@ -26,3 +26,8 @@ export async function hasSafe(userId: string) {
   if (!uid || !exp || !sig) return false;
   return uid === userId && Number(exp) > Date.now() && sig === sign(`${uid}.${exp}`); // ponytail: use timingSafeEqual if paranoid
 }
+
+/** Locking the safe must destroy the server-side grant, not just the UI flag. */
+export async function revokeSafe() {
+  (await cookies()).delete('safeAuth');
+}

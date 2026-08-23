@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { Plus, Pin, Trash2, X } from 'lucide-react';
 import { getNotes, createNote, updateNote, deleteNote } from '@/actions/note';
+import { useFeedback } from '@/components/ui/Feedback';
 
 const preview = (b: string) => b.replace(/\s+/g, ' ').slice(0, 160);
 const when = (iso: string) => {
@@ -14,6 +15,7 @@ const when = (iso: string) => {
 };
 
 export default function NotesPage() {
+  const { toast, confirm } = useFeedback();
   const { status } = useSession();
   const [notes, setNotes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -40,11 +42,11 @@ export default function NotesPage() {
     const res = editing?._id
       ? await updateNote(editing._id, { title: title.trim(), body: body.trim() })
       : await createNote({ title: title.trim(), body: body.trim() });
-    if (res.success) { setEditing(null); load(); } else alert(res.error);
+    if (res.success) { setEditing(null); load(); } else toast(res.error || 'Something went wrong', 'error');
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm('Delete this note?')) return;
+    if (!(await confirm({ title: 'Delete this note?', danger: true, confirmLabel: 'Delete' }))) return;
     setNotes(n => n.filter(x => x._id !== id));
     setEditing(null);
     const res = await deleteNote(id);
@@ -61,7 +63,7 @@ export default function NotesPage() {
 
   if (editing) {
     return (
-      <div className="container" style={{ maxWidth: '640px', padding: '20px 16px 120px' }}>
+      <div className="container" style={{ padding: '20px 16px 120px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
           <button className="icon-btn" onClick={save} title="Back"><X size={16} /></button>
           <span style={{ flex: 1, fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
@@ -79,7 +81,7 @@ export default function NotesPage() {
   }
 
   return (
-    <div className="container" style={{ maxWidth: '640px', padding: '24px 16px 120px' }}>
+    <div className="container" style={{ padding: '24px 16px 120px' }}>
       <header style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '18px', gap: '12px' }}>
         <div>
           <h1 className="page-title">Notes</h1>

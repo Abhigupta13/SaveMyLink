@@ -3,10 +3,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
-import { Plus, Mic, UserPlus, Trash2 } from 'lucide-react';
-import { getTasks, getMyOpenTasks, createTask, toggleTask, deleteTask } from '@/actions/task';
-import { getProjects, createProject, addMember, deleteProject, updateProjectNotes } from '@/actions/project';
+import { Plus, Mic, UserPlus, Trash2, X, Check } from 'lucide-react';
+import { getTasks, getMyOpenTasks, createTask, toggleTask, deleteTask, updateTask } from '@/actions/task';
+import { getProjects, createProject, addMember, deleteProject, updateProjectNotes, renameProject } from '@/actions/project';
+import ProjectPicker from '@/components/ProjectPicker';
 import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
+import { useFeedback } from '@/components/ui/Feedback';
 
 type Group = { key: string; label: string; tasks: any[]; cls?: string };
 
@@ -49,6 +51,7 @@ function groupTasks(tasks: any[]): Group[] {
 }
 
 export default function TasksPage() {
+  const { toast, confirm } = useFeedback();
   const { data: session, status } = useSession();
   const [projects, setProjects] = useState<any[]>([]);
   const [activeProject, setActiveProject] = useState<any | null>(null);
@@ -56,8 +59,6 @@ export default function TasksPage() {
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
   const [assignee, setAssignee] = useState('');
-  const [showNewProject, setShowNewProject] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('');
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [loading, setLoading] = useState(true);
@@ -65,6 +66,40 @@ export default function TasksPage() {
   const [notesDraft, setNotesDraft] = useState('');
   const [notesSaved, setNotesSaved] = useState(true);
   const [showDone, setShowDone] = useState(false);
+  const [editing, setEditing] = useState<any | null>(null); // task being edited
+  const [draft, setDraft] = useState({ title: '', dueAt: '', assigneeEmail: '', projectId: '' });
+
+  const toLocalInput = (iso?: string | null) => {
+    if (!iso) return '';
+    const d = new Date(iso); if (isNaN(d.getTime())) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const openEdit = (task: any) => {
+    setEditing(task);
+    setDraft({
+      title: task.title || '',
+      dueAt: toLocalInput(task.dueAt),
+      assigneeEmail: task.assigneeId?.email || task.assigneeEmail || '',
+      projectId: task.projectId ? String(task.projectId) : '',
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    const res = await updateTask(editing._id, {
+      title: draft.title.trim() || editing.title,
+      dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null,
+      assigneeEmail: draft.projectId ? (draft.assigneeEmail || null) : null,
+      projectId: draft.projectId || null,
+    });
+    if (res.success) {
+      setEditing(null);
+      fetchTasks(activeProject?._id);
+      refreshReminders();
+    } else toast(res.error || 'Something went wrong', 'error');
+  };
 
   const myEmail = (session?.user?.email || '').toLowerCase();
   const memberOptions = activeProject
@@ -115,7 +150,7 @@ export default function TasksPage() {
       assigneeEmail: activeProject ? (assignee || myEmail) : undefined,
     });
     if (res.success) { setDue(''); fetchTasks(activeProject?._id); refreshReminders(); }
-    else { setTasks(prev => prev.filter(x => x._id !== tempId)); alert(res.error); }
+    else { setTasks(prev => prev.filter(x => x._id !== tempId)); toast(res.error || 'Something went wrong', 'error'); }
   };
 
   const handleToggle = async (id: string) => {
@@ -132,13 +167,6 @@ export default function TasksPage() {
     refreshReminders();
   };
 
-  const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const res = await createProject(newProjectName);
-    if (res.success) { setNewProjectName(''); setShowNewProject(false); await fetchProjects(); switchProject(res.project); }
-    else alert(res.error);
-  };
-
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     const res = await addMember(activeProject._id, inviteEmail);
@@ -146,13 +174,7 @@ export default function TasksPage() {
       const updated = { ...activeProject, memberEmails: [...new Set([...(activeProject.memberEmails || []), inviteEmail.trim().toLowerCase()])] };
       setActiveProject(updated); setProjects(ps => ps.map(p => p._id === updated._id ? updated : p));
       setInviteEmail(''); setShowInvite(false);
-    } else alert(res.error);
-  };
-
-  const handleDeleteProject = async () => {
-    if (!window.confirm(`Delete "${activeProject.name}" and all its tasks?`)) return;
-    const res = await deleteProject(activeProject._id);
-    if (res.success) { await fetchProjects(); switchProject(null); } else alert(res.error);
+    } else toast(res.error || 'Something went wrong', 'error');
   };
 
   const handleSaveNotes = async () => {
@@ -161,8 +183,22 @@ export default function TasksPage() {
       setNotesSaved(true);
       const updated = { ...activeProject, notes: notesDraft };
       setActiveProject(updated); setProjects(ps => ps.map(p => p._id === updated._id ? updated : p));
-    } else alert(res.error);
+    } else toast(res.error || 'Something went wrong', 'error');
   };
+
+  // open-task counts per scope, refreshed with the task list
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    getMyOpenTasks().then(res => {
+      if (!res.success) return;
+      const map: Record<string, number> = {};
+      for (const t of res.tasks || []) {
+        const key = (t as any).projectId ? String((t as any).projectId) : 'personal';
+        map[key] = (map[key] || 0) + 1;
+      }
+      setCounts(map);
+    });
+  }, [tasks]);
 
   const groups = useMemo(() => groupTasks(tasks), [tasks]);
   const open = tasks.filter(t => !t.completed);
@@ -194,29 +230,40 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="container" style={{ maxWidth: '640px', padding: '24px 16px 120px' }}>
+    <div className="container" style={{ padding: '24px 16px 120px' }}>
       <header style={{ marginBottom: '18px' }}>
         <h1 className="page-title">{activeProject ? activeProject.name : 'Tasks'}</h1>
         <p className="page-subtitle">{subtitle}</p>
       </header>
 
-      {/* Scope */}
-      <div className="pill-row" style={{ marginBottom: '16px' }}>
-        <button className={`cat-pill ${!activeProject ? 'active' : ''}`} onClick={() => switchProject(null)}>Personal</button>
-        {projects.map(p => (
-          <button key={p._id} className={`cat-pill ${activeProject?._id === p._id ? 'active' : ''}`} onClick={() => switchProject(p)}>{p.name}</button>
-        ))}
-        <button className="cat-pill" style={{ borderStyle: 'dashed', display: 'inline-flex', alignItems: 'center', gap: '4px' }} onClick={() => setShowNewProject(v => !v)}>
-          <Plus size={14} /> Project
-        </button>
+      {/* Scope: 4 recent chips + searchable picker */}
+      <div style={{ marginBottom: '16px' }}>
+        <ProjectPicker
+          projects={projects}
+          activeId={activeProject?._id || null}
+          counts={counts}
+          onSelect={switchProject}
+          onCreate={async (name) => {
+            const res = await createProject(name);
+            if (res.success) { await fetchProjects(); switchProject(res.project); }
+            else toast(res.error || 'Something went wrong', 'error');
+            return res;
+          }}
+          onRename={async (proj, name) => {
+            const res = await renameProject(proj._id, name);
+            if (res.success) { await fetchProjects(); if (activeProject?._id === proj._id) setActiveProject({ ...activeProject, name }); }
+            else toast(res.error || 'Something went wrong', 'error');
+            return res;
+          }}
+          onDelete={async (proj) => {
+            const res = await deleteProject(proj._id);
+            if (res.success) { await fetchProjects(); if (activeProject?._id === proj._id) switchProject(null); }
+            else toast(res.error || 'Something went wrong', 'error');
+            return res;
+          }}
+          onInvite={() => setShowInvite(true)}
+        />
       </div>
-
-      {showNewProject && (
-        <form onSubmit={handleCreateProject} style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-          <input className="field" placeholder="Project name" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} required autoFocus />
-          <button type="submit" className="btn-primary" style={{ padding: '10px 20px', borderRadius: '12px', fontWeight: 800 }}>Create</button>
-        </form>
-      )}
 
       {/* Project toolbar */}
       {activeProject && (
@@ -237,7 +284,6 @@ export default function TasksPage() {
             ))}
           </div>
           <Link href={`/mom?project=${activeProject._id}`} className="icon-btn" title="Meetings (MOM)"><Mic size={15} /></Link>
-          <button className="icon-btn danger" onClick={handleDeleteProject} title="Delete project"><Trash2 size={15} /></button>
         </div>
       )}
 
@@ -255,6 +301,51 @@ export default function TasksPage() {
           <button onClick={handleSaveNotes} disabled={notesSaved} className="btn-primary" style={{ marginTop: '10px', padding: '10px 24px', borderRadius: '12px', fontWeight: 800, opacity: notesSaved ? 0.5 : 1 }}>
             {notesSaved ? 'Saved' : 'Save notes'}
           </button>
+        </div>
+      )}
+
+      {editing && (
+        <div className="modal-overlay" onClick={() => setEditing(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '460px' }}>
+            <div className="modal-header">
+              <h2 className="modal-title">Edit task</h2>
+              <button className="modal-close" onClick={() => setEditing(null)}><X size={22} /></button>
+            </div>
+            <div style={{ display: 'grid', gap: '10px' }}>
+              <input className="field" value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} placeholder="Task" autoFocus />
+              <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Due</label>
+              <input className="field" type="datetime-local" value={draft.dueAt} onChange={e => setDraft(d => ({ ...d, dueAt: e.target.value }))}
+                style={{ color: draft.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+              <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Project</label>
+              <select className="field" value={draft.projectId} onChange={e => setDraft(d => ({ ...d, projectId: e.target.value, assigneeEmail: '' }))}>
+                <option value="">Personal (no project)</option>
+                {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
+              </select>
+              {draft.projectId && (
+                <>
+                  <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Assigned to</label>
+                  <select className="field" value={draft.assigneeEmail} onChange={e => setDraft(d => ({ ...d, assigneeEmail: e.target.value }))}>
+                    <option value="">Unassigned</option>
+                    {[...new Set([myEmail,
+                      ...(projects.find(p => p._id === draft.projectId)?.ownerId?.email ? [projects.find(p => p._id === draft.projectId).ownerId.email] : []),
+                      ...(projects.find(p => p._id === draft.projectId)?.memberEmails || []),
+                      draft.assigneeEmail].filter(Boolean))].map(email => (
+                      <option key={email} value={email}>{email === myEmail ? 'me' : email}</option>
+                    ))}
+                  </select>
+                </>
+              )}
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '6px' }}>
+                <button className="icon-btn danger" title="Delete task"
+                  onClick={async () => { if (await confirm({ title: 'Delete this task?', danger: true, confirmLabel: 'Delete' })) { handleDelete(editing._id); setEditing(null); } }}>
+                  <Trash2 size={16} />
+                </button>
+                <button className="btn-primary" onClick={saveEdit} style={{ padding: '11px 26px', borderRadius: '12px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Check size={16} /> Save
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -298,7 +389,7 @@ export default function TasksPage() {
                       <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)} aria-label="toggle">
                         {t.completed && <svg width="12" height="9" viewBox="0 0 14 10" fill="none"><path d="M1.5 5L5.5 9L12.5 1.5" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                       </button>
-                      <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => !t.isTemp && openEdit(t)}>
                         <div className="task-title">{t.title}</div>
                         {(t.dueAt || activeProject) && (
                           <div className="task-meta">

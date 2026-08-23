@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
+import { defineModel } from './registry';
 
 export interface ICategory extends Document {
   name: string;
@@ -20,4 +21,4 @@ const CategorySchema: Schema<ICategory> = new Schema({
 
 CategorySchema.index({ userId: 1, isPrivate: 1, name: 1 }, { unique: true });
 
-export const Category: Model<ICategory> = mongoose.models.Category || mongoose.model<ICategory>('Category', CategorySchema);
+export const Category: Model<ICategory> = defineModel<ICategory>('Category', CategorySchema);

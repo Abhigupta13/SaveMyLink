@@ -5,6 +5,7 @@ import { createCategory, addCategoryDomain } from '@/actions/category';
 import { createLink, getLinkMetadata } from '@/actions/link';
 import { useUser } from '@/components/UserContext';
 import { hostnameOf } from '@/lib/url';
+import { useFeedback } from '@/components/ui/Feedback';
 
 interface AddLinkFormProps {
   initialUrl?: string;
@@ -15,6 +16,7 @@ interface AddLinkFormProps {
 
 // Shared add-link form: used by the TopNav modal (web) and /capture (share sheet)
 export default function AddLinkForm({ initialUrl, initialTitle, categories: initialCategories, onSaved }: AddLinkFormProps) {
+  const { toast, confirm } = useFeedback();
   const [categories, setCategories] = useState(initialCategories);
   useEffect(() => { setCategories(initialCategories); }, [initialCategories]);
 
@@ -87,7 +89,7 @@ export default function AddLinkForm({ initialUrl, initialTitle, categories: init
         categoryId = res.category._id;
         setCategories([res.category, ...categories]);
       } else {
-        alert(res.error || 'Failed to create category');
+        toast(res.error || 'Failed to create category', 'error');
         setIsLoading(false);
         return;
       }
@@ -105,7 +107,7 @@ export default function AddLinkForm({ initialUrl, initialTitle, categories: init
       }
       onSaved({ isPrivate });
     } else {
-      alert(res.error || 'Failed to save link');
+      toast(res.error || 'Failed to save link', 'error');
     }
     setIsLoading(false);
   };
@@ -180,7 +182,9 @@ export default function AddLinkForm({ initialUrl, initialTitle, categories: init
         {hostname && (selectedCategory || showCreateCategory) && !domainAlreadyFiled && (
           <label className="switch-container" style={{ marginTop: '12px', fontSize: '0.8rem' }}>
             <input type="checkbox" checked={fileDomain} onChange={(e) => setFileDomain(e.target.checked)} />
-            <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Always file {hostname} here</span>
+            <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+              Remember this: file future <strong style={{ color: 'var(--text-primary)' }}>{hostname}</strong> links here automatically
+            </span>
           </label>
         )}
       </div>

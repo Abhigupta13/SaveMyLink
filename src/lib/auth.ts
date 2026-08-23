@@ -52,11 +52,16 @@ export const authOptions = {
     // Google users have no local record on first login — create one, then reuse it
     async signIn({ user, account }: any) {
       if (account?.provider !== 'google') return true;
-      await connectToDatabase();
       const email = user.email?.toLowerCase();
       if (!email) return false;
-      const existing = await User.findOne({ email });
-      if (!existing) await User.create({ email, name: user.name, image: user.image });
+      try {
+        await connectToDatabase();
+        const existing = await User.findOne({ email });
+        if (!existing) await User.create({ email, name: user.name, image: user.image });
+      } catch (err) {
+        console.error('[google signIn] could not upsert user:', err);
+        return false; // fail loudly rather than creating a session with no account
+      }
       return true;
     },
     async session({ session, token }: any) {
@@ -69,12 +74,24 @@ export const authOptions = {
       if (user) token.id = user.id;
       // Google's user.id is Google's, not ours — swap in our Mongo _id
       if (account?.provider === 'google' && token.email) {
-        await connectToDatabase();
-        const dbUser = await User.findOne({ email: String(token.email).toLowerCase() }).select('_id');
-        if (dbUser) token.id = dbUser._id.toString();
+        try {
+          await connectToDatabase();
+          const dbUser = await User.findOne({ email: String(token.email).toLowerCase() }).select('_id');
+          if (dbUser) token.id = dbUser._id.toString();
+        } catch (err) {
+          console.error('[google jwt] could not resolve user id:', err);
+        }
       }
       return token;
     },
   },
   secret: process.env.NEXTAUTH_SECRET,
+  debug: process.env.NODE_ENV !== 'production',
+  logger: {
+    error(code: string, meta: any) {
+      console.error('[next-auth error]', code, meta?.message || meta?.error?.message || meta);
+      if (meta?.stack) console.error(meta.stack.split('\n').slice(0, 4).join('\n'));
+    },
+    warn(code: string) { console.warn('[next-auth warn]', code); },
+  },
 };

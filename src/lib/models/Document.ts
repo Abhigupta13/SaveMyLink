@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { defineModel } from './registry';
 
 const DocumentSchema = new mongoose.Schema({
   user: {
@@ -31,4 +32,4 @@ const DocumentSchema = new mongoose.Schema({
   }
 });
 
-export const Document = mongoose.models.Document || mongoose.model('Document', DocumentSchema);
+export const Document = defineModel<any>('Document', DocumentSchema as any);

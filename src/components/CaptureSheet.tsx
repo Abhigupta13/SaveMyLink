@@ -5,8 +5,10 @@ import { useRouter } from 'next/navigation';
 import AddLinkForm from './AddLinkForm';
 import { findLinkByUrl } from '@/actions/link';
 import { createNote } from '@/actions/note';
+import { useFeedback } from '@/components/ui/Feedback';
 
 export default function CaptureSheet({ url, title, categories }: { url?: string; title?: string; categories: any[] }) {
+  const { toast, confirm } = useFeedback();
   const router = useRouter();
   const [duplicate, setDuplicate] = useState<{ title?: string; createdAt?: string } | null>(null);
 
@@ -33,7 +35,7 @@ export default function CaptureSheet({ url, title, categories }: { url?: string;
   }
 
   return (
-    <div className="container" style={{ padding: '16px', maxWidth: '520px' }}>
+    <div className="page narrow">
       <h2 className="modal-title" style={{ marginBottom: '16px' }}>Save to Vault</h2>
       {duplicate && (
         <div style={{
@@ -51,6 +53,7 @@ export default function CaptureSheet({ url, title, categories }: { url?: string;
 }
 
 function NoteCapture({ initialText, onSaved }: { initialText: string; onSaved: () => void }) {
+  const { toast } = useFeedback();
   const [text, setText] = useState(initialText);
   const [saving, setSaving] = useState(false);
 
@@ -60,11 +63,11 @@ function NoteCapture({ initialText, onSaved }: { initialText: string; onSaved: (
     const res = await createNote({ body: text.trim() });
     setSaving(false);
     if (res.success) onSaved();
-    else alert(res.error || 'Failed to save note');
+    else toast(res.error || 'Failed to save note', 'error');
   };
 
   return (
-    <div className="container" style={{ padding: '16px', maxWidth: '520px' }}>
+    <div className="page narrow">
       <h2 className="modal-title" style={{ marginBottom: '16px' }}>Save note</h2>
       <textarea
         value={text}

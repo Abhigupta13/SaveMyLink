@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document as MongooseDocument, Model } from 'mongoose';
+import { defineModel } from './registry';
 
 export interface IProject extends MongooseDocument {
   name: string;
@@ -16,4 +17,4 @@ const ProjectSchema = new Schema<IProject>({
   notes: { type: String, default: '' },
 }, { timestamps: true });
 
-export const Project: Model<IProject> = mongoose.models.Project || mongoose.model<IProject>('Project', ProjectSchema);
+export const Project: Model<IProject> = defineModel<IProject>('Project', ProjectSchema);

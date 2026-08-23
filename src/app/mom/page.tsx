@@ -4,10 +4,13 @@ import { useEffect, useState, Suspense } from 'react';
 import { useSession } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { getProjects } from '@/actions/project';
+import { getProjects, createProject, deleteProject, renameProject } from '@/actions/project';
+import ProjectPicker from '@/components/ProjectPicker';
 import MomSection from '@/components/MomSection';
+import { useFeedback } from '@/components/ui/Feedback';
 
 function MomPageInner() {
+  const { toast } = useFeedback();
   const { data: session, status } = useSession();
   const params = useSearchParams();
   const [projects, setProjects] = useState<any[]>([]);
@@ -31,7 +34,7 @@ function MomPageInner() {
     : [];
 
   return (
-    <div className="container" style={{ maxWidth: '640px', padding: '24px 16px 120px' }}>
+    <div className="container" style={{ padding: '24px 16px 120px' }}>
       <header style={{ marginBottom: '20px' }}>
         <h1 className="page-title">Meetings</h1>
         <p className="page-subtitle">Record → transcribe → action items, filed under a project</p>
@@ -47,17 +50,43 @@ function MomPageInner() {
         </div>
       ) : (
         <>
-          <div className="pill-row" style={{ marginBottom: '20px' }}>
-            {projects.map(p => (
-              <button key={p._id} className={`cat-pill ${active?._id === p._id ? 'active' : ''}`} onClick={() => setActive(p)}>
-                {p.name}
-              </button>
-            ))}
+          <div style={{ marginBottom: '20px' }}>
+            <ProjectPicker
+              projects={projects}
+              activeId={active?._id || null}
+              showPersonal={false}
+              onSelect={p => p && setActive(p)}
+              onCreate={async (name) => {
+                const res = await createProject(name);
+                if (res.success) { const list = [...projects, res.project]; setProjects(list); setActive(res.project); }
+                else toast(res.error || 'Something went wrong', 'error');
+                return res;
+              }}
+              onRename={async (proj, name) => {
+                const res = await renameProject(proj._id, name);
+                if (res.success) {
+                  setProjects(ps => ps.map(x => x._id === proj._id ? { ...x, name } : x));
+                  if (active?._id === proj._id) setActive({ ...active, name });
+                } else toast(res.error || 'Something went wrong', 'error');
+                return res;
+              }}
+              onDelete={async (proj) => {
+                const res = await deleteProject(proj._id);
+                if (res.success) {
+                  const rest = projects.filter(x => x._id !== proj._id);
+                  setProjects(rest);
+                  if (active?._id === proj._id) setActive(rest[0] || null);
+                } else toast(res.error || 'Something went wrong', 'error');
+                return res;
+              }}
+            />
           </div>
+
           {active && (
             <MomSection
               key={active._id}
               project={active}
+              projects={projects}
               myEmail={myEmail}
               memberOptions={memberOptions}
               onTasksCreated={() => {}}
@@ -70,5 +99,6 @@ function MomPageInner() {
 }
 
 export default function MomPage() {
+  const { toast, confirm } = useFeedback();
   return <Suspense fallback={null}><MomPageInner /></Suspense>;
 }

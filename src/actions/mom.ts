@@ -3,6 +3,9 @@
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import { Mom } from "@/lib/models/Mom";
+import { Note } from "@/lib/models/Note";
+import { Project } from "@/lib/models/Project";
+import { Contact } from "@/lib/models/Contact";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
 import { projectForMember } from "@/lib/projectAccess";
@@ -13,6 +16,17 @@ import path from 'path';
 import { writeFile, mkdir, unlink } from 'fs/promises';
 
 const GROQ_BASE = 'https://api.groq.com/openai/v1';
+
+// Transcripts mis-spell project names; match on letters only, then by containment
+const norm = (v: string) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function matchProject(name: string, projects: any[]) {
+  if (!name) return null;
+  const n = norm(name);
+  if (!n) return null;
+  return projects.find(p => norm(p.name) === n)
+      || projects.find(p => norm(p.name).includes(n) || n.includes(norm(p.name)))
+      || null;
+}
 
 async function memberSession(projectId: string) {
   const session = await getServerSession(authOptions);
@@ -103,7 +117,7 @@ export async function transcribeMom(momId: string) {
   }
 }
 
-export async function extractMomTasks(momId: string) {
+export async function extractMomTasks(momId: string, timeZone = 'UTC') {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
@@ -113,36 +127,87 @@ export async function extractMomTasks(momId: string) {
     const ctx = await memberSession(String(mom.projectId));
     if (!ctx) return { success: false, error: 'Not a member' };
 
-    const members = [...new Set([ctx.session.user.email, ...(ctx.project.memberEmails || [])])].filter(Boolean);
+    const myEmail = (ctx.session.user.email || '').toLowerCase();
+    // Everything the model needs to route items: all my projects and all known people
+    const [projects, contacts] = await Promise.all([
+      Project.find({ $or: [{ ownerId: ctx.session.user.id }, { memberEmails: myEmail }] })
+        .populate('ownerId', 'email name').lean(),
+      Contact.find({ userId: ctx.session.user.id }).select('name email').lean(),
+    ]);
+
+    const projectLines = (projects as any[]).map(p =>
+      `- "${p.name}" (members: ${[p.ownerId?.email, ...(p.memberEmails || [])].filter(Boolean).join(', ') || 'none'})`).join('\n');
+    const peopleLines = [
+      `- me = ${myEmail}`,
+      ...(contacts as any[]).filter(c => c.email).map(c => `- ${c.name} = ${c.email}`),
+      ...(projects as any[]).flatMap(p => [p.ownerId?.email, ...(p.memberEmails || [])]).filter(Boolean)
+        .filter((e, i, a) => a.indexOf(e) === i && e !== myEmail).map(e => `- ${e}`),
+    ].join('\n');
+
+    const meetingDate = new Date(mom.createdAt).toLocaleString('en-GB', { timeZone, weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const system = `You turn a meeting transcript into minutes plus actionable items.
+The meeting happened on ${meetingDate} (timezone ${timeZone}). The transcript may be Hinglish (mixed Hindi/English).
+
+ONE recording often covers SEVERAL topics, projects and people. Split it accordingly — produce a separate item per distinct action or decision, and route each one to the project and person it belongs to.
+
+PROJECTS the user has:
+${projectLines || '(none)'}
+
+PEOPLE (name = email):
+${peopleLines || '(none)'}
+
+For every item work out, ONLY from what was actually said:
+- kind: "task" if someone must do something; "note" for decisions, facts or context worth keeping.
+- title: short imperative for tasks ("Send the proposal to Morphle"), a clear line for notes.
+- detail: one sentence of context from the transcript (who said it / why).
+- projectName: the project it belongs to, copied EXACTLY from the list above. Omit if the transcript doesn't make it clear.
+- assigneeEmail: the person's email from the list above, if the transcript clearly gives them the work ("Abhi will…", "tum kar lena" addressed to someone). Omit if unclear.
+- dueAt: "YYYY-MM-DDTHH:mm" resolved against the meeting date above ("by Friday" → that Friday 17:00, "kal shaam" → next day 17:00, "in two weeks" → +14 days 17:00). Omit if no deadline was mentioned. Default a bare date to 17:00.
+- missing: array listing which of "project", "assignee", "due" you could NOT determine — the user will be asked to fill those in.
+
+Never guess a project or person that isn't in the lists. Never invent deadlines. It is correct and expected to return missing entries.
+
+Reply ONLY with JSON:
+{"summary":"concise minutes in English: what was discussed and decided, grouped by topic","items":[{"kind":"task|note","title":"...","detail":"...","projectName":"...","assigneeEmail":"...","dueAt":"YYYY-MM-DDTHH:mm","missing":["project","assignee","due"]}]}`;
+
     const res = await fetch(`${GROQ_BASE}/chat/completions`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'openai/gpt-oss-120b',
         response_format: { type: 'json_object' },
-        messages: [
-          {
-            role: 'system',
-            content: 'You extract minutes of meeting from transcripts (which may be Hinglish — mixed Hindi/English). Reply ONLY with JSON: {"summary": "concise MOM: key points and decisions, in English", "tasks": [{"title": "actionable task in English", "assigneeEmail": "email if a specific person was clearly given this task, else omit"}]}. Team member emails: ' + (members.join(', ') || 'none listed'),
-          },
-          { role: 'user', content: mom.transcript.slice(0, 100000) },
-        ],
+        messages: [{ role: 'system', content: system }, { role: 'user', content: mom.transcript.slice(0, 100000) }],
       }),
     });
     if (!res.ok) {
       console.error('Groq extraction failed:', await res.text());
       return { success: false, error: `Task extraction failed (${res.status})` };
     }
-    const data = await res.json();
-    const parsed = JSON.parse(data.choices?.[0]?.message?.content || '{}');
+    const parsed = JSON.parse((await res.json()).choices?.[0]?.message?.content || '{}');
 
+    const knownEmails = new Set([myEmail, ...(contacts as any[]).map(c => c.email).filter(Boolean),
+      ...(projects as any[]).flatMap(p => [p.ownerId?.email, ...(p.memberEmails || [])]).filter(Boolean)].map(String));
+
+    mom.tasksConfirmed = false; // re-opening the review
     mom.summary = parsed.summary || '';
-    mom.candidates = (parsed.tasks || [])
-      .filter((t: any) => t?.title)
-      .map((t: any) => ({ title: String(t.title), assigneeEmail: t.assigneeEmail || undefined }));
+    mom.candidates = (parsed.items || []).filter((i: any) => i?.title).slice(0, 25).map((i: any) => {
+      const project = matchProject(i.projectName, projects as any[]);
+      const assignee = i.assigneeEmail && knownEmails.has(String(i.assigneeEmail).toLowerCase())
+        ? String(i.assigneeEmail).toLowerCase() : undefined;
+      const due = i.dueAt ? new Date(i.dueAt) : null;
+      const dueValid = due && !isNaN(due.getTime()) ? due : null;
+      const kind = i.kind === 'note' ? 'note' : 'task';
+
+      // Recompute the gaps ourselves rather than trusting the model's own list
+      const missing: string[] = [];
+      if (!project) missing.push('project');
+      if (kind === 'task' && !assignee) missing.push('assignee');
+      if (kind === 'task' && !dueValid) missing.push('due');
+
+      return { kind, title: String(i.title), detail: i.detail ? String(i.detail) : undefined,
+        dueAt: dueValid, assigneeEmail: assignee, projectId: project?._id || null, missing };
+    });
     await mom.save();
     return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
   } catch (error) {
@@ -153,7 +218,7 @@ export async function extractMomTasks(momId: string) {
 
 export async function confirmMomTasks(
   momId: string,
-  tasks: { title: string; assigneeEmail?: string; dueAt?: string }[]
+  items: { kind?: 'task' | 'note'; title: string; detail?: string; assigneeEmail?: string; dueAt?: string; projectId?: string }[]
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -164,30 +229,54 @@ export async function confirmMomTasks(
     const ctx = await memberSession(String(mom.projectId));
     if (!ctx) return { success: false, error: 'Not a member' };
 
-    for (const t of tasks) {
-      let assigneeId;
-      if (t.assigneeEmail) {
-        const assignee = await User.findOne({ email: t.assigneeEmail.toLowerCase() }).select('_id');
-        assigneeId = assignee?._id;
+    const myEmail = (ctx.session.user.email || '').toLowerCase();
+    let tasks = 0, notes = 0;
+
+    for (const item of items) {
+      if (!item.title?.trim()) continue;
+
+      if (item.kind === 'note') {
+        await Note.create({ userId: session.user.id, title: item.title.trim(), body: item.detail || '' });
+        notes++;
+        continue;
       }
+
+      // Each task can land in a different project — verify membership for each
+      let projectId = mom.projectId;
+      if (item.projectId) {
+        const allowed = await projectForMember(item.projectId, session.user.id, myEmail);
+        if (!allowed) continue; // silently skip projects the user isn't in
+        projectId = allowed._id as any;
+      }
+
+      let assigneeId;
+      if (item.assigneeEmail) {
+        const user = await User.findOne({ email: item.assigneeEmail.toLowerCase() }).select('_id');
+        assigneeId = user?._id;
+      }
+      const due = item.dueAt ? new Date(item.dueAt) : undefined;
+
       await Task.create({
-        title: t.title,
-        dueAt: t.dueAt ? new Date(t.dueAt) : undefined,
+        title: item.title.trim(),
+        description: item.detail,
+        dueAt: due && !isNaN(due.getTime()) ? due : undefined,
         userId: session.user.id,
-        projectId: mom.projectId,
+        projectId,
         assigneeId,
-        assigneeEmail: t.assigneeEmail?.toLowerCase(),
+        assigneeEmail: item.assigneeEmail?.toLowerCase(),
         momId: mom._id,
       });
+      tasks++;
     }
 
     mom.tasksConfirmed = true;
     await mom.save();
     revalidatePath('/tasks');
-    return { success: true, created: tasks.length };
+    revalidatePath('/notes');
+    return { success: true, tasks, notes };
   } catch (error) {
-    console.error('Failed to confirm MOM tasks:', error);
-    return { success: false, error: 'Failed to create tasks' };
+    console.error('Failed to confirm MOM items:', error);
+    return { success: false, error: 'Failed to create items' };
   }
 }
 
@@ -204,5 +293,26 @@ export async function deleteMom(momId: string) {
   } catch (error) {
     console.error('Failed to delete MOM:', error);
     return { success: false, error: 'Failed to delete' };
+  }
+}
+
+export async function updateMom(momId: string, data: { title?: string; summary?: string; transcript?: string }) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    await connectToDatabase();
+    const mom = await Mom.findById(momId);
+    if (!mom) return { success: false, error: 'MOM not found' };
+    const ctx = await memberSession(String(mom.projectId));
+    if (!ctx) return { success: false, error: 'Not a member' };
+
+    if (data.title !== undefined) mom.title = data.title.trim() || mom.title;
+    if (data.summary !== undefined) mom.summary = data.summary;
+    if (data.transcript !== undefined) mom.transcript = data.transcript;
+    await mom.save();
+    return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
+  } catch (error) {
+    console.error('Failed to update MOM:', error);
+    return { success: false, error: 'Failed to save changes' };
   }
 }

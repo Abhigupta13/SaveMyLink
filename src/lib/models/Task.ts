@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document as MongooseDocument } from 'mongoose';
+import { defineModel } from './registry';
 
 export interface ITask extends MongooseDocument {
   title: string;
@@ -34,4 +35,4 @@ TaskSchema.index({ userId: 1 });
 TaskSchema.index({ projectId: 1 });
 TaskSchema.index({ assigneeId: 1 });
 
-export default mongoose.models.Task || mongoose.model<ITask>('Task', TaskSchema);
+export default defineModel<ITask>('Task', TaskSchema);

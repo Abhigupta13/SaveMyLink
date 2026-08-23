@@ -6,7 +6,15 @@ import bcrypt from 'bcryptjs';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { revalidatePath } from 'next/cache';
-import { grantSafe, hasSafe } from '@/lib/safeCookie';
+import { grantSafe, hasSafe, revokeSafe } from '@/lib/safeCookie';
+
+// Lock the safe: revoke the grant so private links can't be reached until the PIN is re-entered
+export async function lockPrivateSafe() {
+  await revokeSafe();
+  revalidatePath('/links');
+  revalidatePath('/');
+  return { success: true };
+}
 
 // Whether this session still holds a valid server-side private-safe grant
 export async function getSafeStatus() {

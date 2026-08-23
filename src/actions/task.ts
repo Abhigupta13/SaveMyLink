@@ -110,7 +110,7 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
   }
 }
 
-export async function updateTask(id: string, data: { title?: string; description?: string; dueAt?: string | null; assigneeEmail?: string | null }) {
+export async function updateTask(id: string, data: { title?: string; description?: string; dueAt?: string | null; assigneeEmail?: string | null; projectId?: string | null }) {
   try {
     await connectToDatabase();
     const session = await getServerSession(authOptions);
@@ -125,6 +125,17 @@ export async function updateTask(id: string, data: { title?: string; description
     if (data.title !== undefined) task.title = data.title;
     if (data.description !== undefined) task.description = data.description;
     if (data.dueAt !== undefined) task.dueAt = data.dueAt ? new Date(data.dueAt) : undefined;
+    if (data.projectId !== undefined) {
+      if (data.projectId) {
+        const project = await projectForMember(data.projectId, session.user.id, session.user.email);
+        if (!project) return { success: false, error: 'Not a member of that project' };
+        task.projectId = project._id as any;
+      } else {
+        task.projectId = undefined;
+        task.assigneeId = undefined;
+        task.assigneeEmail = undefined; // personal tasks have no assignee
+      }
+    }
     if (data.assigneeEmail !== undefined) {
       if (data.assigneeEmail) {
         const assignee = await User.findOne({ email: data.assigneeEmail.toLowerCase() }).select('_id');

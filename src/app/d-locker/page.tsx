@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { getDocuments, addDocument, deleteDocument } from '@/actions/document';
+import { ExternalLink, Download, X } from 'lucide-react';
+import { useFeedback } from '@/components/ui/Feedback';
 
 interface DocType {
   _id: string;
@@ -16,6 +18,7 @@ interface DocType {
 }
 
 export default function DLockerPage() {
+  const { toast, confirm } = useFeedback();
   const { data: session, status } = useSession();
   const router = useRouter();
   
@@ -23,6 +26,7 @@ export default function DLockerPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isAddingDoc, setIsAddingDoc] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [preview, setPreview] = useState<any | null>(null);
 
   // Form state
   const [docType, setDocType] = useState<'file' | 'link'>('file');
@@ -49,7 +53,7 @@ export default function DLockerPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!docName) return alert('Please enter a name');
+    if (!docName) { toast('Please enter a name', 'error'); return; }
     
     setIsUploading(true);
     const formData = new FormData();
@@ -62,7 +66,8 @@ export default function DLockerPage() {
       formData.append('externalLink', externalLink);
     } else {
       setIsUploading(false);
-      return alert('Please select a file or enter a link');
+      toast('Please select a file or enter a link', 'error');
+      return;
     }
 
     const res = await addDocument(formData);
@@ -75,13 +80,13 @@ export default function DLockerPage() {
       setSelectedFile(null);
       fetchDocs();
     } else {
-      alert(res.error || 'Failed to add document');
+      toast(res.error || 'Failed to add document', 'error');
     }
   };
 
-  const handleDelete = (e: React.MouseEvent, id: string) => {
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (confirm('Are you sure you want to delete this document?')) {
+    if (await confirm({ title: 'Delete this document?', message: 'This removes the file permanently.', danger: true, confirmLabel: 'Delete' })) {
       deleteDocument(id).then(res => {
         if (res.success) fetchDocs();
       });
@@ -98,6 +103,20 @@ export default function DLockerPage() {
     return '📁';
   };
 
+  // What we can actually preview in-browser without extra libraries
+  const kindOf = (doc: any): 'image' | 'video' | 'pdf' | 'audio' | 'link' | 'file' => {
+    if (doc.type === 'link') return 'link';
+    const m = (doc.mimeType || '').toLowerCase();
+    const ext = (doc.url || '').split('.').pop()?.toLowerCase() || '';
+    if (m.startsWith('image/') || ['png','jpg','jpeg','gif','webp','svg','avif','bmp'].includes(ext)) return 'image';
+    if (m.startsWith('video/') || ['mp4','webm','mov','mkv'].includes(ext)) return 'video';
+    if (m.startsWith('audio/') || ['mp3','wav','m4a','ogg'].includes(ext)) return 'audio';
+    if (m === 'application/pdf' || ext === 'pdf') return 'pdf';
+    return 'file';
+  };
+  const extOf = (doc: any) => ((doc.name?.includes('.') ? doc.name : doc.url) || '').split('.').pop()?.slice(0, 4).toUpperCase() || 'FILE';
+  const favicon = (url: string) => { try { return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=128`; } catch { return ''; } };
+
   const formatSize = (bytes?: number) => {
     if (!bytes) return '';
     const kb = bytes / 1024;
@@ -107,9 +126,9 @@ export default function DLockerPage() {
 
   if (status === 'loading' || isLoading) {
     return (
-      <div className="social-loading">
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '80px 16px' }}>
         <div className="loading-spinner"></div>
-        <p>Opening your D-locker...</p>
+        <p style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Opening your Digi Locker…</p>
       </div>
     );
   }
@@ -118,8 +137,8 @@ export default function DLockerPage() {
     <main className="container d-locker-container">
       <header className="d-locker-header">
         <div className="header-info">
-          <h1 className="page-title">D-locker</h1>
-          <p className="page-subtitle">Documents, PDFs & important files</p>
+          <h1 className="page-title">Digi Locker</h1>
+          <p className="page-subtitle">Your documents, PDFs & important files</p>
         </div>
         <button className="add-doc-btn" onClick={() => setIsAddingDoc(true)}>
           <span className="plus-icon">+</span>
@@ -130,21 +149,23 @@ export default function DLockerPage() {
       <div className="doc-grid">
         {docs.length > 0 ? (
           docs.map((doc) => (
-            <div key={doc._id} className="doc-card" onClick={() => window.open(doc.url, '_blank')}>
-              <button 
-                className="doc-delete-btn" 
-                onClick={(e) => handleDelete(e, doc._id)}
-                title="Delete"
-              >
-                ×
-              </button>
-              <div className="doc-icon-wrap">
-                <span className="doc-emoji">{getDocIcon(doc)}</span>
+            <div key={doc._id} className="doc-card" onClick={() => setPreview(doc)}>
+              <button className="doc-delete-btn" onClick={(e) => handleDelete(e, doc._id)} title="Delete">&times;</button>
+
+              <div className="doc-thumb">
+                {(() => {
+                  const kind = kindOf(doc);
+                  if (kind === 'image') return <img src={doc.url} alt="" loading="lazy" />;
+                  if (kind === 'video') return <video src={doc.url} preload="metadata" muted playsInline />;
+                  if (kind === 'link') return <img className="doc-favicon" src={favicon(doc.url)} alt="" loading="lazy" />;
+                  return <div className={`doc-glyph ${kind}`}><span>{kind === 'pdf' ? 'PDF' : kind === 'audio' ? '\u266a' : extOf(doc)}</span></div>;
+                })()}
               </div>
+
               <div className="doc-card-info">
                 <h3>{doc.name}</h3>
                 <div className="doc-card-meta">
-                  <span className={`doc-tag ${doc.type}`}>{doc.type}</span>
+                  <span className={`doc-tag ${doc.type}`}>{doc.type === 'link' ? 'link' : extOf(doc)}</span>
                   {doc.type === 'file' && <span className="doc-size-text">{formatSize(doc.size)}</span>}
                 </div>
               </div>
@@ -153,79 +174,93 @@ export default function DLockerPage() {
         ) : (
           <div className="empty-locker-state">
             <div className="empty- locker-icon">🗄️</div>
-            <h2>Your locker is empty</h2>
+            <h2>Your Digi Locker is empty</h2>
             <p>Store PDFs, images, or important links and access them from any device.</p>
             <button className="btn-explore" onClick={() => setIsAddingDoc(true)}>Upload your first document</button>
           </div>
         )}
       </div>
 
-      {isAddingDoc && (
-        <div className="modal-overlay" onClick={() => setIsAddingDoc(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>Add to D-locker</h2>
-              <button className="close-btn" onClick={() => setIsAddingDoc(false)}>×</button>
-            </div>
-            <form onSubmit={handleSubmit} className="add-app-form">
-              <div className="form-group">
-                <label>Document Name</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g. My Resume, Passport Copy" 
-                  value={docName}
-                  onChange={(e) => setDocName(e.target.value)}
-                  required 
-                />
+      {preview && (() => {
+        const kind = kindOf(preview);
+        return (
+          <div className="modal-overlay" onClick={() => setPreview(null)}>
+            <div className="preview-shell" onClick={e => e.stopPropagation()}>
+              <div className="preview-bar">
+                <span className="preview-name">{preview.name}</span>
+                <a className="icon-btn" href={preview.url} target="_blank" rel="noreferrer" title="Open in new tab"><ExternalLink size={16} /></a>
+                {preview.type === 'file' && (
+                  <a className="icon-btn" href={preview.url} download={preview.name} title="Download"><Download size={16} /></a>
+                )}
+                <button className="icon-btn" onClick={() => setPreview(null)} title="Close"><X size={16} /></button>
               </div>
 
-              <div className="type-toggle-group">
-                <button 
-                  type="button" 
-                  className={`toggle-btn ${docType === 'file' ? 'active' : ''}`}
-                  onClick={() => setDocType('file')}
-                >
-                  File Upload
-                </button>
-                <button 
-                  type="button" 
-                  className={`toggle-btn ${docType === 'link' ? 'active' : ''}`}
-                  onClick={() => setDocType('link')}
-                >
-                  External Link
-                </button>
+              <div className="preview-body">
+                {kind === 'image' && <img src={preview.url} alt={preview.name} />}
+                {kind === 'video' && <video src={preview.url} controls autoPlay />}
+                {kind === 'audio' && <audio src={preview.url} controls style={{ width: '100%' }} />}
+                {kind === 'pdf' && <iframe src={preview.url} title={preview.name} />}
+                {(kind === 'file' || kind === 'link') && (
+                  <div className="preview-fallback">
+                    <div className={`doc-glyph ${kind}`} style={{ width: '72px', height: '72px', fontSize: '0.9rem' }}>
+                      <span>{kind === 'link' ? '\u2197' : extOf(preview)}</span>
+                    </div>
+                    <p>{kind === 'link' ? 'External link \u2014 open it in a new tab.' : 'No in-app preview for this file type.'}</p>
+                    <a className="btn-primary" href={preview.url} target="_blank" rel="noreferrer"
+                      style={{ padding: '11px 24px', borderRadius: '12px', fontWeight: 800, textDecoration: 'none' }}>
+                      {kind === 'link' ? 'Open link' : 'Open file'}
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {isAddingDoc && (
+        <div className="modal-overlay" onClick={() => setIsAddingDoc(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+            <div className="modal-header">
+              <h2 className="modal-title">Add to Digi Locker</h2>
+              <button className="modal-close" onClick={() => setIsAddingDoc(false)}>&times;</button>
+            </div>
+
+            <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '14px' }}>
+              <div>
+                <label className="field-label">Document name</label>
+                <input className="field" type="text" placeholder="e.g. My Resume, Passport Copy"
+                  value={docName} onChange={(e) => setDocName(e.target.value)} required autoFocus />
+              </div>
+
+              <div className="seg-group">
+                {(['file', 'link'] as const).map(t => (
+                  <button key={t} type="button" className={`seg-btn ${docType === t ? 'active' : ''}`} onClick={() => setDocType(t)}>
+                    {t === 'file' ? 'File upload' : 'External link'}
+                  </button>
+                ))}
               </div>
 
               {docType === 'file' ? (
-                <div className="form-group">
-                  <label>Select File</label>
-                  <div className="file-input-wrapper">
-                    <input 
-                      type="file" 
-                      onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                      className="hidden-file-input"
-                      id="doc-file"
-                    />
-                    <label htmlFor="doc-file" className="file-input-label">
-                      {selectedFile ? `Selected: ${selectedFile.name}` : 'Click to choose file...'}
-                    </label>
-                  </div>
+                <div>
+                  <label className="field-label">Select file</label>
+                  <input type="file" id="doc-file" style={{ display: 'none' }}
+                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
+                  <label htmlFor="doc-file" className={`file-drop ${selectedFile ? 'has-file' : ''}`}>
+                    {selectedFile ? selectedFile.name : 'Click to choose a file…'}
+                  </label>
                 </div>
               ) : (
-                <div className="form-group">
-                  <label>URL</label>
-                  <input 
-                    type="url" 
-                    placeholder="https://example.com/file.pdf" 
-                    value={externalLink}
-                    onChange={(e) => setExternalLink(e.target.value)}
-                    required 
-                  />
+                <div>
+                  <label className="field-label">URL</label>
+                  <input className="field" type="url" placeholder="https://example.com/file.pdf"
+                    value={externalLink} onChange={(e) => setExternalLink(e.target.value)} required />
                 </div>
               )}
 
-              <button type="submit" className="submit-btn" disabled={isUploading}>
-                {isUploading ? 'Uploading...' : 'Save to Locker'}
+              <button type="submit" className="btn-primary" disabled={isUploading}
+                style={{ height: '46px', borderRadius: '14px', fontWeight: 800, marginTop: '4px' }}>
+                {isUploading ? 'Uploading…' : 'Save to locker'}
               </button>
             </form>
           </div>

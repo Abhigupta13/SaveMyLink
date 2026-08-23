@@ -9,6 +9,7 @@ import { UserProvider } from "@/components/UserContext";
 import AuthProvider from "@/components/AuthProvider";
 import SendIntentListener from "@/components/SendIntentListener";
 import JarvisWidget from "@/components/JarvisWidget";
+import { FeedbackProvider } from "@/components/ui/Feedback";
 import { cookies } from "next/headers";
 
 export const dynamic = 'force-dynamic';
@@ -53,6 +54,7 @@ export default async function RootLayout({
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
         <AuthProvider>
           <UserProvider>
+            <FeedbackProvider>
             <PreviewProvider>
               <ViewProvider initialColumns={columns}>
                 <SendIntentListener />
@@ -63,6 +65,7 @@ export default async function RootLayout({
                 <JarvisWidget />
               </ViewProvider>
             </PreviewProvider>
+            </FeedbackProvider>
           </UserProvider>
         </AuthProvider>
       </body>

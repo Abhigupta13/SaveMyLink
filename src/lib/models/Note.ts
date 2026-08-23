@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document as MongooseDocument, Model } from 'mongoose';
+import { defineModel } from './registry';
 
 export interface INote extends MongooseDocument {
   userId: mongoose.Types.ObjectId;
@@ -18,4 +19,4 @@ const NoteSchema = new Schema<INote>({
 
 NoteSchema.index({ userId: 1, pinned: -1, updatedAt: -1 });
 
-export const Note: Model<INote> = mongoose.models.Note || mongoose.model<INote>('Note', NoteSchema);
+export const Note: Model<INote> = defineModel<INote>('Note', NoteSchema);

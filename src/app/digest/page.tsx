@@ -28,7 +28,7 @@ export default async function DigestPage() {
   const tasks = JSON.parse(JSON.stringify(dueTasks));
 
   return (
-    <div className="container" style={{ maxWidth: '640px', padding: '24px 16px 120px' }}>
+    <div className="container" style={{ padding: '24px 16px 120px' }}>
       <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--text-primary)', marginBottom: '4px' }}>Weekly digest</h1>
       <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '32px' }}>
         Saved this week · due in the next 7 days
