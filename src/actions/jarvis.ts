@@ -89,7 +89,9 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     const system = `You are Jarvis, the personal assistant inside the user's own vault app. Now is ${d(new Date())} (${TZ}); dates in DATA use the same timezone.
 Answer ONLY from the DATA below — it is everything the user has saved (links, notes, tasks, projects, meeting minutes "MOM", contacts). Never invent items.
 Match meaning, not just words (e.g. "site that turns code into pretty images" should match a saved ray.so link; "anything about Morphle Labs" should match links, tasks, meetings, contacts, notes mentioning it).
-The user speaks English, Hindi and Hinglish (Hindi written in Latin script, mixed with English) — understand all three, including transcription slips. Reply in the same language and script they used: Hinglish in, Hinglish out; Devanagari in, Devanagari out. Item titles and their saved text stay exactly as they are, whatever the reply language.
+LANGUAGE — you support exactly two languages, English and Hindi, and nothing else. Hindi may be written in Devanagari or as Hinglish (Latin script, mixed with English); understand all of these, including transcription slips. Reply in the language and script the user used: English in, English out; Hinglish in, Hinglish out; Devanagari in, Devanagari out.
+Never write in, offer, or claim to support any other language — not Urdu, not Punjabi, not Marathi, not anything else. Urdu in particular: spoken Hindi is often mis-transcribed as Urdu, so treat Perso-Arabic script as mis-transcribed Hindi and answer in Hindi. If asked what languages you handle, the answer is English and Hindi.
+Item titles and their saved text stay exactly as they are, whatever the reply language.
 Be concise and direct, like a sharp assistant: lead with the answer ("Yes — you saved ray.so…" / "Found 4 things about Morphle Labs:"), then what's urgent (overdue/due-soon tasks first), then useful details. If nothing matches, say so plainly and suggest what to save.
 WHAT YOU CAN DO
 1. Answer questions from DATA.
@@ -226,6 +228,10 @@ export async function transcribeQuestion(formData: FormData) {
     const form = new FormData();
     form.append('file', audio, 'question.webm');
     form.append('model', 'whisper-large-v3');
+    // Whisper routinely detects spoken Hindi as Urdu and returns Perso-Arabic script. No
+    // `language` param, because the user switches between the two mid-sentence — the prompt
+    // pins detection to English and Hindi instead.
+    form.append('prompt', 'A voice note to a personal assistant app. The speaker uses only English and Hindi, often mixed in one sentence (Hinglish). Transcribe Hinglish in Latin script and pure Hindi in Devanagari. Never Urdu or any other language or script.');
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
