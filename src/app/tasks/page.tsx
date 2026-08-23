@@ -67,7 +67,7 @@ export default function TasksPage() {
   const [notesSaved, setNotesSaved] = useState(true);
   const [showDone, setShowDone] = useState(false);
   const [editing, setEditing] = useState<any | null>(null); // task being edited
-  const [draft, setDraft] = useState({ title: '', dueAt: '', assigneeEmail: '', projectId: '' });
+  const [draft, setDraft] = useState({ title: '', description: '', dueAt: '', assigneeEmail: '', projectId: '' });
 
   const toLocalInput = (iso?: string | null) => {
     if (!iso) return '';
@@ -80,6 +80,7 @@ export default function TasksPage() {
     setEditing(task);
     setDraft({
       title: task.title || '',
+      description: task.description || '',
       dueAt: toLocalInput(task.dueAt),
       assigneeEmail: task.assigneeId?.email || task.assigneeEmail || '',
       projectId: task.projectId ? String(task.projectId) : '',
@@ -90,6 +91,7 @@ export default function TasksPage() {
     if (!editing) return;
     const res = await updateTask(editing._id, {
       title: draft.title.trim() || editing.title,
+      description: draft.description.trim(),
       dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null,
       assigneeEmail: draft.projectId ? (draft.assigneeEmail || null) : null,
       projectId: draft.projectId || null,
@@ -313,6 +315,8 @@ export default function TasksPage() {
             </div>
             <div style={{ display: 'grid', gap: '10px' }}>
               <input className="field" value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} placeholder="Task" autoFocus />
+              <textarea className="field" rows={4} value={draft.description} onChange={e => setDraft(d => ({ ...d, description: e.target.value }))}
+                placeholder="Description — details, checklist, links…" style={{ resize: 'vertical', lineHeight: 1.5 }} />
               <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Due</label>
               <input className="field" type="datetime-local" value={draft.dueAt} onChange={e => setDraft(d => ({ ...d, dueAt: e.target.value }))}
                 style={{ color: draft.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
@@ -391,6 +395,7 @@ export default function TasksPage() {
                       </button>
                       <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => !t.isTemp && openEdit(t)}>
                         <div className="task-title">{t.title}</div>
+                        {t.description && <div className="task-desc">{t.description}</div>}
                         {(t.dueAt || activeProject) && (
                           <div className="task-meta">
                             {t.dueAt && <span className={`chip ${overdue ? 'overdue' : isToday ? 'today' : ''}`}>{fmtDue(t.dueAt)}</span>}

@@ -57,7 +57,7 @@ export async function getMyOpenTasks() {
     const tasks = await Task.find({
       completed: false,
       $or: [{ userId: session.user.id, projectId: null }, { assigneeId: session.user.id }],
-    }).select('_id title dueAt completed').lean();
+    }).select('_id title dueAt completed projectId').lean(); // projectId drives the per-scope counts on /tasks
     return { success: true, tasks: JSON.parse(JSON.stringify(tasks)) };
   } catch (error) {
     console.error('Failed to get open tasks:', error);
