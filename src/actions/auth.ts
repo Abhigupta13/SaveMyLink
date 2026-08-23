@@ -9,6 +9,7 @@ import { createHash, randomInt } from 'crypto';
 
 interface RegisterInput { name: string; email: string; password: string }
 
+
 export async function registerUser({ name, email, password }: RegisterInput) {
   // Same rules as the client — never trust the browser's copy
   const nameError = validateName(name || '');
