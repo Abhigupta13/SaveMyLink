@@ -10,6 +10,7 @@ import { Contact } from "@/lib/models/Contact";
 import { Note } from "@/lib/models/Note";
 import { Document as Doc } from "@/lib/models/Document";
 import { JarvisSession } from "@/lib/models/JarvisSession";
+import { chatJSON } from "@/lib/llm";
 import { hasSafe } from "@/lib/safeCookie";
 import { User } from "@/lib/models/User";
 import { getServerSession } from "next-auth";
@@ -113,7 +114,8 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
-    if (!process.env.GROQ_API_KEY) return { success: false, error: 'GROQ_API_KEY not configured' };
+    // Bail before reading the whole vault to build a prompt nothing can answer
+    if (!process.env.GEMINI_API_KEY) return { success: false, error: 'GEMINI_API_KEY not configured' };
     if (!question.trim()) return { success: false, error: 'Ask something' };
 
     await connectToDatabase();
@@ -171,46 +173,16 @@ ${trimContext(ctx.text, question) || '(empty — the user has not saved anything
 
 NOW: ${d(new Date())} (${TZ}). Dates in DATA use this same timezone.`;
 
-    const call = () => fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'openai/gpt-oss-120b',
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: system },
-          // History is only here to resolve "it" and "that one" against the last few turns.
-          // Answers are long by design now, so they ride along trimmed — the full text is in
-          // DATA anyway, and six verbose replies re-sent every turn is most of a wasted budget.
-          ...history.slice(-4).map(h => ({ role: h.role, content: h.content.slice(0, 500) })),
-          { role: 'user', content: question },
-        ],
-      }),
-    });
-
-    let res = await call();
-    // A per-minute burst clears in seconds, and one short wait beats a dead turn. A daily-token
-    // limit reports minutes — retrying into that spends another request and another few thousand
-    // tokens to be refused identically, so take Groq at its word and give up.
-    if (res.status === 429) {
-      const wait = Number(res.headers.get('retry-after')) || 3;
-      if (wait <= 10) {
-        await new Promise(r => setTimeout(r, wait * 1000));
-        res = await call();
-      }
-    }
-    if (!res.ok) {
-      const body = await res.text();
-      console.error('Jarvis LLM error:', res.status, body);
-      if (res.status === 429) {
-        // Surface Groq's own wording — it names which limit was hit (requests, tokens, daily)
-        const reason = (() => { try { return JSON.parse(body)?.error?.message; } catch { return null; } })();
-        return { success: false, error: reason ? `Rate limited — ${reason}` : 'Rate limited. Give it a minute.' };
-      }
-      return { success: false, error: `Assistant unavailable (${res.status})` };
-    }
-    const data = await res.json();
-    const parsed = JSON.parse(data.choices?.[0]?.message?.content || '{}');
+    const res = await chatJSON([
+      { role: 'system', content: system },
+      // History is only here to resolve "it" and "that one" against the last few turns.
+      // Answers are long by design now, so they ride along trimmed — the full text is in
+      // DATA anyway, and six verbose replies re-sent every turn is most of a wasted budget.
+      ...history.slice(-4).map(h => ({ role: h.role, content: h.content.slice(0, 500) })),
+      { role: 'user', content: question },
+    ]);
+    if (!res.ok) return { success: false, error: res.error };
+    const parsed = res.data;
     // Run the actions the model asked for (this is the ONLY way it can change data)
     const created: JarvisItem[] = [];
     const createdTasks: { _id: string; title: string; dueAt?: string | null; completed?: boolean }[] = [];

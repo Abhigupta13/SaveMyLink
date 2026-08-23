@@ -9,11 +9,14 @@ import { Contact } from "@/lib/models/Contact";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
 import { projectForMember } from "@/lib/projectAccess";
+import { chatJSON } from "@/lib/llm";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 import path from 'path';
 import { unlink } from 'fs/promises';
 
+// Transcription only — chat extraction moved to Gemini via @/lib/llm, but Whisper stays here
+// because Groq bills audio against a separate quota from the chat tokens that kept running out.
 const GROQ_BASE = 'https://api.groq.com/openai/v1';
 
 // Transcripts mis-spell project names; match on letters only, then by containment
@@ -149,20 +152,12 @@ Never guess a project or person that isn't in the lists. Never invent deadlines.
 Reply ONLY with JSON:
 {"summary":"concise minutes in English: what was discussed and decided, grouped by topic","items":[{"kind":"task|note","title":"...","detail":"...","projectName":"...","assigneeEmail":"...","dueAt":"YYYY-MM-DDTHH:mm","missing":["project","assignee","due"]}]}`;
 
-    const res = await fetch(`${GROQ_BASE}/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'openai/gpt-oss-120b',
-        response_format: { type: 'json_object' },
-        messages: [{ role: 'system', content: system }, { role: 'user', content: mom.transcript.slice(0, 100000) }],
-      }),
-    });
-    if (!res.ok) {
-      console.error('Groq extraction failed:', await res.text());
-      return { success: false, error: `Task extraction failed (${res.status})` };
-    }
-    const parsed = JSON.parse((await res.json()).choices?.[0]?.message?.content || '{}');
+    const res = await chatJSON([
+      { role: 'system', content: system },
+      { role: 'user', content: mom.transcript.slice(0, 100000) },
+    ]);
+    if (!res.ok) return { success: false, error: `Task extraction failed — ${res.error}` };
+    const parsed = res.data;
 
     const knownEmails = new Set([myEmail, ...(contacts as any[]).map(c => c.email).filter(Boolean),
       ...(projects as any[]).flatMap(p => [p.ownerId?.email, ...(p.memberEmails || [])]).filter(Boolean)].map(String));

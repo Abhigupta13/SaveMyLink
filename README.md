@@ -47,7 +47,9 @@ The APK is a thin native shell (share-sheet receiver, local notifications, nativ
 MONGODB_URI=...          # MongoDB connection string
 NEXTAUTH_SECRET=...      # also signs the private-safe cookie
 NEXTAUTH_URL=https://<your-domain>
-GROQ_API_KEY=...         # MOM transcription (whisper-large-v3) + task extraction
+GEMINI_API_KEY=...       # Jarvis + MOM task extraction (aistudio.google.com/apikey)
+GEMINI_MODEL=...         # optional, defaults to gemini-flash-latest (alias — survives renames)
+GROQ_API_KEY=...         # voice + MOM transcription only (whisper-large-v3)
 
 # Password-reset email (optional — without it the reset link is shown on screen)
 SMTP_HOST=smtp.gmail.com
