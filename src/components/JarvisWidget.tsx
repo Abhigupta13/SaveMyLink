@@ -14,11 +14,9 @@ type Mode = 'idle' | 'capturing';
 const GREETING = "What's on your mind?";
 const BASE_SUGGESTIONS = ['What is urgent today?', 'What did I save this week?'];
 
-const SILENCE_MS = 1300;           // quiet time AFTER you've spoken before we send
-const WAIT_FOR_SPEECH_MS = 12000;  // how long the mic waits for you to begin before giving up
-const MIN_SPEECH_MS = 400;         // ignore a stray cough as a whole utterance
-const MAX_CLIP_MS = 60000;
-const SPEECH_PEAK = 6;             // amplitude above silence that counts as talking
+const SILENCE_MS = 2600;      // quiet time AFTER you've spoken before we send
+const WAIT_FOR_SPEECH_MS = 20000;  // how long the mic waits for you to begin
+const MIN_SPEECH_MS = 800;
 
 function itemHref(i: JarvisItem) {
   if (i.type === 'link' && i.url) return i.url;
@@ -43,15 +41,23 @@ export default function JarvisWidget() {
   const [speaking, setSpeaking] = useState(false);
   const [muted, setMuted] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>(BASE_SUGGESTIONS);
+  const [heard, setHeard] = useState(false);   // have you said anything this turn?
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const fabRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const recRef = useRef<any>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const finalRef = useRef('');
+  const silenceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stoppingRef = useRef(false);
+  const heardRef = useRef(false);        // has the user actually said anything this turn?
   const modeRef = useRef<Mode>('idle');
+  const startedRef = useRef(false);      // did the browser actually open a mic session?
+  const retriedRef = useRef(false);
+  const [voiceBlocked, setVoiceBlocked] = useState(false);
   const mutedRef = useRef(false);
   const speakingRef = useRef(false);     // our own flag: speechSynthesis.speaking gets stuck in Chrome
   const msgsRef = useRef<Msg[]>([]);
@@ -61,7 +67,9 @@ export default function JarvisWidget() {
   const loopRef = useRef(false);              // conversation mode: reopen the mic after each answer
   const listenAgainRef = useRef<() => void>(() => {});   // set below; breaks the ask ⇄ startRecognition cycle
   const setModeBoth = (m: Mode) => { modeRef.current = m; setMode(m); };
+  const setHeardBoth = (v: boolean) => { heardRef.current = v; setHeard(v); };
 
+  const hasSR = typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
   const hasTTS = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
   useEffect(() => { try { const m = localStorage.getItem('jarvisMuted') === '1'; setMuted(m); mutedRef.current = m; } catch {} }, []);
@@ -82,7 +90,12 @@ export default function JarvisWidget() {
     }).catch(() => {});
   }, [open]);
 
+  const clearSilence = () => { if (silenceRef.current) { clearTimeout(silenceRef.current); silenceRef.current = null; } };
+
   const stopListening = useCallback(() => {
+    stoppingRef.current = true;
+    clearSilence();
+    try { recRef.current?.stop(); } catch {}
     if (mediaRef.current?.state === 'recording') mediaRef.current.stop();
     setModeBoth('idle');
   }, []);
@@ -109,6 +122,7 @@ export default function JarvisWidget() {
     const question = text.trim();
     if (!question) return;
     setQ('');
+    finalRef.current = '';
     stopSpeaking();
     const history: JarvisTurn[] = msgsRef.current.map(m => ({ role: m.role, content: m.content }));
     setMsgs(m => [...m, { role: 'user', content: question }]);
@@ -120,111 +134,180 @@ export default function JarvisWidget() {
       ? { role: 'assistant', content: res.answer || '…', items: res.items }
       : { role: 'assistant', content: res.error || 'Something went wrong.' };
     setMsgs(m => [...m, reply]);
-    // A failed turn ends the loop — otherwise a rate limit would keep firing more requests at it
-    if (!res.success) loopRef.current = false;
     await speak(reply.content);
     listenAgainRef.current();   // keep the conversation going until you stop the mic or close
   }, [speak, stopSpeaking]);
 
   // ---------- listening ----------
-  // Kept open across turns: re-acquiring the mic each turn costs a few hundred ms and
-  // makes the browser's recording indicator blink between turns.
-  const getStream = useCallback(async () => {
-    if (streamRef.current?.active) return streamRef.current;
-    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = s;
-    return s;
-  }, []);
-  const releaseStream = useCallback(() => {
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
+  const submitNow = useCallback(() => {
+    clearSilence();
+    const text = finalRef.current.trim();
+    finalRef.current = '';
+    stoppingRef.current = true;
+    try { recRef.current?.stop(); } catch {}
+    setModeBoth('idle');
+    setHeardBoth(false);
+    if (text) ask(text);
+  }, [ask]);
+
+  /** Once you've started talking, send after a pause. Before that, just wait. */
+  const armSubmit = useCallback(() => {
+    clearSilence();
+    silenceRef.current = setTimeout(submitNow, SILENCE_MS);
+  }, [submitNow]);
+
+  /** Give you plenty of time to begin — nothing is sent until you speak. */
+  const armWaitForSpeech = useCallback(() => {
+    clearSilence();
+    silenceRef.current = setTimeout(() => {
+      if (heardRef.current) return;      // speech arrived; the pause timer owns it now
+      stoppingRef.current = true;
+      try { recRef.current?.stop(); } catch {}
+      setModeBoth('idle');
+      setQ('');
+      loopRef.current = false;           // you went quiet — stop reopening the mic
+    }, WAIT_FOR_SPEECH_MS);
   }, []);
 
-  /**
-   * Records one utterance and sends it to Whisper. Endpointing is done on the audio
-   * itself — the browser's SpeechRecognition is not used at all, because it accepts
-   * exactly one language (so English came back transliterated into Devanagari) and its
-   * restart-on-end lifecycle races across turns. Whisper detects the language itself.
-   */
-  const listen = useCallback(async () => {
-    if (modeRef.current === 'capturing') return;
+  /** Listens continuously and only sends after a real pause, so you can think mid-sentence. */
+  const startRecognition = useCallback(() => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return false;
+    if (modeRef.current === 'capturing') return true;   // already live — never run two sessions
+    clearSilence();
+    try { recRef.current?.stop(); } catch {}
+
+    const rec = new SR();
+    // Web Speech takes exactly one language. hi-IN copes with Hinglish code-switching and still
+    // returns English words; en-IN drops Hindi entirely. Whisper (Android path) auto-detects.
+    rec.lang = 'hi-IN';
+    rec.interimResults = true;
+    rec.continuous = true;
+    stoppingRef.current = false;
+    startedRef.current = false;
+    setHeardBoth(false);
+    finalRef.current = '';
     setModeBoth('capturing');
-    let stream: MediaStream;
-    try {
-      stream = await getStream();
-    } catch {
+
+    rec.onstart = () => { startedRef.current = true; retriedRef.current = false; setVoiceBlocked(false); };
+
+    rec.onresult = (e: any) => {
+      // Ignore our own voice coming back through the mic
+      if (speakingRef.current) return;
+
+      let interim = '';
+      let finals = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finals += r[0].transcript + ' ';
+        else interim += r[0].transcript;
+      }
+      const heard = (finals + interim).trim();
+
+      if (modeRef.current !== 'capturing') return;
+      finalRef.current += finals;
+      const shown = (finalRef.current + interim).trim();
+      setQ(shown);
+      if (shown) { setHeardBoth(true); armSubmit(); }   // pause timer starts only once you speak
+    };
+
+    rec.onerror = (e: any) => {
+      if (e?.error === 'no-speech' || e?.error === 'aborted') return;
+      stoppingRef.current = true;
       setModeBoth('idle');
-      loopRef.current = false;
+    };
+    rec.onend = () => {
+      if (stoppingRef.current) { setModeBoth('idle'); return; }
+      // Chrome ends instantly (no onstart) when the call had no user gesture — retry once, then ask for a tap
+      if (!startedRef.current) {
+        if (retriedRef.current) { setModeBoth('idle'); setVoiceBlocked(true); return; }
+        retriedRef.current = true;
+        setTimeout(() => { try { rec.start(); } catch { setModeBoth('idle'); setVoiceBlocked(true); } }, 250);
+        return;
+      }
+      try { rec.start(); } catch { setModeBoth('idle'); }   // sessions are short-lived; keep it alive
+    };
+
+    recRef.current = rec;
+    try { rec.start(); } catch { return false; }
+    return true;
+  }, [armSubmit, hasTTS]);
+
+  /** Fallback for the Android app (no Web Speech API): tap-to-talk, stops on silence. */
+  const recordOnce = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : undefined });
+      chunksRef.current = [];
+      rec.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        setModeBoth('idle');
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        if (blob.size < 1200) { setQ(''); return; }
+        setQ('Transcribing…'); setBusy(true);
+        const fd = new FormData(); fd.append('audio', blob, 'q.webm');
+        const tr = await transcribeQuestion(fd);
+        setBusy(false);
+        if (tr.success && tr.text) { setQ(tr.text); ask(tr.text); }
+        else { setQ(''); speak("Sorry, I didn't catch that."); }
+      };
+      mediaRef.current = rec;
+      setModeBoth('capturing');
+      rec.start();
+
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      const startedAt = Date.now();
+      let quietSince: number | null = null;
+      let spoke = false;
+      const tick = () => {
+        if (rec.state !== 'recording') { ctx.close().catch(() => {}); return; }
+        analyser.getByteTimeDomainData(buf);
+        let peak = 0;
+        for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
+        const now = Date.now();
+        if (peak > 6) { spoke = true; quietSince = null; } else if (quietSince === null) quietSince = now;
+
+        // Only close the clip once you've actually said something and then gone quiet
+        if (spoke && quietSince && now - startedAt > MIN_SPEECH_MS && now - quietSince > SILENCE_MS) { rec.stop(); return; }
+        if (!spoke && now - startedAt > WAIT_FOR_SPEECH_MS) { rec.stop(); return; }
+        if (now - startedAt > 60000) { rec.stop(); return; }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    } catch {
       speak('Microphone is not available.');
+      setModeBoth('idle');
+    }
+  }, [ask, speak]);
+
+  // Mic button: start listening; once you've spoken it doubles as "send now"
+  const micTap = () => {
+    if (mode === 'capturing') {
+      if (heardRef.current) { clearSilence(); submitNow(); return; }   // mid-sentence: send what you said
+      loopRef.current = false;                                          // silent tap = mic off, conversation over
+      stopListening();
       return;
     }
-    if (!openRef.current || !loopRef.current) { setModeBoth('idle'); return; }   // closed while the mic was opening
-
-    const rec = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : undefined });
-    chunksRef.current = [];
-    let spoke = false;
-    rec.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
-    rec.onstop = async () => {
-      setModeBoth('idle');
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-      if (!spoke || blob.size < 1200) { setQ(''); loopRef.current = false; return; }  // silence = you're done talking
-      setQ('Transcribing…'); setBusy(true);
-      const fd = new FormData(); fd.append('audio', blob, 'q.webm');
-      const tr = await transcribeQuestion(fd);
-      setBusy(false);
-      if (tr.success && tr.text) { setQ(tr.text); ask(tr.text); }
-      else if (tr.error && !tr.success) {   // rate limit or server error — stop, don't retry into it
-        setQ('');
-        loopRef.current = false;
-        setMsgs(m => [...m, { role: 'assistant', content: tr.error! }]);
-        await speak(tr.error!);
-      }
-      else { setQ(''); await speak("Sorry, I didn't catch that."); listenAgainRef.current(); }
-    };
-    mediaRef.current = rec;
-    rec.start();
-
-    // Endpointing: wait for speech, then close the clip once you've gone quiet.
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 1024;
-    const src = ctx.createMediaStreamSource(stream);
-    src.connect(analyser);
-    const buf = new Uint8Array(analyser.fftSize);
-    const startedAt = Date.now();
-    let quietSince: number | null = null;
-    const tick = () => {
-      if (rec.state !== 'recording') { src.disconnect(); ctx.close().catch(() => {}); return; }
-      analyser.getByteTimeDomainData(buf);
-      let peak = 0;
-      for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
-      const now = Date.now();
-      if (peak > SPEECH_PEAK) { spoke = true; quietSince = null; } else if (quietSince === null) quietSince = now;
-
-      if (spoke && quietSince && now - startedAt > MIN_SPEECH_MS && now - quietSince > SILENCE_MS) { rec.stop(); return; }
-      if (!spoke && now - startedAt > WAIT_FOR_SPEECH_MS) { rec.stop(); return; }   // nothing said → onstop ends the loop
-      if (now - startedAt > MAX_CLIP_MS) { rec.stop(); return; }
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  }, [ask, speak, getStream]);
-
-  // Mic button: off while listening, on otherwise.
-  const micTap = () => {
-    if (mode === 'capturing') { loopRef.current = false; stopListening(); setQ(''); return; }
     stopSpeaking();
+    setVoiceBlocked(false); retriedRef.current = false;
     loopRef.current = true;
     listenAgainRef.current();
   };
 
-  // Reopen the mic after every answer so the conversation just continues.
+  // Reopen the mic after each answer so you can just keep talking.
   listenAgainRef.current = () => {
     if (!openRef.current || !loopRef.current) return;
-    listen();
+    if (hasSR) { startRecognition(); armWaitForSpeech(); }
+    else recordOnce();                                    // Android webview: no Web Speech API
   };
 
   // ---------- panel lifecycle ----------
-  const closePanel = useCallback(() => { loopRef.current = false; stopListening(); stopSpeaking(); releaseStream(); setOpen(false); }, [stopListening, stopSpeaking, releaseStream]);
+  const closePanel = useCallback(() => { loopRef.current = false; stopListening(); stopSpeaking(); setOpen(false); }, [stopListening, stopSpeaking]);
 
   /** Greets, then listens; every answer reopens the mic until you stop it or close the panel. */
   const openPanel = useCallback(() => {
@@ -232,13 +315,15 @@ export default function JarvisWidget() {
     openRef.current = true;
     loopRef.current = true;
     stopSpeaking();
+    setVoiceBlocked(false);
+    retriedRef.current = false;
     // Mic opens only once the greeting has finished playing, so it captures you and not Jarvis
     speak(GREETING).then(() => listenAgainRef.current());
   }, [speak, stopSpeaking]);
 
   const toggleOpen = () => (openRef.current ? closePanel() : openPanel());
 
-  useEffect(() => () => { stopListening(); stopSpeaking(); releaseStream(); }, [stopListening, stopSpeaking, releaseStream]);
+  useEffect(() => () => { stopListening(); stopSpeaking(); }, [stopListening, stopSpeaking]);
 
   // Tap outside (or Esc) closes the assistant and releases the mic
   useEffect(() => {
@@ -273,8 +358,9 @@ export default function JarvisWidget() {
 
   const statusLabel =
     busy ? 'Thinking…'
-    : mode === 'capturing' ? 'Listening… pause when you\'re done'
+    : mode === 'capturing' ? (q ? 'Listening… pause when you\'re done' : 'Listening… go ahead, or tap the mic to stop')
     : speaking ? 'Speaking… tap to interrupt'
+    : voiceBlocked ? 'Tap the mic to enable voice'
     : 'Tap the mic to speak';
 
   return (
@@ -345,8 +431,8 @@ export default function JarvisWidget() {
 
           <div className="jarvis-input">
             <button type="button" className={`jarvis-mic ${mode === 'capturing' ? 'on' : ''}`}
-              onClick={micTap} disabled={busy} aria-label={mode === 'capturing' ? 'Stop listening' : 'Speak'}>
-              {mode === 'capturing' ? <Square size={18} fill="currentColor" /> : <Mic size={20} />}
+              onClick={micTap} disabled={busy} aria-label={mode === 'capturing' && heard ? 'Send' : 'Speak'}>
+              {mode === 'capturing' && heard ? <Square size={18} fill="currentColor" /> : <Mic size={20} />}
             </button>
             <form style={{ display: 'flex', gap: '8px', flex: 1 }} onSubmit={e => { e.preventDefault(); ask(q); }}>
               <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
