@@ -226,6 +226,10 @@ export async function transcribeQuestion(formData: FormData) {
     const form = new FormData();
     form.append('file', audio, 'question.webm');
     form.append('model', 'whisper-large-v3');
+    // No `language` param — Whisper detects it, which is the whole point: the user switches
+    // between English, Hindi and Hinglish mid-sentence. The prompt biases code-switched speech
+    // toward Latin script so English words don't come back transliterated into Devanagari.
+    form.append('prompt', 'A voice note to a personal assistant app. The speaker mixes English and Hindi (Hinglish) — keep Hinglish in Latin script, pure Hindi in Devanagari.');
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
