@@ -2167,7 +2167,9 @@ body {
 .quick-add { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 18px; padding: 10px; margin-bottom: 24px; transition: var(--transition); }
 .quick-add:focus-within { border-color: var(--accent-color); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
 .quick-add-main { display: flex; align-items: center; gap: 8px; }
-.quick-add-main input[type="text"] { flex: 1; padding: 10px 12px; border: none; background: transparent; color: var(--text-primary); outline: none; font-size: 1rem; font-weight: 600; }
+/* min-width:0 — without it the input's intrinsic width wins and shoves Add past the card edge */
+.quick-add-main input[type="text"] { flex: 1; min-width: 0; padding: 10px 12px; border: none; background: transparent; color: var(--text-primary); outline: none; font-size: 1rem; font-weight: 600; }
+.quick-add-main .btn-primary { flex-shrink: 0; white-space: nowrap; }
 .quick-add-meta { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 4px 0; }
 .quick-add-meta .field { width: auto; flex: 1 1 160px; padding: 8px 12px; font-size: 0.8rem; }
 .task-group { margin-bottom: 22px; }
@@ -2181,6 +2183,7 @@ body {
 .task-check.on { background: var(--accent-color); border-color: var(--accent-color); }
 .task-title { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); line-height: 1.35; }
 .task-row.done .task-title { text-decoration: line-through; color: var(--text-tertiary); }
+.task-desc { font-size: 0.82rem; color: var(--text-secondary); line-height: 1.45; margin-top: 3px; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .task-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 5px; align-items: center; }
 .chip { font-size: 0.7rem; font-weight: 700; padding: 3px 9px; border-radius: 7px; background: var(--bg-tertiary); color: var(--text-secondary); white-space: nowrap; }
 .chip.overdue { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
@@ -2518,6 +2521,11 @@ main { padding-bottom: 84px; }
   .jarvis-fab.is-open { display: none; }
   .jarvis-panel { bottom: 76px; height: min(70vh, calc(100vh - 190px)); }
 }
+/* Roomier on a desktop screen (1.2x wide, 1.3x tall). Phones keep the sizes above.
+   Must come last — the min-width:601px rule earlier also sets height. */
+@media (min-width: 768px) {
+  .jarvis-panel { width: min(480px, calc(100vw - 32px)); height: min(728px, calc(100vh - 130px)); }
+}
 
 /* ---------- Home tiles: compact grid (default) / detailed list ---------- */
 .tiles-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
@@ -2547,3 +2555,41 @@ main { padding-bottom: 84px; }
 .safe-row { display: flex; align-items: center; gap: 14px; padding: 14px 16px; }
 .safe-icon { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px; background: var(--bg-tertiary); color: var(--text-secondary); flex-shrink: 0; }
 .safe-icon.on { background: var(--accent-soft, rgba(99,102,241,0.15)); color: var(--accent-color); }
+
+/* ---------- Projects: grid + one-page workspace ---------- */
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.project-card { display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 16px; text-decoration: none; color: inherit; transition: var(--transition); }
+.project-card:hover { border-color: var(--accent-color); transform: translateY(-2px); }
+.project-card-icon { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px; background: var(--bg-tertiary); color: var(--accent-color); flex-shrink: 0; }
+.project-card-name { font-weight: 800; font-size: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-card-meta { display: flex; gap: 12px; margin-top: 4px; font-size: 0.74rem; color: var(--text-secondary); font-weight: 600; }
+.project-card-meta span { display: inline-flex; align-items: center; gap: 4px; }
+
+.ws-section { margin-bottom: 22px; }
+.ws-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ws-head-btn { flex: 1; display: flex; align-items: center; gap: 6px; background: none; border: none; padding: 0; cursor: pointer; color: var(--text-secondary); font-weight: 800; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.ws-title { width: 100%; background: none; border: none; outline: none; padding: 0; color: var(--text-primary); font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; }
+.ws-title:focus { border-bottom: 2px solid var(--accent-color); }
+.ws-title:disabled { opacity: 1; }
+
+/* ---------- Print / "Download as PDF" ---------- */
+.print-only { display: none; }
+@media print {
+  .print-hide, .side-rail, .topbar, .bottom-nav, .fab-container, .search-strip, .jarvis-fab, .jarvis-panel, .toast-stack { display: none !important; }
+  .print-only { display: block; color: #000; font-family: ui-sans-serif, system-ui, sans-serif; }
+  @page { margin: 16mm; }
+  html, body { background: #fff !important; color: #000 !important; }
+  main { padding: 0 !important; }
+  .print-only h1 { font-size: 22pt; margin: 0 0 2mm; }
+  .print-only h2 { font-size: 13pt; margin: 8mm 0 2mm; border-bottom: 1px solid #999; padding-bottom: 1mm; }
+  .print-only h3 { font-size: 11pt; margin: 4mm 0 1mm; }
+  .print-only p, .print-only li, .print-only td, .print-only th { font-size: 10pt; line-height: 1.45; }
+  .print-only .print-sub { color: #555; font-weight: 400; font-size: 9pt; }
+  .print-only .print-pre { white-space: pre-wrap; }
+  .print-only .print-desc { color: #444; font-size: 9pt; white-space: pre-wrap; margin-top: 1mm; }
+  .print-only table { width: 100%; border-collapse: collapse; margin-top: 2mm; }
+  .print-only th, .print-only td { border: 1px solid #bbb; padding: 2mm 2.5mm; text-align: left; vertical-align: top; }
+  .print-only th { background: #f1f1f1; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.04em; }
+  .print-only tr, .print-only .print-block { break-inside: avoid; }
+  .print-only ul { margin: 2mm 0 0 5mm; }
+}

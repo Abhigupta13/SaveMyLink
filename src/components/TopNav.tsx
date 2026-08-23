@@ -5,12 +5,13 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import AddLinkForm from './AddLinkForm';
 import PinModal from './PinModal';
 import { useSession } from 'next-auth/react';
-import { Search, Plus, Home, Link as LinkIcon, Library, CheckSquare, Mic, Users, Newspaper, Upload, StickyNote, X } from 'lucide-react';
+import { Search, Plus, Home, Link as LinkIcon, Library, CheckSquare, Mic, Users, Newspaper, Upload, StickyNote, FolderOpen, X } from 'lucide-react';
 
 const NAV = [
   { label: 'Links', path: '/links', Icon: LinkIcon },
   { label: 'Notes', path: '/notes', Icon: StickyNote },
   { label: 'Tasks', path: '/tasks', Icon: CheckSquare },
+  { label: 'Projects', path: '/projects', Icon: FolderOpen },
   { label: 'MOM', path: '/mom', Icon: Mic },
   { label: 'Digi Locker', path: '/d-locker', Icon: Library },
   { label: 'Contacts', path: '/contacts', Icon: Users },
@@ -18,7 +19,7 @@ const NAV = [
   { label: 'Import', path: '/import', Icon: Upload },
 ];
 // Phone bottom bar: the daily-use four + menu for everything else
-const MOBILE_NAV = ['/links', '/notes', '/tasks'];
+const MOBILE_NAV = ['/links', '/notes', '/tasks', '/projects'];
 
 export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
   const { data: session } = useSession();

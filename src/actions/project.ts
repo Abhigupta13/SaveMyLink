@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import { Project } from "@/lib/models/Project";
 import Task from "@/lib/models/Task";
+import { Mom } from "@/lib/models/Mom";
 import { projectForMember } from "@/lib/projectAccess";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
@@ -70,6 +71,61 @@ export async function addMember(projectId: string, email: string) {
   } catch (error) {
     console.error('Failed to add member:', error);
     return { success: false, error: 'Failed to add member' };
+  }
+}
+
+export async function removeMember(projectId: string, email: string) {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+    const normalized = email.trim().toLowerCase();
+    // Owner only — and the owner cannot remove themselves out of their own project
+    if (normalized === (session.user.email || '').toLowerCase()) return { success: false, error: "You can't remove yourself" };
+
+    const res = await Project.findOneAndUpdate(
+      { _id: projectId, ownerId: session.user.id },
+      { $pull: { memberEmails: normalized } }
+    );
+    if (!res) return { success: false, error: 'Project not found or not owner' };
+
+    // Their assignments stay, but nobody is holding them any more
+    await Task.updateMany({ projectId, assigneeEmail: normalized }, { $unset: { assigneeId: '', assigneeEmail: '' } });
+
+    revalidatePath('/tasks'); revalidatePath('/projects');
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to remove member:', error);
+    return { success: false, error: 'Failed to remove member' };
+  }
+}
+
+// Open-task and meeting counts for the projects grid, in two aggregates rather than N queries.
+export async function getProjectStats() {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+    const projects = await Project.find({
+      $or: [{ ownerId: session.user.id }, { memberEmails: (session.user.email || '').toLowerCase() }],
+    }).select('_id').lean();
+    const ids = projects.map(p => p._id);
+
+    const [tasks, moms] = await Promise.all([
+      Task.aggregate([{ $match: { projectId: { $in: ids } } }, { $group: { _id: { p: '$projectId', done: '$completed' }, n: { $sum: 1 } } }]),
+      Mom.aggregate([{ $match: { projectId: { $in: ids } } }, { $group: { _id: '$projectId', n: { $sum: 1 } } }]),
+    ]);
+
+    const stats: Record<string, { open: number; done: number; moms: number }> = {};
+    const at = (id: any) => (stats[String(id)] ||= { open: 0, done: 0, moms: 0 });
+    for (const t of tasks) at(t._id.p)[t._id.done ? 'done' : 'open'] += t.n;
+    for (const m of moms) at(m._id).moms += m.n;
+    return { success: true, stats };
+  } catch (error) {
+    console.error('Failed to get project stats:', error);
+    return { success: false, error: 'Failed to fetch stats' };
   }
 }
 
