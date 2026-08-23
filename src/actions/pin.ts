@@ -4,8 +4,16 @@ import connectToDatabase from '@/lib/mongodb';
 import { User } from '@/lib/models/User';
 import bcrypt from 'bcryptjs';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { revalidatePath } from 'next/cache';
+import { grantSafe, hasSafe } from '@/lib/safeCookie';
+
+// Whether this session still holds a valid server-side private-safe grant
+export async function getSafeStatus() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { safe: false };
+  return { safe: await hasSafe((session.user as any).id) };
+}
 
 export async function getPinStatus() {
   const session = await getServerSession(authOptions);
@@ -51,9 +59,11 @@ export async function verifyPrivatePin(pin: string) {
   }
 
   const isValid = await bcrypt.compare(pin, user.privatePin);
-  
-  return { 
-    success: isValid 
+
+  if (isValid) await grantSafe((session.user as any).id);
+
+  return {
+    success: isValid
   };
 }
 

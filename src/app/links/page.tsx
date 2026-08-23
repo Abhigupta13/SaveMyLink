@@ -4,7 +4,7 @@ import CategoryFilter from '@/components/CategoryFilter';
 import LinksDisplay from '@/components/LinksDisplay';
 import { cookies } from 'next/headers';
 import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { authOptions } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
@@ -17,7 +17,7 @@ export default async function LinksPage({
   const session = await getServerSession(authOptions);
 
   if (!session) {
-    redirect('/auth/login');
+    redirect('/auth/signin');
   }
 
   const cookieStore = await cookies();
@@ -57,10 +57,11 @@ export default async function LinksPage({
           privateSafe={privateSafe}
         />
       ) : (
-        <div className="empty-links-state">
-          <h2>
-            {categoryId ? 'No links found in this category.' : 'No links found. Add one above!'}
-          </h2>
+        <div className="empty-state" style={{ marginTop: '24px' }}>
+          <p style={{ fontWeight: 800, marginBottom: '4px' }}>{search ? 'No matches' : categoryId ? 'Nothing in this category yet' : 'Nothing saved yet'}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            {search ? 'Try a different search.' : 'Tap the + button (bottom right) to save a link or note.'}
+          </p>
         </div>
       )}
     </main>

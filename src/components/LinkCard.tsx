@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePreview } from '@/components/PreviewContext';
 import { updateLink, deleteLink, toggleFavorite, refreshMetadata, toggleLinkPrivacy } from '@/actions/link';
+import { createTask } from '@/actions/task';
+import { syncTask } from '@/lib/taskNotifications';
 
 export default function LinkCard({ link, categories, privateSafe = false }: { link: any, categories: any[], privateSafe?: boolean }) {
   const { showPreview } = usePreview();
@@ -20,6 +22,26 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
   const [isDeleting, setIsDeleting] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [showRemind, setShowRemind] = useState(false);
+  const [remindAt, setRemindAt] = useState('');
+
+  // Link → Task bridge: "remind me about this link"
+  const handleRemind = async () => {
+    if (!remindAt) return;
+    const res = await createTask(link.title || link.url, {
+      linkId: link._id,
+      dueAt: new Date(remindAt).toISOString(),
+    });
+    if (res.success) {
+      syncTask(res.task); // schedule on-device reminder immediately
+      setShowRemind(false);
+      setRemindAt('');
+      setStatus({ type: 'success', message: 'Reminder task created!' });
+      setTimeout(() => setStatus(null), 3000);
+    } else {
+      alert(res.error || 'Failed to create reminder');
+    }
+  };
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,7 +121,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
       try {
         await navigator.share({
           title: link.title || 'Check out this link',
-          url: link.url,
+          ...(link.url ? { url: link.url } : { text: link.title }),
         });
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
@@ -116,7 +138,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
 
   const copyToClipboard = async () => {
     try {
-      await navigator.clipboard.writeText(link.url);
+      await navigator.clipboard.writeText(link.url || link.title);
       setStatus({ type: 'success', message: 'Link copied!' });
       setTimeout(() => setStatus(null), 2000);
     } catch (err) {
@@ -128,7 +150,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
 
   return (
     <div className="link-card-container">
-      <a href={link.url} target="_blank" rel="noopener noreferrer" className="link-card">
+      <a href={link.url || undefined} target={link.url ? '_blank' : undefined} rel="noopener noreferrer" className="link-card">
         {showPreview && (
           <div className="card-image-wrap">
             {link.previewImageUrl ? (
@@ -157,6 +179,11 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
               <span className="card-category" style={{ backgroundColor: categoryColor, marginBottom: 0 }}>
                 {categoryName}
               </span>
+              {link.isDead && (
+                <span className="card-category" title="This link no longer loads" style={{ backgroundColor: '#ef4444', marginBottom: 0 }}>
+                  dead
+                </span>
+              )}
             </div>
             <div className="card-tags">
               {link.tags && link.tags.map((tag: string, i: number) => (
@@ -262,6 +289,21 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
                 </label>
               </div>
 
+              {showRemind && (
+                <div className="input-group" style={{ flexDirection: 'row', gap: '8px', alignItems: 'center' }}>
+                  <input
+                    type="datetime-local"
+                    value={remindAt}
+                    onChange={(e) => setRemindAt(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <button type="button" className="btn-primary" onClick={handleRemind} disabled={!remindAt}
+                    style={{ padding: '10px 20px', borderRadius: '10px', fontWeight: 700 }}>
+                    Remind me
+                  </button>
+                </div>
+              )}
+
               <div className="modal-footer">
                 <button 
                   type="button" 
@@ -294,7 +336,15 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
                     >
                       {isFavorite ? '★' : '☆'}
                     </button>
-                    <button 
+                    <button
+                      type="button"
+                      onClick={() => setShowRemind(!showRemind)}
+                      title="Remind me about this"
+                      style={{ background: showRemind ? 'var(--accent-soft, rgba(74,222,128,0.15))' : 'var(--bg-tertiary)', width: '36px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}
+                    >
+                      ⏰
+                    </button>
+                    <button
                       type="button"
                       className="modal-share-btn"
                       onClick={handleShare}

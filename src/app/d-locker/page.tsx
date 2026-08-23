@@ -41,7 +41,7 @@ export default function DLockerPage() {
 
   useEffect(() => {
     if (status === 'unauthenticated') {
-      router.push('/auth/login');
+      router.push('/auth/signin');
     } else if (status === 'authenticated') {
       fetchDocs();
     }
@@ -118,12 +118,12 @@ export default function DLockerPage() {
     <main className="container d-locker-container">
       <header className="d-locker-header">
         <div className="header-info">
-          <h1>D-locker</h1>
-          <p>Secure vault for your important documents and links.</p>
+          <h1 className="page-title">D-locker</h1>
+          <p className="page-subtitle">Documents, PDFs & important files</p>
         </div>
         <button className="add-doc-btn" onClick={() => setIsAddingDoc(true)}>
           <span className="plus-icon">+</span>
-          Add New Document
+          Add document
         </button>
       </header>
 

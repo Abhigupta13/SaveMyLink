@@ -7,7 +7,10 @@ import { Category } from '@/lib/models/Category';
 import { revalidatePath } from 'next/cache';
 import { scrapeMetadata } from '@/lib/metadata';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
+import { escapeRegex } from '@/lib/regex';
+import { normalizeUrl, youtubeId } from '@/lib/url';
+import { hasSafe } from '@/lib/safeCookie';
 
 export async function getLinkMetadata(url: string) {
   const session = await getServerSession(authOptions);
@@ -27,9 +30,12 @@ export async function getLinks(categoryId?: string, page: number = 1, limit: num
   const userId = (session.user as any).id;
 
   await connectToDatabase();
-  
+
+  // Server-side gate: private mode requires a verified-PIN cookie, not just client state
+  if (privateSafe && !(await hasSafe(userId))) privateSafe = false;
+
   let query: any = { userId };
-  
+
   // Strict Filtering by Private Safe state
   if (!privateSafe) {
     query.isPrivate = { $ne: true }; // Only show public links in general mode
@@ -46,7 +52,7 @@ export async function getLinks(categoryId?: string, page: number = 1, limit: num
   }
   
   if (search) {
-    const searchRegex = new RegExp(search, 'i');
+    const searchRegex = new RegExp(escapeRegex(search), 'i');
     query.$or = [
       { title: searchRegex },
       { url: searchRegex },
@@ -208,60 +214,6 @@ export async function refreshMetadata(linkId: string) {
   }
 }
 
-export async function refreshAllMetadata(privateSafe?: boolean) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return { error: 'Not authenticated' };
-  const userId = (session.user as any).id;
-
-  await connectToDatabase();
-  try {
-    const query: any = { userId };
-    if (privateSafe === true) {
-      query.isPrivate = true;
-    } else if (privateSafe === false) {
-      query.isPrivate = { $ne: true };
-    }
-
-    const links = await Link.find(query)
-      .select('_id url title')
-      .lean();
-
-    let successCount = 0;
-    let failedCount = 0;
-    const batchSize = 5;
-
-    for (let i = 0; i < links.length; i += batchSize) {
-      const batch = links.slice(i, i + batchSize);
-      const batchResults = await Promise.allSettled(
-        batch.map(async (link: any) => {
-          const metadata = await scrapeMetadata(link.url);
-          const updateData: any = {
-            title: metadata.title || link.title || link.url,
-            previewImageUrl: metadata.image || '',
-          };
-          if (metadata.duration) updateData.duration = metadata.duration;
-          if (metadata.quality) updateData.quality = metadata.quality;
-          await Link.findByIdAndUpdate(link._id, updateData);
-        })
-      );
-
-      for (const result of batchResults) {
-        if (result.status === 'fulfilled') {
-          successCount++;
-        } else {
-          failedCount++;
-        }
-      }
-    }
-
-    revalidatePath('/links');
-    revalidatePath('/');
-    return { success: true, total: links.length, successCount, failedCount };
-  } catch (err: any) {
-    return { error: err.message };
-  }
-}
-
 export async function migrateExistingLinksToPrivate() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: 'Not authenticated' };
@@ -284,6 +236,8 @@ export async function toggleLinkPrivacy(linkId: string, isPrivate: boolean) {
 
   await connectToDatabase();
   try {
+    const res = await Link.findOneAndUpdate({ _id: linkId, userId }, { isPrivate });
+    if (!res) return { error: 'Link not found or unauthorized' };
     revalidatePath('/');
     return { success: true };
   } catch (err: any) {
@@ -333,7 +287,7 @@ export async function bulkCreateLinks(
             {
               userId,
               isPrivate: resolvedIsPrivate,
-              name: { $regex: new RegExp(`^${categoryName}$`, 'i') },
+              name: { $regex: new RegExp(`^${escapeRegex(categoryName)}$`, 'i') },
             },
             { $setOnInsert: { name: categoryName, userId, isPrivate: resolvedIsPrivate } },
             { new: true, upsert: true, setDefaultsOnInsert: true }
@@ -368,4 +322,20 @@ export async function bulkCreateLinks(
 
   revalidatePath('/');
   return { success: true, ...results };
+}
+
+// Duplicate detection for the capture sheet: match by YouTube video id when
+// possible (share URLs carry unique ?si= params), else exact/normalized URL.
+export async function findLinkByUrl(url: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { link: null };
+  const userId = (session.user as any).id;
+
+  await connectToDatabase();
+  const ytId = youtubeId(url);
+  const query: any = ytId
+    ? { userId, url: { $regex: escapeRegex(ytId) } }
+    : { userId, url: { $in: [url, normalizeUrl(url)] } };
+  const link = await Link.findOne(query).select('_id title createdAt').lean();
+  return { link: link ? JSON.parse(JSON.stringify(link)) : null };
 }

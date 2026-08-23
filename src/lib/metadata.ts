@@ -1,6 +1,28 @@
 import ogs from 'open-graph-scraper';
+import { youtubeId } from '@/lib/url';
 
 export async function scrapeMetadata(url: string) {
+  // YouTube: keyless thumbnail URL + oEmbed title — faster and more reliable than scraping
+  const ytId = youtubeId(url);
+  if (ytId) {
+    let title = '';
+    try {
+      const res = await fetch(
+        `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (res.ok) title = (await res.json()).title || '';
+    } catch {
+      // keep empty title; thumbnail still works
+    }
+    return {
+      title,
+      image: `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`,
+      duration: '',
+      quality: ''
+    };
+  }
+
   try {
     const options = { url, timeout: 5000 };
     const { result, error } = await ogs(options);

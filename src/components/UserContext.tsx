@@ -2,7 +2,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { getPinStatus, verifyPrivatePin } from '@/actions/pin';
+import { getPinStatus, verifyPrivatePin, getSafeStatus } from '@/actions/pin';
 
 interface UserContextType {
   privateSafe: boolean;
@@ -59,10 +59,17 @@ export function UserProvider({ children }: { children: ReactNode }) {
     const inCookie = getCookie('privateSafe') === 'true';
     
     if (inUrl || inCookie) {
-      setPrivateSafeState(true);
-      if (inUrl && !inCookie) {
-         document.cookie = `privateSafe=true; path=/; max-age=${30 * 24 * 60 * 60}`;
-      }
+      // Cookie/URL is only a hint — the server-side PIN grant decides
+      getSafeStatus().then(({ safe }) => {
+        if (safe) {
+          setPrivateSafeState(true);
+          if (inUrl && !inCookie) {
+            document.cookie = `privateSafe=true; path=/; max-age=${30 * 24 * 60 * 60}`;
+          }
+        } else {
+          document.cookie = 'privateSafe=false; path=/; max-age=0';
+        }
+      });
     }
   }, []);
 

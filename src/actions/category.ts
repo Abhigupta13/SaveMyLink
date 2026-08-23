@@ -6,7 +6,9 @@ import { Category } from '@/lib/models/Category';
 import { Link } from '@/lib/models/Link';
 import { revalidatePath } from 'next/cache';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
+import { escapeRegex } from '@/lib/regex';
+import { hasSafe } from '@/lib/safeCookie';
 
 export async function getCategories(privateSafe: boolean = false) {
   await connectToDatabase();
@@ -14,6 +16,7 @@ export async function getCategories(privateSafe: boolean = false) {
 
   if (!session?.user) return [];
   const userId = (session.user as any).id;
+  if (privateSafe && !(await hasSafe(userId))) privateSafe = false;
   const userObjectId = new mongoose.Types.ObjectId(userId);
   
   // Find categories belonging to this user in this mode
@@ -84,7 +87,7 @@ export async function createCategory(name: string, isPrivate: boolean = false, c
     const existing = await Category.findOne({ 
       userId,
       isPrivate,
-      name: { $regex: new RegExp(`^${name}$`, 'i') } 
+      name: { $regex: new RegExp(`^${escapeRegex(name)}$`, 'i') }
     });
     
     if (existing) {
@@ -101,6 +104,25 @@ export async function createCategory(name: string, isPrivate: boolean = false, c
     
     revalidatePath('/');
     return { success: true, category: JSON.parse(JSON.stringify(category)) };
+  } catch (error: any) {
+    return { error: error.message };
+  }
+}
+
+export async function addCategoryDomain(categoryId: string, domain: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { error: 'Not authenticated' };
+  const userId = (session.user as any).id;
+
+  await connectToDatabase();
+  try {
+    const res = await Category.findOneAndUpdate(
+      { _id: categoryId, userId },
+      { $addToSet: { domains: domain.toLowerCase() } }
+    );
+    if (!res) return { error: 'Category not found or unauthorized' };
+    revalidatePath('/');
+    return { success: true };
   } catch (error: any) {
     return { error: error.message };
   }

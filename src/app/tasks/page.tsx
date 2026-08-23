@@ -1,215 +1,321 @@
 'use client';
 
-import { useState, useEffect, useTransition } from 'react';
-import { getTasks, createTask, toggleTask, deleteTask } from '@/actions/task';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import { useSession } from 'next-auth/react';
+import { Plus, Mic, UserPlus, Trash2 } from 'lucide-react';
+import { getTasks, getMyOpenTasks, createTask, toggleTask, deleteTask } from '@/actions/task';
+import { getProjects, createProject, addMember, deleteProject, updateProjectNotes } from '@/actions/project';
+import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
+
+type Group = { key: string; label: string; tasks: any[]; cls?: string };
+
+const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+function fmtDue(iso: string) {
+  const d = new Date(iso);
+  const today = startOfDay(new Date());
+  const diffDays = Math.round((startOfDay(d).getTime() - today.getTime()) / 86400000);
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (diffDays === 0) return `Today · ${time}`;
+  if (diffDays === 1) return `Tomorrow · ${time}`;
+  if (diffDays === -1) return `Yesterday · ${time}`;
+  if (diffDays > 1 && diffDays < 7) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} · ${time}`;
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ` · ${time}`;
+}
+
+function groupTasks(tasks: any[]): Group[] {
+  const now = Date.now();
+  const today = startOfDay(new Date()).getTime();
+  const tomorrow = today + 86400000;
+  const g: Record<string, any[]> = { overdue: [], today: [], upcoming: [], someday: [], done: [] };
+  for (const t of tasks) {
+    if (t.completed) g.done.push(t);
+    else if (!t.dueAt) g.someday.push(t);
+    else {
+      const due = new Date(t.dueAt).getTime();
+      if (due < now) g.overdue.push(t);
+      else if (due < tomorrow) g.today.push(t);
+      else g.upcoming.push(t);
+    }
+  }
+  return [
+    { key: 'overdue', label: 'Overdue', tasks: g.overdue, cls: 'overdue' },
+    { key: 'today', label: 'Today', tasks: g.today },
+    { key: 'upcoming', label: 'Upcoming', tasks: g.upcoming },
+    { key: 'someday', label: 'No date', tasks: g.someday },
+    { key: 'done', label: 'Done', tasks: g.done },
+  ].filter(x => x.tasks.length);
+}
 
 export default function TasksPage() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
+  const [projects, setProjects] = useState<any[]>([]);
+  const [activeProject, setActiveProject] = useState<any | null>(null);
   const [tasks, setTasks] = useState<any[]>([]);
-  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [title, setTitle] = useState('');
+  const [due, setDue] = useState('');
+  const [assignee, setAssignee] = useState('');
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
   const [loading, setLoading] = useState(true);
-  const [isPending, startTransition] = useTransition();
+  const [view, setView] = useState<'tasks' | 'notes'>('tasks');
+  const [notesDraft, setNotesDraft] = useState('');
+  const [notesSaved, setNotesSaved] = useState(true);
+  const [showDone, setShowDone] = useState(false);
 
-  const fetchTasks = async () => {
-    const res = await getTasks();
-    if (res.success) {
-      setTasks(res.tasks || []);
-    }
+  const myEmail = (session?.user?.email || '').toLowerCase();
+  const memberOptions = activeProject
+    ? [...new Set([myEmail, activeProject.ownerId?.email, ...(activeProject.memberEmails || [])])].filter(Boolean)
+    : [];
+
+  const fetchTasks = useCallback(async (projectId?: string) => {
+    const res = await getTasks(projectId);
+    if (res.success) setTasks(res.tasks || []);
     setLoading(false);
-  };
+  }, []);
+  const fetchProjects = useCallback(async () => {
+    const res = await getProjects();
+    if (res.success) setProjects(res.projects || []);
+  }, []);
+  const refreshReminders = useCallback(async () => {
+    const res = await getMyOpenTasks();
+    if (res.success) reconcile(res.tasks || []);
+  }, []);
 
   useEffect(() => {
-    if (session) {
-      fetchTasks();
-    }
-  }, [session]);
+    if (status !== 'authenticated') return; // status, not session object (identity changes on refetch)
+    fetchProjects();
+    fetchTasks();
+    ensurePermissions().then(refreshReminders);
+  }, [status, fetchProjects, fetchTasks, refreshReminders]);
+
+  const switchProject = (project: any | null) => {
+    setActiveProject(project);
+    setShowInvite(false);
+    setView('tasks');
+    setNotesDraft(project?.notes || '');
+    setNotesSaved(true);
+    setAssignee('');
+    setLoading(true);
+    fetchTasks(project?._id);
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTaskTitle.trim()) return;
-
-    const title = newTaskTitle;
-    setNewTaskTitle('');
-    
-    const tempId = Date.now().toString();
-    const tempTask = { _id: tempId, title, completed: false, isTemp: true };
-    setTasks([tempTask, ...tasks]);
-
-    const res = await createTask(title);
-    if (res.success) {
-      fetchTasks();
-    } else {
-      setTasks(tasks.filter(t => t._id !== tempId));
-      alert(res.error);
-    }
+    if (!title.trim()) return;
+    const t = title; setTitle('');
+    const tempId = `tmp-${Date.now()}`;
+    setTasks(prev => [{ _id: tempId, title: t, completed: false, dueAt: due ? new Date(due).toISOString() : null, isTemp: true }, ...prev]);
+    const res = await createTask(t, {
+      dueAt: due ? new Date(due).toISOString() : undefined,
+      projectId: activeProject?._id,
+      assigneeEmail: activeProject ? (assignee || myEmail) : undefined,
+    });
+    if (res.success) { setDue(''); fetchTasks(activeProject?._id); refreshReminders(); }
+    else { setTasks(prev => prev.filter(x => x._id !== tempId)); alert(res.error); }
   };
 
   const handleToggle = async (id: string) => {
-    setTasks(tasks.map(t => t._id === id ? { ...t, completed: !t.completed } : t));
+    setTasks(prev => prev.map(x => x._id === id ? { ...x, completed: !x.completed } : x));
     const res = await toggleTask(id);
-    if (!res.success) {
-      fetchTasks();
-    }
+    if (!res.success) fetchTasks(activeProject?._id);
+    refreshReminders();
   };
 
   const handleDelete = async (id: string) => {
-    if (window.confirm('Delete this task?')) {
-      setTasks(tasks.filter(t => t._id !== id));
-      const res = await deleteTask(id);
-      if (!res.success) {
-        fetchTasks();
-      }
-    }
+    setTasks(prev => prev.filter(x => x._id !== id));
+    const res = await deleteTask(id);
+    if (!res.success) fetchTasks(activeProject?._id);
+    refreshReminders();
   };
 
-  if (!session) {
+  const handleCreateProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const res = await createProject(newProjectName);
+    if (res.success) { setNewProjectName(''); setShowNewProject(false); await fetchProjects(); switchProject(res.project); }
+    else alert(res.error);
+  };
+
+  const handleInvite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const res = await addMember(activeProject._id, inviteEmail);
+    if (res.success) {
+      const updated = { ...activeProject, memberEmails: [...new Set([...(activeProject.memberEmails || []), inviteEmail.trim().toLowerCase()])] };
+      setActiveProject(updated); setProjects(ps => ps.map(p => p._id === updated._id ? updated : p));
+      setInviteEmail(''); setShowInvite(false);
+    } else alert(res.error);
+  };
+
+  const handleDeleteProject = async () => {
+    if (!window.confirm(`Delete "${activeProject.name}" and all its tasks?`)) return;
+    const res = await deleteProject(activeProject._id);
+    if (res.success) { await fetchProjects(); switchProject(null); } else alert(res.error);
+  };
+
+  const handleSaveNotes = async () => {
+    const res = await updateProjectNotes(activeProject._id, notesDraft);
+    if (res.success) {
+      setNotesSaved(true);
+      const updated = { ...activeProject, notes: notesDraft };
+      setActiveProject(updated); setProjects(ps => ps.map(p => p._id === updated._id ? updated : p));
+    } else alert(res.error);
+  };
+
+  const groups = useMemo(() => groupTasks(tasks), [tasks]);
+  const open = tasks.filter(t => !t.completed);
+  const overdueCount = groups.find(g => g.key === 'overdue')?.tasks.length || 0;
+  const todayCount = groups.find(g => g.key === 'today')?.tasks.length || 0;
+  const subtitle = open.length === 0 ? 'All clear'
+    : [overdueCount && `${overdueCount} overdue`, todayCount && `${todayCount} due today`, `${open.length} open`].filter(Boolean).join(' · ');
+
+  if (status === 'unauthenticated') {
     return (
       <div className="container" style={{ padding: '80px 16px', textAlign: 'center' }}>
-        <div style={{ fontSize: '4.5rem', marginBottom: '24px', opacity: 0.8 }}>📋</div>
-        <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px', letterSpacing: '-0.02em' }}>Personal Companion Tasks</h2>
-        <p style={{ color: 'var(--text-secondary)', maxWidth: '420px', margin: '0 auto 32px', lineHeight: 1.6 }}>
-          Stay organized and productive. Sign in to sync your tasks across all your devices and keep your daily life in check.
-        </p>
-        <a href="/auth/signin" className="btn-primary" style={{ display: 'inline-block', padding: '14px 40px', borderRadius: '16px', fontWeight: 800 }}>Sign In Now</a>
+        <h2 className="page-title">Tasks</h2>
+        <p className="page-subtitle" style={{ marginBottom: '24px' }}>Sign in to see your tasks.</p>
+        <Link href="/auth/signin" className="btn-primary" style={{ display: 'inline-block', padding: '12px 32px', borderRadius: '14px', fontWeight: 800 }}>Sign in</Link>
       </div>
     );
   }
 
+  const assigneeLabel = (t: any) => {
+    const email = t.assigneeId?.email || t.assigneeEmail;
+    if (!email) return null;
+    const isMe = email === myEmail;
+    return (
+      <span className={`chip ${isMe ? 'me' : ''}`} title={email} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+        <span className="avatar-xs" style={{ width: '14px', height: '14px', fontSize: '0.55rem' }}>{email[0].toUpperCase()}</span>
+        {isMe ? 'me' : email.split('@')[0]}
+      </span>
+    );
+  };
+
   return (
     <div className="container" style={{ maxWidth: '640px', padding: '24px 16px 120px' }}>
-      <header style={{ marginBottom: '32px', textAlign: 'left' }}>
-        <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--text-primary)', marginBottom: '4px' }}>
-          Tasks
-        </h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent-color)' }}></div>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600 }}>
-            {tasks.filter(t => !t.completed).length} active duties
-          </p>
-        </div>
+      <header style={{ marginBottom: '18px' }}>
+        <h1 className="page-title">{activeProject ? activeProject.name : 'Tasks'}</h1>
+        <p className="page-subtitle">{subtitle}</p>
       </header>
-      
-      <form onSubmit={handleCreate} style={{ marginBottom: '40px' }}>
-        <div style={{ 
-          display: 'flex', background: 'var(--bg-secondary)', padding: '6px', 
-          borderRadius: '30px', border: '1px solid var(--border-color)', boxShadow: '0 12px 30px rgba(0,0,0,0.15)',
-          transition: 'var(--transition)', alignItems: 'center'
-        }} className="task-input-wrapper">
-          <input 
-            type="text" 
-            placeholder="I need to..." 
-            value={newTaskTitle}
-            onChange={(e) => setNewTaskTitle(e.target.value)}
-            style={{ 
-              flex: 1, padding: '12px 20px', borderRadius: '24px', border: 'none', 
-              background: 'transparent', color: 'var(--text-primary)', outline: 'none',
-              fontSize: '1rem', fontWeight: 600
-            }}
-          />
-          <button 
-            type="submit" 
-            className="btn-primary" 
-            style={{ padding: '12px 32px', borderRadius: '24px', fontWeight: 800, height: '48px' }}
-            disabled={!newTaskTitle.trim()}
-          >
-            Add
-          </button>
-        </div>
-      </form>
 
-      {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}>
-          <div className="loading-spinner"></div>
-        </div>
-      ) : (
-        <div className="task-list" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {tasks.length === 0 ? (
-            <div style={{ 
-              textAlign: 'center', padding: '80px 24px', background: 'var(--bg-secondary)', 
-              borderRadius: '32px', border: '1px dashed var(--border-color)', opacity: 0.9 
-            }}>
-              <span style={{ fontSize: '3.5rem', display: 'block', marginBottom: '20px' }}>🌈</span>
-              <p style={{ fontWeight: 800, fontSize: '1.25rem', color: 'var(--text-primary)', marginBottom: '8px' }}>Clean Slate!</p>
-              <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', maxWidth: '280px', margin: '0 auto', lineHeight: 1.5 }}>
-                No pending tasks found. Time to relax or start something new.
-              </p>
-            </div>
-          ) : (
-            tasks.map(task => (
-              <div 
-                key={task._id} 
-                className={`task-card ${task.completed ? 'completed' : ''}`}
-                style={{ 
-                  display: 'flex', alignItems: 'center', gap: '16px', padding: '22px', 
-                  background: task.completed ? 'rgba(30, 41, 59, 0.4)' : 'var(--bg-secondary)', 
-                  borderRadius: '24px', border: '1px solid',
-                  borderColor: task.completed ? 'transparent' : 'var(--border-color)',
-                  transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)', 
-                  opacity: task.isTemp ? 0.6 : 1,
-                  boxShadow: task.completed ? 'none' : '0 8px 30px rgba(0,0,0,0.08)'
-                }}
-              >
-                <button 
-                  onClick={() => handleToggle(task._id)}
-                  style={{ 
-                    width: '28px', height: '28px', borderRadius: '10px', 
-                    border: '2.5px solid', borderColor: task.completed ? 'var(--accent-color)' : 'var(--text-tertiary)',
-                    background: task.completed ? 'var(--accent-color)' : 'transparent',
-                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'all 0.3s ease'
-                  }}
-                  className="task-check-btn"
-                >
-                  {task.completed && (
-                    <svg width="14" height="10" viewBox="0 0 14 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M1.5 5L5.5 9L12.5 1.5" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  )}
-                </button>
-                
-                <span style={{ 
-                  flex: 1, fontSize: '1.05rem', fontWeight: 600, color: task.completed ? 'var(--text-tertiary)' : 'var(--text-primary)',
-                  textDecoration: task.completed ? 'line-through' : 'none',
-                  transition: 'all 0.3s ease'
-                }}>
-                  {task.title}
-                </span>
+      {/* Scope */}
+      <div className="pill-row" style={{ marginBottom: '16px' }}>
+        <button className={`cat-pill ${!activeProject ? 'active' : ''}`} onClick={() => switchProject(null)}>Personal</button>
+        {projects.map(p => (
+          <button key={p._id} className={`cat-pill ${activeProject?._id === p._id ? 'active' : ''}`} onClick={() => switchProject(p)}>{p.name}</button>
+        ))}
+        <button className="cat-pill" style={{ borderStyle: 'dashed', display: 'inline-flex', alignItems: 'center', gap: '4px' }} onClick={() => setShowNewProject(v => !v)}>
+          <Plus size={14} /> Project
+        </button>
+      </div>
 
-                <button 
-                  onClick={() => handleDelete(task._id)} 
-                  className="task-delete-btn"
-                  style={{ 
-                    width: '36px', height: '36px', borderRadius: '12px', 
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: '#ef4444', background: 'rgba(239, 68, 68, 0.08)',
-                    fontSize: '1.4rem', border: 'none', cursor: 'pointer',
-                    transition: 'var(--transition)'
-                  }}
-                >
-                  &times;
-                </button>
-              </div>
-            ))
-          )}
+      {showNewProject && (
+        <form onSubmit={handleCreateProject} style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+          <input className="field" placeholder="Project name" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} required autoFocus />
+          <button type="submit" className="btn-primary" style={{ padding: '10px 20px', borderRadius: '12px', fontWeight: 800 }}>Create</button>
+        </form>
+      )}
+
+      {/* Project toolbar */}
+      {activeProject && (
+        <div className="card" style={{ padding: '10px 12px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flex: 1, flexWrap: 'wrap' }}>
+            {memberOptions.map(email => (
+              <span key={email} className="avatar-xs" title={email} style={{ width: '26px', height: '26px', fontSize: '0.7rem', border: '2px solid var(--bg-secondary)' }}>
+                {email[0].toUpperCase()}
+              </span>
+            ))}
+            <button className="icon-btn" style={{ width: '26px', height: '26px', borderRadius: '50%' }} onClick={() => setShowInvite(v => !v)} title="Invite teammate"><UserPlus size={13} /></button>
+          </div>
+          <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-tertiary)', padding: '3px', borderRadius: '10px' }}>
+            {(['tasks', 'notes'] as const).map(v => (
+              <button key={v} onClick={() => setView(v)} style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em', background: view === v ? 'var(--bg-secondary)' : 'transparent', color: view === v ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                {v}
+              </button>
+            ))}
+          </div>
+          <Link href={`/mom?project=${activeProject._id}`} className="icon-btn" title="Meetings (MOM)"><Mic size={15} /></Link>
+          <button className="icon-btn danger" onClick={handleDeleteProject} title="Delete project"><Trash2 size={15} /></button>
         </div>
       )}
 
-      <style jsx>{`
-        .task-card:hover {
-          border-color: var(--accent-color) !important;
-          transform: translateY(-4px);
-          box-shadow: 0 12px 40px rgba(99, 102, 241, 0.15) !important;
-        }
-        .task-input-wrapper:focus-within {
-          border-color: var(--accent-color) !important;
-          box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1) !important;
-        }
-        @media (min-width: 768px) {
-          .task-delete-btn { opacity: 0; }
-          .task-card:hover .task-delete-btn { opacity: 1; }
-        }
-      `}</style>
+      {showInvite && activeProject && (
+        <form onSubmit={handleInvite} style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+          <input className="field" type="email" placeholder="teammate@email.com" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} required autoFocus />
+          <button type="submit" className="btn-primary" style={{ padding: '10px 20px', borderRadius: '12px', fontWeight: 800 }}>Invite</button>
+        </form>
+      )}
+
+      {activeProject && view === 'notes' && (
+        <div>
+          <textarea className="field" rows={12} placeholder="Project notes — context, decisions, links…" value={notesDraft}
+            onChange={e => { setNotesDraft(e.target.value); setNotesSaved(false); }} style={{ resize: 'vertical', lineHeight: 1.6 }} />
+          <button onClick={handleSaveNotes} disabled={notesSaved} className="btn-primary" style={{ marginTop: '10px', padding: '10px 24px', borderRadius: '12px', fontWeight: 800, opacity: notesSaved ? 0.5 : 1 }}>
+            {notesSaved ? 'Saved' : 'Save notes'}
+          </button>
+        </div>
+      )}
+
+      {(!activeProject || view === 'tasks') && (
+        <>
+          <form onSubmit={handleCreate} className="quick-add">
+            <div className="quick-add-main">
+              <input type="text" placeholder={activeProject ? `Add a task to ${activeProject.name}…` : 'Add a task…'} value={title} onChange={e => setTitle(e.target.value)} />
+              <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
+            </div>
+            <div className="quick-add-meta">
+              <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic" style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+              {activeProject && (
+                <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)}>
+                  <option value="">Assign to me</option>
+                  {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{email}</option>)}
+                </select>
+              )}
+            </div>
+          </form>
+
+          {loading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
+          ) : tasks.length === 0 ? (
+            <div className="empty-state">
+              <p style={{ fontWeight: 800, marginBottom: '4px' }}>Nothing here yet</p>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Add a task above. Give it a due time and you'll get reminders.</p>
+            </div>
+          ) : (
+            groups.map(g => (
+              <section key={g.key} className="task-group">
+                <div className={`task-group-label ${g.cls || ''}`} style={{ cursor: g.key === 'done' ? 'pointer' : 'default' }} onClick={() => g.key === 'done' && setShowDone(v => !v)}>
+                  {g.label} <span className="count">{g.tasks.length}</span>
+                  {g.key === 'done' && <span style={{ marginLeft: 'auto', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>{showDone ? 'hide' : 'show'}</span>}
+                </div>
+                {(g.key !== 'done' || showDone) && g.tasks.map(t => {
+                  const overdue = t.dueAt && !t.completed && new Date(t.dueAt).getTime() < Date.now();
+                  const isToday = t.dueAt && !overdue && startOfDay(new Date(t.dueAt)).getTime() === startOfDay(new Date()).getTime();
+                  return (
+                    <div key={t._id} className={`task-row ${t.completed ? 'done' : ''}`} style={{ opacity: t.isTemp ? 0.5 : undefined }}>
+                      <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)} aria-label="toggle">
+                        {t.completed && <svg width="12" height="9" viewBox="0 0 14 10" fill="none"><path d="M1.5 5L5.5 9L12.5 1.5" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                      </button>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="task-title">{t.title}</div>
+                        {(t.dueAt || activeProject) && (
+                          <div className="task-meta">
+                            {t.dueAt && <span className={`chip ${overdue ? 'overdue' : isToday ? 'today' : ''}`}>{fmtDue(t.dueAt)}</span>}
+                            {activeProject && assigneeLabel(t)}
+                          </div>
+                        )}
+                      </div>
+                      <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>
+                    </div>
+                  );
+                })}
+              </section>
+            ))
+          )}
+        </>
+      )}
     </div>
   );
 }

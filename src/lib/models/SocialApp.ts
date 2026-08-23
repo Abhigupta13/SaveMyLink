@@ -20,7 +20,4 @@ const SocialAppSchema: Schema<ISocialApp> = new Schema({
   order: { type: Number, default: 0 }
 }, { timestamps: true });
 
-if (mongoose.models.SocialApp) {
-  delete mongoose.models.SocialApp;
-}
-export const SocialApp: Model<ISocialApp> = mongoose.model<ISocialApp>('SocialApp', SocialAppSchema);
+export const SocialApp: Model<ISocialApp> = mongoose.models.SocialApp || mongoose.model<ISocialApp>('SocialApp', SocialAppSchema);

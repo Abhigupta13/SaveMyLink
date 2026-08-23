@@ -4,7 +4,7 @@ import connectToDatabase from '@/lib/mongodb';
 import { Document } from '@/lib/models/Document';
 import { revalidatePath } from 'next/cache';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import fs from 'fs';
 import path from 'path';
 import { writeFile, mkdir, unlink } from 'fs/promises';

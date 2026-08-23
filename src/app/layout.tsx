@@ -7,6 +7,8 @@ import { PreviewProvider } from "@/components/PreviewContext";
 import { ViewProvider } from "@/components/ViewContext";
 import { UserProvider } from "@/components/UserContext";
 import AuthProvider from "@/components/AuthProvider";
+import SendIntentListener from "@/components/SendIntentListener";
+import JarvisWidget from "@/components/JarvisWidget";
 import { cookies } from "next/headers";
 
 export const dynamic = 'force-dynamic';
@@ -53,10 +55,12 @@ export default async function RootLayout({
           <UserProvider>
             <PreviewProvider>
               <ViewProvider initialColumns={columns}>
+                <SendIntentListener />
                 <TopNav initialCategories={categories} />
                 <main className="flex-1">
                   {children}
                 </main>
+                <JarvisWidget />
               </ViewProvider>
             </PreviewProvider>
           </UserProvider>

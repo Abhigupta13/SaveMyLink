@@ -1,118 +1,74 @@
 'use client';
-import { useState } from 'react';
+
+import { Suspense, useEffect, useState } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { AlertCircle, CheckCircle2 } from 'lucide-react';
+import AuthField from '@/components/auth/AuthField';
+import GoogleButton from '@/components/auth/GoogleButton';
+import { validateEmail } from '@/lib/validation';
+import { authProviders } from '@/actions/auth';
 
-export default function SigninPage() {
+function SigninInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const params = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState(searchParams.get('error') || '');
-  const [message, setMessage] = useState(searchParams.get('message') || '');
-  const [isLoading, setIsLoading] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [formError, setFormError] = useState(params.get('error') ? 'Please sign in to continue.' : '');
+  const message = params.get('message') || '';
+  const [loading, setLoading] = useState(false);
+  const [google, setGoogle] = useState(false);
+  useEffect(() => { authProviders().then(p => setGoogle(p.google)); }, []);
+
+  const check = () => ({
+    email: validateEmail(email),
+    password: !password ? 'Please enter your password' : '',
+  });
+  const blur = (f: string) => { setTouched(t => ({ ...t, [f]: true })); setErrors(check()); };
+  const err = (f: string) => (touched[f] ? errors[f] : '') || '';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
-    setIsLoading(true);
+    setFormError('');
+    const next = check();
+    setErrors(next);
+    setTouched({ email: true, password: true });
+    if (Object.values(next).some(Boolean)) return;
 
-    const res = await signIn('credentials', {
-      email,
-      password,
-      redirect: false,
-    });
-
-    if (res?.error) {
-      setError(res.error === 'CredentialsSignin' ? 'Invalid email or password' : res.error);
-    } else {
-      router.push('/');
-      router.refresh();
-    }
-    setIsLoading(false);
+    setLoading(true);
+    const res = await signIn('credentials', { email: email.trim(), password, redirect: false });
+    setLoading(false);
+    if (res?.error) setFormError('Incorrect email or password. Please try again.');
+    else { router.push(params.get('callbackUrl') || '/'); router.refresh(); }
   };
 
   return (
-    <div className="auth-container">
-      <div className="auth-card">
-        <h2 className="auth-title">Welcome Back</h2>
-        <p className="auth-subtitle">Sign in to access your saved links</p>
+    <div className="auth-wrap">
+      <div className="auth-box">
+        <h1 className="auth-h1">Welcome back</h1>
+        <p className="auth-sub">Sign in to your vault.</p>
 
-        <form onSubmit={handleSubmit} className="auth-form">
-          {error && <div className="auth-error">{error}</div>}
-          {message && <div className="auth-success" style={{ color: '#10b981', background: 'rgba(16, 185, 129, 0.1)', padding: '10px', borderRadius: '8px', fontSize: '0.9rem', marginBottom: '16px' }}>{message}</div>}
-          
-          <div className="input-group">
-            <label>Email Address</label>
-            <input 
-              type="email" 
-              placeholder="john@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-          </div>
+        {message && <div className="auth-banner success"><CheckCircle2 size={16} /> {message}</div>}
+        {formError && <div className="auth-banner error"><AlertCircle size={16} /> {formError}</div>}
 
-          <div className="input-group">
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <label>Password</label>
-              <Link href="/auth/forgot-password" style={{ fontSize: '0.85rem', color: 'var(--accent-color)' }}>Forgot?</Link>
-            </div>
-            <div className="password-input-wrapper" style={{ position: 'relative' }}>
-              <input 
-                type={showPassword ? "text" : "password"} 
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                style={{ width: '100%', paddingRight: '45px' }}
-                required
-              />
-              <button 
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowPassword(!showPassword)}
-                style={{
-                  position: 'absolute',
-                  right: '12px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontSize: '1.1rem',
-                  padding: '4px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}
-              >
-                {showPassword ? (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                    <line x1="1" y1="1" x2="23" y2="23"></line>
-                  </svg>
-                ) : (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                    <circle cx="12" cy="12" r="3"></circle>
-                  </svg>
-                )}
-              </button>
-            </div>
-          </div>
+        {google && <GoogleButton label="Continue with Google" />}
 
-          <button type="submit" className="btn-primary" disabled={isLoading}>
-            {isLoading ? 'Signing In...' : 'Sign In'}
-          </button>
+        <form onSubmit={handleSubmit} noValidate>
+          <AuthField label="Email" type="email" value={email} onChange={setEmail} onBlur={() => blur('email')} error={err('email')} placeholder="you@example.com" autoComplete="email" autoFocus />
+          <AuthField label="Password" type="password" value={password} onChange={setPassword} onBlur={() => blur('password')} error={err('password')} placeholder="••••••••" autoComplete="current-password"
+            right={<Link href="/auth/forgot-password" className="auth-link-sm">Forgot?</Link>} />
+          <button type="submit" className="btn-primary auth-submit" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</button>
         </form>
 
-        <p className="auth-footer">
-          Don't have an account? <Link href="/auth/signup">Sign Up</Link>
-        </p>
+        <p className="auth-foot">New here? <Link href="/auth/signup">Create an account</Link></p>
       </div>
     </div>
   );
+}
+
+export default function SigninPage() {
+  return <Suspense fallback={null}><SigninInner /></Suspense>;
 }

@@ -41,3 +41,11 @@ yarn-error.log*
 next-env.d.ts
 .env
 all_links_export.csv
+
+# user uploads (d-locker files, MOM audio)
+/public/uploads/
+
+# android build outputs
+/android/app/build/
+/android/build/
+/android/.gradle/

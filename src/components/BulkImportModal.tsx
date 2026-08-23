@@ -10,7 +10,7 @@ type BulkImportEntry = {
   tags?: string[];
 };
 
-export default function BulkImportModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+export default function BulkImportModal({ isOpen, onClose, inline = false }: { isOpen: boolean, onClose: () => void, inline?: boolean }) {
   const { privateSafe } = useUser();
   const [activeTab, setActiveTab] = useState<'text' | 'csv'>('text');
   const [urlList, setUrlList] = useState('');
@@ -153,12 +153,12 @@ export default function BulkImportModal({ isOpen, onClose }: { isOpen: boolean, 
   };
 
   return (
-    <div className="modal-overlay" onClick={handleClose}>
-      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
-        <div className="modal-header">
+    <div className={inline ? '' : 'modal-overlay'} onClick={inline ? undefined : handleClose}>
+      <div className={inline ? 'card' : 'modal-content'} onClick={e => e.stopPropagation()} style={inline ? undefined : { maxWidth: '500px' }}>
+        {!inline && (<div className="modal-header">
           <h2 className="modal-title">Bulk Import Links</h2>
           <button className="modal-close" onClick={handleClose}>&times;</button>
-        </div>
+        </div>)}
 
         <div className="modal-tabs" style={{ display: 'flex', gap: '20px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)' }}>
           <button 

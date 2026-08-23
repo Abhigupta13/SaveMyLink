@@ -5,7 +5,7 @@ import connectToDatabase from '@/lib/mongodb';
 import { SocialApp } from '@/lib/models/SocialApp';
 import { revalidatePath } from 'next/cache';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 
 const DEFAULT_SOCIAL_APPS = [
   { name: 'LinkedIn', url: 'https://www.linkedin.com', icon: '💼', color: '#0077b5', isPinned: true },

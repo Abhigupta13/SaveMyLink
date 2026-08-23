@@ -11,13 +11,15 @@ export interface ILink extends Document {
   tags?: string[];
   isFavorite?: boolean;
   isPrivate?: boolean;
+  isDead?: boolean;
   userId: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
 
 const LinkSchema: Schema<ILink> = new Schema({
-  url: { type: String, required: true },
+  url: { type: String, default: '' }, // empty = text note captured via share
+
   category: { type: Schema.Types.ObjectId, ref: 'Category', required: false },
   title: { type: String },
   previewImageUrl: { type: String },
@@ -26,10 +28,10 @@ const LinkSchema: Schema<ILink> = new Schema({
   tags: [{ type: String }],
   isFavorite: { type: Boolean, default: false },
   isPrivate: { type: Boolean, default: false },
+  isDead: { type: Boolean, default: false }, // flagged by scripts/check-dead-links.js
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true }
 }, { timestamps: true });
 
-if (mongoose.models.Link) {
-  delete mongoose.models.Link;
-}
-export const Link: Model<ILink> = mongoose.model<ILink>('Link', LinkSchema);
+LinkSchema.index({ userId: 1, isPrivate: 1, createdAt: -1 });
+
+export const Link: Model<ILink> = mongoose.models.Link || mongoose.model<ILink>('Link', LinkSchema);

@@ -2,242 +2,139 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { createCategory } from '@/actions/category';
-import { createLink, getLinkMetadata } from '@/actions/link';
-import { useUser } from '@/components/UserContext';
-import UserProfileSidebar from './UserProfileSidebar';
+import AddLinkForm from './AddLinkForm';
 import PinModal from './PinModal';
 import { useSession } from 'next-auth/react';
-import { Search, Menu, Plus, Home, Link as LinkIcon, Library, CheckSquare, Globe, X } from 'lucide-react';
+import { Search, Plus, Home, Link as LinkIcon, Library, CheckSquare, Mic, Users, Globe, Newspaper, Lock, Unlock, Upload, StickyNote, X } from 'lucide-react';
+import { useUser } from '@/components/UserContext';
+
+const NAV = [
+  { label: 'Links', path: '/links', Icon: LinkIcon },
+  { label: 'Notes', path: '/notes', Icon: StickyNote },
+  { label: 'Tasks', path: '/tasks', Icon: CheckSquare },
+  { label: 'MOM', path: '/mom', Icon: Mic },
+  { label: 'D-locker', path: '/d-locker', Icon: Library },
+  { label: 'Contacts', path: '/contacts', Icon: Users },
+  { label: 'Apps', path: '/social', Icon: Globe },
+  { label: 'Digest', path: '/digest', Icon: Newspaper },
+  { label: 'Import', path: '/import', Icon: Upload },
+];
+// Phone bottom bar: the daily-use four + menu for everything else
+const MOBILE_NAV = ['/links', '/notes', '/tasks'];
 
 export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
   const { data: session } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  
+
+  const { privateSafe, setPrivateSafe, setPinModalOpen } = useUser();
+  const initial = ((session?.user?.name || session?.user?.email || 'U') as string)[0].toUpperCase();
   const [categories, setCategories] = useState(initialCategories);
-  const [showSearchBar, setShowSearchBar] = useState(false);
-  
-  useEffect(() => {
-    setCategories(initialCategories);
-  }, [initialCategories]);
-
-  const [url, setUrl] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('');
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  useEffect(() => { setCategories(initialCategories); }, [initialCategories]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [showCreateCategory, setShowCreateCategory] = useState(false);
+  const [showSearchBar, setShowSearchBar] = useState(false);
   const [searchValue, setSearchValue] = useState(searchParams.get('search') || '');
-  
-  const [previewMetadata, setPreviewMetadata] = useState<{ title: string, image: string } | null>(null);
-  const [isFetchingMetadata, setIsFetchingMetadata] = useState(false);
-  
-  const { setSidebarOpen, privateSafe } = useUser();
-  const [isPrivate, setIsPrivate] = useState(privateSafe);
 
+  // Links page search: debounce into ?search=
   useEffect(() => {
-    setIsPrivate(privateSafe);
-  }, [privateSafe]);
-
-  const handleFetchMetadata = async (targetUrl: string) => {
-    if (!targetUrl || !targetUrl.startsWith('http')) {
-      setPreviewMetadata(null);
-      return;
-    }
-
-    setIsFetchingMetadata(true);
-    try {
-      const res = await getLinkMetadata(targetUrl);
-      if (res.success && res.metadata) {
-        setPreviewMetadata({
-          title: res.metadata.title || '',
-          image: res.metadata.image || ''
-        });
-      } else {
-        setPreviewMetadata({ title: 'No preview found', image: '' });
-      }
-    } catch (err) {
-      console.error('Failed to fetch metadata:', err);
-      setPreviewMetadata({ title: 'Failed to fetch preview', image: '' });
-    } finally {
-      setIsFetchingMetadata(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!url) {
-      setPreviewMetadata(null);
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      if (url && url.startsWith('http')) {
-        handleFetchMetadata(url);
-      }
-    }, 800);
-
-    return () => clearTimeout(timer);
-  }, [url]);
-
-  useEffect(() => {
-    if (!isModalOpen) {
-      setPreviewMetadata(null);
-      setUrl('');
-      setNewCategoryName('');
-      setShowCreateCategory(false);
-    }
-  }, [isModalOpen]);
-
-  useEffect(() => {
+    if (pathname !== '/links') return;
     const timer = setTimeout(() => {
       const params = new URLSearchParams(searchParams.toString());
       const currentSearch = params.get('search') || '';
-      const currentPage = params.get('page') || '1';
-
-      if (searchValue !== currentSearch || currentPage !== '1') {
-        if (searchValue) {
-          params.set('search', searchValue);
-        } else {
-          params.delete('search');
-        }
+      if (searchValue !== currentSearch) {
+        if (searchValue) params.set('search', searchValue); else params.delete('search');
         params.set('page', '1');
         router.push(`${pathname}?${params.toString()}`);
       }
     }, 500);
-
     return () => clearTimeout(timer);
   }, [searchValue, router, searchParams, pathname]);
 
-  const handleAddLink = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!url) return;
-
-    setIsLoading(true);
-    let categoryId = selectedCategory;
-
-    if (showCreateCategory && newCategoryName) {
-      const res = await createCategory(newCategoryName, isPrivate);
-      if (res.success && res.category) {
-        categoryId = res.category._id;
-        setCategories([res.category, ...categories]);
-        setSelectedCategory(categoryId);
-        setNewCategoryName('');
-        setShowCreateCategory(false);
-        router.refresh();
-      } else {
-        alert(res.error || 'Failed to create category');
-        setIsLoading(false);
-        return;
-      }
-    }
-
-    const res = await createLink(url, categoryId || '', [], isPrivate, previewMetadata ? {
-      title: previewMetadata.title,
-      image: previewMetadata.image
-    } : undefined);
-    if (res.success) {
-      setUrl('');
-      setIsModalOpen(false);
-      
-      const params = new URLSearchParams(window.location.search);
-      if (isPrivate) {
-        params.set('private', 'true');
-      }
-      params.delete('category');
-      
-      router.push(`/links?${params.toString()}`);
-      router.refresh();
-    } else {
-      alert(res.error || 'Failed to save link');
-    }
-    setIsLoading(false);
+  const handleSaved = ({ isPrivate }: { isPrivate: boolean }) => {
+    setIsModalOpen(false);
+    const params = new URLSearchParams(window.location.search);
+    if (isPrivate) params.set('private', 'true');
+    params.delete('category');
+    router.push(`/links?${params.toString()}`);
+    router.refresh();
   };
 
-  const navItems = [
-    { label: 'Home', path: '/', icon: <Home size={18} strokeWidth={2.5} /> },
-    { label: 'Links', path: '/links', icon: <LinkIcon size={18} strokeWidth={2.5} /> },
-    { label: 'D-locker', path: '/d-locker', icon: <Library size={18} strokeWidth={2.5} /> },
-    { label: 'Tasks', path: '/tasks', icon: <CheckSquare size={18} strokeWidth={2.5} /> },
-    { label: 'Social', path: '/social', icon: <Globe size={18} strokeWidth={2.5} /> },
-  ];
+  const isActive = (path: string) => path === '/' ? pathname === '/' : pathname.startsWith(path);
+  const toggleSafe = () => {
+    if (privateSafe) { setPrivateSafe(false); router.push('/links'); }
+    else setPinModalOpen(true);
+  };
+  const goSearch = () => {
+    if (pathname === '/links') setShowSearchBar(v => !v);
+    else router.push('/search');
+  };
+
+  // Auth pages get no app chrome — just the brand
+  if (!session || pathname.startsWith('/auth')) {
+    return (
+      <>
+        <header className="topbar">
+          <a href="/" className="logo">ALL <span className="logo-light" style={{ marginLeft: '4px' }}>YOU NEED</span></a>
+        </header>
+        <PinModal />
+      </>
+    );
+  }
 
   return (
-    <header className="app-header-container">
-      <div className="container" style={{ padding: '0 16px' }}>
-        {/* Row 1: Logo & Tools */}
-        <div className="header-top-line" style={{ padding: '16px 0 12px' }}>
-          <a href="/" className="logo">ALL <span className="logo-light" style={{ marginLeft: '4px' }}>YOU NEED</span></a>
-          
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            {session && (
-              <button 
-                onClick={() => setShowSearchBar(!showSearchBar)} 
-                className={`menu-trigger-btn ${showSearchBar ? 'active' : ''}`}
-                style={{ 
-                  background: showSearchBar ? 'var(--accent-soft)' : 'transparent',
-                  color: showSearchBar ? 'var(--accent-color)' : 'var(--text-primary)'
-                }}
-              >
-                <Search size={22} strokeWidth={2.5} />
-              </button>
-            )}
-
-            {session && (
-              <button 
-                onClick={() => setSidebarOpen(true)} 
-                className="menu-trigger-btn"
-                style={{ color: 'var(--text-primary)' }}
-              >
-                <Menu size={24} strokeWidth={2.5} />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Row 2: Navigation Tabs */}
-        {session && (
-          <nav className="tab-nav-container">
-            {navItems.map((item) => (
-              <button 
-                key={item.label}
-                className={`nav-tab-item ${pathname === item.path || (item.path !== '/' && pathname.startsWith(item.path)) ? 'active' : ''}`}
-                onClick={() => router.push(item.path)}
-              >
-                <span>{item.icon}</span>
-                {item.label}
-              </button>
-            ))}
-          </nav>
-        )}
-
-        {/* Row 3: Conditional Search bar */}
-        {session && showSearchBar && (
-          <div className="contextual-header-row" style={{ paddingBottom: '12px', animation: 'fadeInDown 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}>
-            <div className="search-wrapper">
-              <div className="search-container" style={{ height: '48px', borderRadius: '16px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
-                <span className="search-icon" style={{ opacity: 0.5 }}><Search size={18} /></span>
-                <input 
-                  type="text" 
-                  placeholder="Search your vault..." 
-                  value={searchValue}
-                  onChange={(e) => setSearchValue(e.target.value)}
-                  className="search-input"
-                  style={{ paddingLeft: '44px', fontWeight: 600 }}
-                  autoFocus
-                />
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {session && pathname === '/links' && (
-        <div className="fab-container">
-          <button className="fab-btn" onClick={() => setIsModalOpen(true)} title="Add Link">
-            <Plus size={32} strokeWidth={3} />
+    <>
+      {/* Desktop / tablet: left rail */}
+      <aside className="side-rail">
+        <a href="/" className="rail-wordmark">ALL<span>YOU NEED</span></a>
+        <button className={`rail-item home ${isActive('/') ? 'active' : ''}`} onClick={() => router.push('/')} title="Home">
+          <Home size={20} strokeWidth={2.2} /><span>Home</span>
+        </button>
+        <nav className="rail-scroll">
+          {NAV.map(({ label, path, Icon }) => (
+            <button key={path} className={`rail-item ${isActive(path) ? 'active' : ''}`} onClick={() => router.push(path)} title={label}>
+              <Icon size={20} strokeWidth={2.2} /><span>{label}</span>
+            </button>
+          ))}
+          <button className={`rail-item ${privateSafe ? 'active' : ''}`} onClick={toggleSafe} title="Private Safe">
+            {privateSafe ? <Unlock size={20} strokeWidth={2.2} /> : <Lock size={20} strokeWidth={2.2} />}<span>Safe</span>
           </button>
+        </nav>
+        <div className="rail-bottom">
+          <button className={`rail-avatar ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')} title="Profile">{initial}</button>
+        </div>
+      </aside>
+
+      {/* Phone: bottom tabs only — no top bar */}
+      <nav className="bottom-nav">
+        <button className={`bottom-item ${isActive('/') ? 'active' : ''}`} onClick={() => router.push('/')}><Home size={21} strokeWidth={2.2} /><span>Home</span></button>
+        {NAV.filter(n => MOBILE_NAV.includes(n.path)).map(({ label, path, Icon }) => (
+          <button key={path} className={`bottom-item ${isActive(path) ? 'active' : ''}`} onClick={() => router.push(path)}><Icon size={21} strokeWidth={2.2} /><span>{label}</span></button>
+        ))}
+        <button className={`bottom-item ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')}>
+          <span className="bottom-avatar">{initial}</span><span>You</span>
+        </button>
+      </nav>
+
+      {/* Links search strip (toggled from the rail / top bar while on /links) */}
+      {showSearchBar && pathname === '/links' && (
+        <div className="search-strip">
+          <div className="search-container" style={{ height: '44px', borderRadius: '14px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', flex: 1 }}>
+            <span className="search-icon" style={{ opacity: 0.5 }}><Search size={18} /></span>
+            <input type="text" placeholder="Search your links…" value={searchValue} onChange={(e) => setSearchValue(e.target.value)} className="search-input" style={{ paddingLeft: '44px', fontWeight: 600 }} autoFocus />
+          </div>
+          <button className="subtle-link" onClick={() => router.push(`/search${searchValue ? `?q=${encodeURIComponent(searchValue)}` : ''}`)} style={{ whiteSpace: 'nowrap' }}>Search everything →</button>
+          <button className="icon-btn" onClick={() => { setShowSearchBar(false); setSearchValue(''); }}><X size={16} /></button>
+        </div>
+      )}
+
+      <button className={`search-fab ${showSearchBar ? 'active' : ''}`} onClick={goSearch} title="Search" aria-label="Search">
+        <Search size={20} strokeWidth={2.4} />
+      </button>
+
+      {pathname === '/links' && (
+        <div className="fab-container">
+          <button className="fab-btn" onClick={() => setIsModalOpen(true)} title="Add Link"><Plus size={32} strokeWidth={3} /></button>
         </div>
       )}
 
@@ -248,97 +145,12 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
               <h2 className="modal-title">New Entry</h2>
               <button className="modal-close" onClick={() => setIsModalOpen(false)}><X size={24} /></button>
             </div>
-            
-            <form onSubmit={handleAddLink} className="modal-form">
-              <div className="input-group">
-                <input 
-                  type="url" placeholder="Paste URL (https://...)" 
-                  value={url} onChange={(e) => setUrl(e.target.value)}
-                  style={{ borderRadius: '16px', padding: '14px 18px', background: 'var(--bg-tertiary)' }} required
-                />
-              </div>
-
-              {(url && (isFetchingMetadata || previewMetadata)) && (
-                <div className="modal-preview-container">
-                  {isFetchingMetadata ? (
-                    <div style={{ padding: '20px', display: 'flex', justifyContent: 'center' }}>
-                      <div className="loading-spinner"></div>
-                    </div>
-                  ) : previewMetadata ? (
-                    <div className="preview-content-box" style={{ 
-                      position: 'relative', width: '100%', height: '180px', background: 'var(--bg-tertiary)', borderRadius: '20px', overflow: 'hidden', border: '1px solid var(--border-color)'
-                    }}>
-                      {previewMetadata.image ? (
-                        <img src={previewMetadata.image} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)', fontWeight: 600 }}>NO PREVIEW</div>
-                      )}
-                      <div style={{ 
-                        position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.95) 0%, transparent 100%)', padding: '20px 16px'
-                      }}>
-                        <p style={{ fontSize: '0.85rem', color: 'white', margin: 0, fontWeight: 700, lineClamp: 2, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{previewMetadata.title}</p>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              )}
-              
-              <div className="category-selector">
-                <p style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Store in</p>
-                <div className="popular-categories" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  {categories.slice(0, 5).map(c => (
-                    <button 
-                      type="button" key={c._id} 
-                      className={`cat-pill ${selectedCategory === c._id && !showCreateCategory ? 'active' : ''}`} 
-                      onClick={() => { setSelectedCategory(c._id); setShowCreateCategory(false); }}
-                      style={{ padding: '10px 16px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: 700 }}
-                    >
-                      {c.name}
-                    </button>
-                  ))}
-                  <button 
-                    type="button" className={`cat-pill ${showCreateCategory ? 'active' : ''}`} 
-                    onClick={() => { setShowCreateCategory(true); setSelectedCategory(''); }}
-                    style={{ padding: '10px 16px', borderRadius: '12px', fontSize: '0.8rem', borderStyle: 'dashed' }}
-                  >
-                    + New
-                  </button>
-                </div>
-                
-                {showCreateCategory && (
-                  <div className="input-group" style={{marginTop: '12px'}}>
-                    <input 
-                      type="text" placeholder="Category Name" value={newCategoryName}
-                      onChange={(e) => setNewCategoryName(e.target.value)}
-                      style={{ borderRadius: '14px' }} required
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="input-group" style={{ marginBottom: '24px' }}>
-                <label className="switch-container">
-                  <div className="switch"><input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)}/><span className="slider round"></span></div>
-                  <span className="switch-label" style={{ fontWeight: 600 }}>Internal Safe 🔒</span>
-                </label>
-              </div>
-
-              <button type="submit" className="btn-primary" disabled={isLoading} style={{ width: '100%', height: '56px', borderRadius: '18px', fontWeight: 800 }}>
-                {isLoading ? 'Saving...' : 'Secure to Vault'}
-              </button>
-            </form>
+            <AddLinkForm categories={categories} onSaved={handleSaved} />
           </div>
         </div>
       )}
-      
-      <UserProfileSidebar />
+
       <PinModal />
-      <style jsx>{`
-        @keyframes fadeInDown {
-          from { opacity: 0; transform: translateY(-10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
-    </header>
+    </>
   );
 }

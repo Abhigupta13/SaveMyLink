@@ -6,9 +6,11 @@ export interface IUser extends Document {
   password?: string;
   resetToken?: string;
   resetTokenExpiry?: Date;
+  resetAttempts?: number;
   createdAt: Date;
   updatedAt: Date;
   privatePin?: string;
+  image?: string;
 }
 
 const UserSchema: Schema<IUser> = new Schema({
@@ -17,10 +19,9 @@ const UserSchema: Schema<IUser> = new Schema({
   password: { type: String },
   resetToken: { type: String },
   resetTokenExpiry: { type: Date },
-  privatePin: { type: String }
+  resetAttempts: { type: Number, default: 0 },
+  privatePin: { type: String },
+  image: { type: String }
 }, { timestamps: true });
 
-if (mongoose.models.User) {
-  delete mongoose.models.User;
-}
-export const User: Model<IUser> = mongoose.model<IUser>('User', UserSchema);
+export const User: Model<IUser> = mongoose.models.User || mongoose.model<IUser>('User', UserSchema);
