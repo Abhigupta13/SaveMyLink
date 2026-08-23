@@ -73,6 +73,28 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   return { text: lines.join('\n'), ids, projects };
 }
 
+// Groq bills and rate-limits by tokens per minute, and the whole vault goes up on every
+// turn. Under budget nothing changes; over it, keep the lines that share words with the
+// question (plus every task, which is what "what's urgent" needs and is always small).
+const MAX_CONTEXT_CHARS = 24000;
+function trimContext(text: string, question: string) {
+  if (text.length <= MAX_CONTEXT_CHARS) return text;
+  const terms = [...new Set(question.toLowerCase().match(/[a-z0-9]{3,}/g) || [])];
+  const scored = text.split('\n').map((line, i) => {
+    const l = line.toLowerCase();
+    return { line, i, score: line.startsWith('TASK ') || line.startsWith('PROJECT ') ? 999 : terms.reduce((n, t) => n + (l.includes(t) ? 1 : 0), 0) };
+  });
+  scored.sort((a, b) => b.score - a.score || a.i - b.i);
+  const kept: typeof scored = [];
+  let size = 0;
+  for (const s of scored) {
+    if (size + s.line.length > MAX_CONTEXT_CHARS) break;
+    kept.push(s); size += s.line.length + 1;
+  }
+  kept.sort((a, b) => a.i - b.i);   // back into the original order so the sections read normally
+  return kept.map(s => s.line).join('\n');
+}
+
 export async function askJarvis(question: string, history: JarvisTurn[] = [], timeZone = 'UTC') {
   try {
     const session = await getServerSession(authOptions);
@@ -113,9 +135,9 @@ Reply ONLY with JSON: {"answer": "plain text, short paragraphs, may use bullet l
 Put at most 12 items, most relevant first; mark urgent=true only for open tasks overdue or due within 48h.
 
 DATA:
-${ctx.text || '(empty — the user has not saved anything yet)'}`;
+${trimContext(ctx.text, question) || '(empty — the user has not saved anything yet)'}`;
 
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const call = () => fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -128,8 +150,22 @@ ${ctx.text || '(empty — the user has not saved anything yet)'}`;
         ],
       }),
     });
+
+    let res = await call();
+    // Groq rate-limits per minute and says how long to wait. One short wait beats a dead turn.
+    if (res.status === 429) {
+      const wait = Math.min(Number(res.headers.get('retry-after')) || 3, 8);
+      await new Promise(r => setTimeout(r, wait * 1000));
+      res = await call();
+    }
     if (!res.ok) {
-      console.error('Jarvis LLM error:', await res.text());
+      const body = await res.text();
+      console.error('Jarvis LLM error:', res.status, body);
+      if (res.status === 429) {
+        // Surface Groq's own wording — it names which limit was hit (requests, tokens, daily)
+        const reason = (() => { try { return JSON.parse(body)?.error?.message; } catch { return null; } })();
+        return { success: false, error: reason ? `Rate limited — ${reason}` : 'Rate limited. Give it a minute.' };
+      }
       return { success: false, error: `Assistant unavailable (${res.status})` };
     }
     const data = await res.json();
@@ -235,7 +271,10 @@ export async function transcribeQuestion(formData: FormData) {
       headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
       body: form,
     });
-    if (!res.ok) { console.error('Jarvis transcription failed:', await res.text()); return { success: false, error: 'Transcription failed' }; }
+    if (!res.ok) {
+      console.error('Jarvis transcription failed:', res.status, await res.text());
+      return { success: false, error: res.status === 429 ? 'Rate limited. Give it a minute.' : 'Transcription failed' };
+    }
     const { text } = await res.json();
     return { success: true, text: String(text || '').trim() };
   } catch (error) {

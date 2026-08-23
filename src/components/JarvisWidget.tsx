@@ -120,6 +120,8 @@ export default function JarvisWidget() {
       ? { role: 'assistant', content: res.answer || '…', items: res.items }
       : { role: 'assistant', content: res.error || 'Something went wrong.' };
     setMsgs(m => [...m, reply]);
+    // A failed turn ends the loop — otherwise a rate limit would keep firing more requests at it
+    if (!res.success) loopRef.current = false;
     await speak(reply.content);
     listenAgainRef.current();   // keep the conversation going until you stop the mic or close
   }, [speak, stopSpeaking]);
@@ -171,6 +173,12 @@ export default function JarvisWidget() {
       const tr = await transcribeQuestion(fd);
       setBusy(false);
       if (tr.success && tr.text) { setQ(tr.text); ask(tr.text); }
+      else if (tr.error && !tr.success) {   // rate limit or server error — stop, don't retry into it
+        setQ('');
+        loopRef.current = false;
+        setMsgs(m => [...m, { role: 'assistant', content: tr.error! }]);
+        await speak(tr.error!);
+      }
       else { setQ(''); await speak("Sorry, I didn't catch that."); listenAgainRef.current(); }
     };
     mediaRef.current = rec;
