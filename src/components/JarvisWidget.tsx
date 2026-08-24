@@ -10,6 +10,7 @@ import {
 } from '@/actions/jarvis';
 import { syncTask } from '@/lib/taskNotifications';
 import { getProjects } from '@/actions/project';
+import { formatTime, formatDay } from '@/lib/time';
 
 type Mode = 'idle' | 'capturing';
 type Tab = 'chat' | 'sessions';
@@ -36,8 +37,7 @@ const speakable = (s: string) => s.replace(/^[-*•]\s*/gm, '').replace(/\s+/g, 
 const voiceLang = (s: string) => /[ऀ-ॿ]/.test(s) ? 'hi-IN' : 'en-IN';
 const when = (iso: string) => {
   const t = new Date(iso);
-  return t.toLocaleDateString(undefined, { day: '2-digit', month: 'short' }) + ' · ' +
-    t.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return `${formatDay(t)} · ${formatTime(t)}`;
 };
 
 export default function JarvisWidget() {

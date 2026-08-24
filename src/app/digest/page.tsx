@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import connectToDatabase from '@/lib/mongodb';
 import { Link } from '@/lib/models/Link';
 import Task from '@/lib/models/Task';
+import { formatInZone } from '@/lib/time';
 
 export default async function DigestPage() {
   const session = await getServerSession(authOptions);
@@ -45,7 +46,7 @@ export default async function DigestPage() {
             <a key={t._id} href="/tasks" style={{ padding: '14px 18px', borderRadius: '16px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', textDecoration: 'none' }}>
               <span style={{ display: 'block', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>{t.title}</span>
               <span style={{ fontSize: '0.75rem', fontWeight: 700, color: overdue ? 'var(--danger-color)' : 'var(--text-secondary)' }}>
-                {overdue ? 'Overdue — was due ' : 'Due '}{new Date(t.dueAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                {overdue ? 'Overdue — was due ' : 'Due '}{formatInZone(t.dueAt)}
               </span>
             </a>
           );

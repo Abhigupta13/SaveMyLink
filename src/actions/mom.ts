@@ -8,12 +8,13 @@ import { Project } from "@/lib/models/Project";
 import { Contact } from "@/lib/models/Contact";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember, canDelete } from "@/lib/projectAccess";
+import { projectForMember, canDelete, myProjectFilter } from "@/lib/projectAccess";
 import { chatJSON } from "@/lib/llm";
 import {
   hinglishEnabled, createTranscriptionJob, getUploadUrl, uploadAudio,
   startTranscriptionJob, jobStatus, jobTranscript,
 } from "@/lib/sarvam";
+import { DEFAULT_TZ, safeZone, zonedToUtc } from "@/lib/time";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 import path from 'path';
@@ -76,7 +77,7 @@ export async function getMoms(projectId?: string | null) {
 export async function uploadMomAudio(formData: FormData) {
   try {
     const projectId = (formData.get('projectId') as string) || '';   // empty = personal meeting
-    const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString()}`;
+    const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString('en-GB', { timeZone: DEFAULT_TZ })}`;
     const audio = formData.get('audio') as File | null;
     if (!audio || audio.size < 1000) return { success: false, error: 'Nothing was recorded' };
 
@@ -131,7 +132,7 @@ export async function uploadMomAudio(formData: FormData) {
 export async function uploadMomAudioSarvam(formData: FormData) {
   try {
     const projectId = (formData.get('projectId') as string) || '';
-    const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString()}`;
+    const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString('en-GB', { timeZone: DEFAULT_TZ })}`;
     const audio = formData.get('audio') as File | null;
     if (!audio || audio.size < 1000) return { success: false, error: 'Nothing was recorded' };
 
@@ -213,7 +214,7 @@ export async function pollMomTranscription(momId: string) {
   }
 }
 
-export async function extractMomTasks(momId: string, timeZone = 'UTC') {
+export async function extractMomTasks(momId: string, timeZone = '') {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
@@ -226,7 +227,7 @@ export async function extractMomTasks(momId: string, timeZone = 'UTC') {
     const myEmail = (ctx.session.user.email || '').toLowerCase();
     // Everything the model needs to route items: all my projects and all known people
     const [projects, contacts] = await Promise.all([
-      Project.find({ $or: [{ ownerId: ctx.session.user.id }, { memberEmails: myEmail }] })
+      Project.find(await myProjectFilter(ctx.session.user.id, myEmail))
         .populate('ownerId', 'email name').lean(),
       Contact.find({ userId: ctx.session.user.id }).select('name email').lean(),
     ]);
@@ -243,10 +244,11 @@ export async function extractMomTasks(momId: string, timeZone = 'UTC') {
     const homeProject = mom.projectId
       ? (projects as any[]).find(p => String(p._id) === String(mom.projectId)) : null;
 
-    const meetingDate = new Date(mom.createdAt).toLocaleString('en-GB', { timeZone, weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const tz = safeZone(timeZone);
+    const meetingDate = new Date(mom.createdAt).toLocaleString('en-GB', { timeZone: tz, weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
     const system = `You turn a meeting transcript into minutes plus actionable items.
-The meeting happened on ${meetingDate} (timezone ${timeZone}).
+The meeting happened on ${meetingDate} (timezone ${tz}).
 
 LANGUAGE — the meeting may have been held in English, Hindi, or both mixed in one sentence.
 Transcripts arrive already translated to English on most accounts, but some are raw: Hindi may appear in Devanagari or as Hinglish in Latin script, including transcription slips. Understand all of it. Perso-Arabic script is mis-transcribed Hindi, never Urdu — no other language exists here.
@@ -297,8 +299,9 @@ Reply ONLY with JSON:
       const projectId = matchProject(i.projectName, projects as any[])?._id || mom.projectId || null;
       const assignee = i.assigneeEmail && knownEmails.has(String(i.assigneeEmail).toLowerCase())
         ? String(i.assigneeEmail).toLowerCase() : undefined;
-      const due = i.dueAt ? new Date(i.dueAt) : null;
-      const dueValid = due && !isNaN(due.getTime()) ? due : null;
+      // "by Friday 17:00" arrives as a bare wall clock with no zone. Read here it would take the
+      // server's zone, not the speaker's — on a UTC server that made every deadline 5.5h late.
+      const dueValid = zonedToUtc(i.dueAt, tz);
       const kind = i.kind === 'note' || i.kind === 'brief' ? i.kind : 'task';
 
       // Recompute the gaps ourselves rather than trusting the model's own list
@@ -370,12 +373,14 @@ export async function confirmMomTasks(
         const user = await User.findOne({ email: item.assigneeEmail.toLowerCase() }).select('_id');
         assigneeId = user?._id;
       }
-      const due = item.dueAt ? new Date(item.dueAt) : undefined;
+      // Already a real ISO instant by the time it round-trips back from the confirm screen —
+      // zonedToUtc passes those straight through, so it cannot be shifted a second time.
+      const due = zonedToUtc(item.dueAt);
 
       await Task.create({
         title: item.title.trim(),
         description: item.detail,
-        dueAt: due && !isNaN(due.getTime()) ? due : undefined,
+        dueAt: due || undefined,
         userId: session.user.id,
         projectId: projectId || undefined,
         assigneeId,
@@ -405,8 +410,8 @@ export async function deleteMom(momId: string) {
     // A project meeting is the owner's to remove; a personal one, the recorder's.
     const mom = await Mom.findById(momId);
     if (!mom) return { success: false, error: 'MOM not found' };
-    if (!await canDelete(mom, session.user.id)) {
-      return { success: false, error: 'Only the project owner can delete this meeting' };
+    if (!await canDelete(mom, session.user.id, session.user.email)) {
+      return { success: false, error: 'Only a project owner can delete this meeting' };
     }
     await mom.deleteOne();
     // Recordings made before transcripts replaced stored audio may still have a file

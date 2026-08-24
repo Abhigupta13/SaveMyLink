@@ -11,6 +11,9 @@ import { Note } from "@/lib/models/Note";
 import { Document as Doc } from "@/lib/models/Document";
 import { JarvisSession } from "@/lib/models/JarvisSession";
 import { chatJSON } from "@/lib/llm";
+import { formatInZone, safeZone, zonedToUtc } from "@/lib/time";
+import { myProjectFilter } from "@/lib/projectAccess";
+import { isProjectOwner, type OwnableProject } from "@/lib/scope";
 import { hasSafe } from "@/lib/safeCookie";
 import { User } from "@/lib/models/User";
 import { getServerSession } from "next-auth";
@@ -28,20 +31,19 @@ export interface JarvisTurn { role: 'user' | 'assistant'; content: string }
 export type Msg = JarvisTurn & { items?: JarvisItem[] };
 export interface JarvisSessionMeta { id: string; title: string; updatedAt: string }
 
-let TZ = 'UTC';
-const d = (v?: Date | string | null) => {
-  if (!v) return '';
-  try { return new Date(v).toLocaleString('en-GB', { timeZone: TZ, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }
-  catch { return new Date(v).toISOString().slice(0, 16); }
-};
+/* The zone belongs to the request, not the process. It used to live in a module-level `let`,
+   which two people asking at the same moment would overwrite for each other — rare with one
+   user, certain with a team. Each call builds its own formatter instead. */
+type Fmt = (v?: Date | string | null) => string;
+const fmtIn = (tz: string): Fmt => v => formatInZone(v, tz);
 
 // Serialise everything the user owns into compact lines the model can cite by id.
 // ponytail: full-context dump (fine up to ~1k items); switch to embeddings if the vault outgrows it.
-async function gatherContext(userId: string, email: string, includePrivate: boolean) {
+async function gatherContext(userId: string, email: string, includePrivate: boolean, d: Fmt) {
   const ids = new Set<string>();
   const linkQuery: any = { userId };
   if (!includePrivate) linkQuery.isPrivate = { $ne: true };
-  const projects = await Project.find({ $or: [{ ownerId: userId }, { memberEmails: email }] }).lean();
+  const projects = await Project.find(await myProjectFilter(userId, email)).lean();
   const projectIds = projects.map(p => p._id);
   const pname = new Map(projects.map(p => [String(p._id), p.name]));
 
@@ -115,7 +117,7 @@ function trimContext(text: string, question: string) {
   return kept.map(s => s.line).join('\n');
 }
 
-export async function askJarvis(question: string, history: JarvisTurn[] = [], timeZone = 'UTC') {
+export async function askJarvis(question: string, history: JarvisTurn[] = [], timeZone = '') {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
@@ -124,10 +126,11 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     if (!question.trim()) return { success: false, error: 'Ask something' };
 
     await connectToDatabase();
-    TZ = timeZone || 'UTC';
+    const tz = safeZone(timeZone);
+    const d = fmtIn(tz);
     const userId = session.user.id;
     const email = (session.user.email || '').toLowerCase();
-    const ctx = await gatherContext(userId, email, await hasSafe(userId));
+    const ctx = await gatherContext(userId, email, await hasSafe(userId), d);
 
     // Everything down to DATA is byte-identical every turn, on purpose. Groq caches repeated
     // prompt prefixes and cached tokens do not count against the rate limit — but any variable
@@ -176,7 +179,7 @@ Put at most 12 items, most relevant first; mark urgent=true only for open tasks 
 DATA:
 ${trimContext(ctx.text, question) || '(empty — the user has not saved anything yet)'}
 
-NOW: ${d(new Date())} (${TZ}). Dates in DATA use this same timezone.`;
+NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
 
     const res = await chatJSON([
       { role: 'system', content: system },
@@ -212,8 +215,10 @@ NOW: ${d(new Date())} (${TZ}). Dates in DATA use this same timezone.`;
         if (a?.type === 'update_task' && a.id && ctx.ids.has(String(a.id))) {
           const set = patch(a, { title: str, description: str, completed: (v: any) => v === true || v === 'true' });
           if (a.dueAt !== undefined) {
-            const due = a.dueAt === null || /^(none|null|clear)$/i.test(str(a.dueAt)) ? null : new Date(a.dueAt);
-            set.dueAt = due && !isNaN(due.getTime()) ? due : null;
+            // The model writes a bare wall clock ("2026-08-26T17:00") in the user's zone.
+            // Parsed here it would take the server's zone instead — 17:00 becoming 22:30 in India.
+            const due = a.dueAt === null || /^(none|null|clear)$/i.test(str(a.dueAt)) ? null : zonedToUtc(a.dueAt, tz);
+            set.dueAt = due || null;
           }
           // Append instead of replace, so a long description is never lost to a rewrite
           const add = str(a.appendDescription);
@@ -273,14 +278,14 @@ NOW: ${d(new Date())} (${TZ}). Dates in DATA use this same timezone.`;
           // ctx.ids only holds projects the user owns or is a member of
           const project = await Project.findOne({ _id: a.id });
           if (!project) continue;
-          const isOwner = String(project.ownerId) === String(userId);
+          const isOwner = isProjectOwner(project as unknown as OwnableProject, email, userId);
           const changes: string[] = [];
 
           if (a.notes !== undefined) { project.notes = str(a.notes); changes.push('notes'); }   // any member
           const addNotes = str(a.appendNotes);
           if (addNotes) { project.notes = [str(project.notes), addNotes].filter(Boolean).join('\n'); changes.push('notes'); }
 
-          // Renaming and membership are the owner's alone, same as the Projects page
+          // Renaming and membership are an owner's alone, same as the Projects page
           if (str(a.name) && isOwner && str(a.name) !== project.name) { project.name = str(a.name); changes.push('renamed'); }
           const add = str(a.addMember).toLowerCase();
           if (add && isOwner && /^\S+@\S+\.\S+$/.test(add) && !project.memberEmails.includes(add)) {
@@ -303,11 +308,11 @@ NOW: ${d(new Date())} (${TZ}). Dates in DATA use this same timezone.`;
             const u = await User.findOne({ email: String(a.assigneeEmail).toLowerCase() }).select('_id');
             assigneeId = u?._id;
           }
-          const dueAt = a.dueAt ? new Date(a.dueAt) : undefined;
+          const dueAt = zonedToUtc(a.dueAt, tz) || undefined;
           const task = await Task.create({
             title: String(a.title), userId,
             description: a.description ? String(a.description) : undefined,
-            dueAt: dueAt && !isNaN(dueAt.getTime()) ? dueAt : undefined,
+            dueAt,
             projectId: project?._id, assigneeId,
             assigneeEmail: project && a.assigneeEmail ? String(a.assigneeEmail).toLowerCase() : undefined,
           });

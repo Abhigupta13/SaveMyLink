@@ -1,4 +1,5 @@
 'use client';
+import { formatInZone } from '@/lib/time';
 
 // On-device task reminders via @capacitor/local-notifications.
 // Notification IDs are derived from the task _id, so no notification state is
@@ -33,7 +34,7 @@ function slotsFor(task: TaskLike): { id: number; at: Date; title: string; body: 
   const due = new Date(task.dueAt);
   const now = Date.now();
   const base = baseId(task._id);
-  const dueText = due.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const dueText = formatInZone(due);   // device zone: this runs on the phone
   const out: { id: number; at: Date; title: string; body: string }[] = [];
 
   const pre: [number, number, string][] = [

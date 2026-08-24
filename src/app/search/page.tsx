@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { searchAll } from '@/actions/search';
 import { Search } from 'lucide-react';
+import { formatDay } from '@/lib/time';
 
 function SearchPageInner() {
   const router = useRouter();
@@ -64,7 +65,7 @@ function SearchPageInner() {
           {section('Notes', results.notes, (n: any) =>
             card(n._id, () => router.push('/notes'), n.title || (n.body || '').slice(0, 60), (n.body || '').slice(0, 120)))}
           {section('Tasks', results.tasks, (t: any) =>
-            card(t._id, () => router.push('/tasks'), t.title, t.dueAt ? `Due ${new Date(t.dueAt).toLocaleDateString()}` : undefined))}
+            card(t._id, () => router.push('/tasks'), t.title, t.dueAt ? `Due ${formatDay(t.dueAt)}` : undefined))}
           {section('Projects', results.projects, (p: any) =>
             card(p._id, () => router.push('/tasks'), p.name, p.notes?.slice(0, 120)))}
           {section('Meetings (MOM)', results.moms, (m: any) =>

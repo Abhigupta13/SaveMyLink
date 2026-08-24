@@ -6,6 +6,7 @@ import AddLinkForm from './AddLinkForm';
 import { findLinkByUrl } from '@/actions/link';
 import { createNote } from '@/actions/note';
 import { useFeedback } from '@/components/ui/Feedback';
+import { formatDay } from '@/lib/time';
 
 export default function CaptureSheet({ url, title, categories }: { url?: string; title?: string; categories: any[] }) {
   const { toast, confirm } = useFeedback();
@@ -43,7 +44,7 @@ export default function CaptureSheet({ url, title, categories }: { url?: string;
           background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
           color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600
         }}>
-          Already saved{duplicate.createdAt ? ` on ${new Date(duplicate.createdAt).toLocaleDateString()}` : ''}
+          Already saved{duplicate.createdAt ? ` on ${formatDay(duplicate.createdAt)}` : ''}
           {duplicate.title ? ` — “${duplicate.title}”` : ''}
         </div>
       )}
