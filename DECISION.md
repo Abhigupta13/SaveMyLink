@@ -245,21 +245,21 @@ recognise the problem instantly because they live it.
 | — | Admin dashboard at `/admin`, both founders | ✅ built, untested |
 | — | `middleware.ts` → `proxy.ts` (Next 16 deprecation) | ✅ built |
 | 2 | "Who can see my data" — shared badges, first-share confirm, Your data page | next |
-| 3 | Free Hindi meetings — Gemini audio + bring-your-own Sarvam key | planned |
-| 4 | In-app introduction — getting-started checklist, per-section explainers | planned |
+| 3 | In-app introduction — getting-started checklist, per-section explainers | planned |
+| 4 | Free Hindi meetings — Gemini audio + bring-your-own Sarvam key | planned |
 | 5 | Jarvis — retrieval instead of whole-vault dump, plus new powers | planned |
 | 6 | Distribution — Play Store org account, iOS | paperwork can start now |
 | 7 | Encrypt the Private Safe (server-held key) | when a prospect pushes back |
 
 ### Decided, not yet built
 
-- **Round 3:** starts with a **test, not code** — run Gemini against the real recordings in
+- **Round 4:** starts with a **test, not code** — run Gemini against the real recordings in
   `public/uploads/mom/` and compare transcripts against Whisper's before building anything. Hindi
   has come back as Urdu before; nothing gets built until real output is reviewed.
-- **Round 3:** bring-your-own Sarvam key — encrypted before storage, never returned to the browser,
+- **Round 4:** bring-your-own Sarvam key — encrypted before storage, never returned to the browser,
   shown as `•••• last4`, with a plain note at the field that Sarvam bills them directly and how to
   revoke it. Links to `/terms`.
-- **Round 4:** cold signups are *offered* a sample project, never given one unasked.
+- **Round 3:** cold signups are *offered* a sample project, never given one unasked.
 - **Round 5 — Jarvis powers to add:** save a link, navigate/open pages, answer "how do I…" about the
   app. The last one is loaded **only when the question looks like a how-to**, or the manual inflates
   every single turn — the opposite of the point.
