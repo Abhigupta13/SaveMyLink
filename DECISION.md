@@ -186,9 +186,20 @@ both themes are now part of finishing any UI work, not an optional extra.
 
 ### The one-sentence wedge
 
-**The meeting-to-task loop.** Record a meeting → get a summary → get assigned tasks with dates and
-owners, that then chase the people responsible. Slack does not do it. Notion does not record.
-Project tools assume someone maintains them. This is the thing to lead with.
+**MOM for projects — the meeting-to-task loop. This is THE product; everything else supports it.**
+
+Record a meeting and the app does the rest: transcribes it, writes the summary, pulls out the
+action items, assigns them to the right people, attaches dates, files notes against the project,
+and then chases each person until it is done. **No one has to write the minutes, no one has to
+chase, and the middle manager whose whole job was doing that is not needed.**
+
+Slack does not do it. Notion does not record. Project tools assume somebody maintains them. This
+is the sentence to lead every demo, every landing page and the in-app introduction with.
+
+> **Engineering rule: do not regress MOM.** It is the feature the company rests on. Changes near
+> `src/actions/mom.ts`, the extraction prompt, `src/components/MomSection.tsx` or the task-creation
+> path get tested against real recordings before shipping, and improvements to it outrank new
+> features elsewhere. `security-qa` and `backend-lead` both treat a MOM regression as critical.
 
 ### Why the loop matters commercially
 

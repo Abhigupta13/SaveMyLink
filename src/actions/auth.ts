@@ -61,16 +61,24 @@ export async function registerUser({ name, email, password }: RegisterInput) {
 }
 
 /**
- * SMTP being unconfigured must not block a local signup, so the code comes back on screen the
- * same way the reset flow already does. Never reached in production, where mail is configured.
+ * SMTP being unconfigured must not block a local signup, so the code comes back on screen —
+ * BUT ONLY OUTSIDE PRODUCTION. Handing a code to whoever asked for it is the whole attack: sign
+ * up as someone else, read the code off the screen, and you are them. On a deployment with mail
+ * misconfigured this silently turns both signup verification and password reset into account
+ * takeover, so the reveal is gated on NODE_ENV rather than on mail being down.
  */
+const canRevealCode = () => process.env.NODE_ENV !== 'production';
 async function sendCode(user: IUser, code: string, message: string) {
   const { subject, html, text } = otpEmail(code, user.name, 'verify');
   const res = await sendMail({ to: user.email, subject, html, text })
     .catch(error => { console.error('Verification email failed:', user.email, error); return { delivered: false as const }; });
   if (!res.delivered) {
-    console.warn('[verify] code for', user.email, '=', code);
-    return { success: true as const, needsVerification: true as const, message: 'Email is not configured — your code is below (dev only):', code };
+    console.error('[verify] could not email a code to', user.email, '— check SMTP configuration');
+    if (canRevealCode()) {
+      console.warn('[verify] code for', user.email, '=', code);
+      return { success: true as const, needsVerification: true as const, message: 'Email is not configured — your code is below (dev only):', code };
+    }
+    return { success: true as const, needsVerification: true as const, message: "We couldn't send the code just now. Try Resend in a moment." };
   }
   return { success: true as const, needsVerification: true as const, message };
 }
@@ -92,8 +100,13 @@ export async function forgotPassword(email: string) {
     const { subject, html, text } = otpEmail(code, user.name);
     const res = await sendMail({ to: user.email, subject, html, text });
     if (!res.delivered) {
-      console.warn('[forgotPassword] reset code:', code);
-      return { success: true as const, message: 'Email is not configured — your code is below (dev only):', code };
+      console.error('[forgotPassword] could not email a reset code to', user.email, '— check SMTP configuration');
+      if (canRevealCode()) {
+        console.warn('[forgotPassword] reset code:', code);
+        return { success: true as const, message: 'Email is not configured — your code is below (dev only):', code };
+      }
+      // Still the generic answer, so a mail outage cannot be used to probe which accounts exist
+      return generic;
     }
     return generic;
   } catch (err: any) {

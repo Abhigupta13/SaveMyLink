@@ -1,5 +1,6 @@
 // Minimal self-check for the pure helpers. Run: node scripts/self-check.mjs
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { extractUrl, hostnameOf, normalizeUrl, youtubeId, appUrl } from '../src/lib/url.ts';
 import { escapeRegex } from '../src/lib/regex.ts';
 import { hinglishEnabled } from '../src/lib/sarvam.ts';
@@ -228,5 +229,17 @@ assert.equal(appUrl(), 'https://fallback.example.com', 'falls back before the ne
 env(undefined, undefined);
 assert.equal(appUrl(), '', 'empty, never the string "undefined" — callers concatenate onto it');
 env(savedPub, savedAuth);
+
+// A verification code must never be handed back to whoever asked for it in production — that is
+// account takeover by design: sign up as someone else, read the code off the screen, and you are
+// them. The reveal is gated on NODE_ENV, not on whether mail happens to be working.
+{
+  const authSrc = readFileSync(new URL('../src/actions/auth.ts', import.meta.url), 'utf8');
+  assert.ok(authSrc.includes("process.env.NODE_ENV !== 'production'"), 'the dev code reveal is gated on NODE_ENV');
+  // Two branches hand a code back, both labelled 'dev only' and both behind that gate.
+  // resendVerification only re-exposes what sendCode returned, so it inherits the gate.
+  assert.equal(authSrc.split('dev only').length - 1, 2, 'exactly two dev-only code reveals');
+  assert.equal(authSrc.split(', code };').length - 1, 2, 'and nothing else returns a raw code');
+}
 
 console.log('self-check: all assertions passed');
