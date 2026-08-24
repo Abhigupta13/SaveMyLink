@@ -10,6 +10,7 @@ import { Note } from "@/lib/models/Note";
 import { escapeRegex } from "@/lib/regex";
 import { hasSafe } from "@/lib/safeCookie";
 import { getServerSession } from "next-auth";
+import { myProjectFilter } from "@/lib/projectAccess";
 
 // One search across links, tasks, projects (name+notes), and MOM transcripts
 export async function searchAll(q: string) {
@@ -29,9 +30,8 @@ export async function searchAll(q: string) {
   };
   if (!includePrivate) linkQuery.isPrivate = { $ne: true };
 
-  const myProjects = await Project.find({
-    $or: [{ ownerId: userId }, { memberEmails: email }],
-  }).select('_id name notes').lean();
+  const myProjects = await Project.find(await myProjectFilter(userId, email))
+    .select('_id name notes').lean();
   const projectIds = myProjects.map(p => p._id);
 
   const [links, tasks, moms, notes] = await Promise.all([

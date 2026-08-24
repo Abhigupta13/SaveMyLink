@@ -6,26 +6,28 @@ import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText } from 'lucide-react';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask } from '@/actions/task';
-import { getProjects, addMember, removeMember, deleteProject, updateProjectNotes, renameProject } from '@/actions/project';
+import { getProjects, addMember, removeMember, addOwner, removeOwner, deleteProject, updateProjectNotes, renameProject } from '@/actions/project';
 import { getMoms } from '@/actions/mom';
 import { getNotes } from '@/actions/note';
 import { getDocuments } from '@/actions/document';
 import PersonPicker from '@/components/PersonPicker';
 import MomSection from '@/components/MomSection';
 import { useFeedback } from '@/components/ui/Feedback';
+import { formatTime, formatDay, formatDate } from '@/lib/time';
+import { isProjectOwner, isProjectCreator } from '@/lib/scope';
 
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
 function fmtDue(iso: string) {
   const d = new Date(iso);
   const diffDays = Math.round((startOfDay(d).getTime() - startOfDay(new Date()).getTime()) / 86400000);
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const time = formatTime(d);
   if (diffDays === 0) return `Today · ${time}`;
   if (diffDays === 1) return `Tomorrow · ${time}`;
   if (diffDays === -1) return `Yesterday · ${time}`;
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ` · ${time}`;
+  return `${formatDay(d)} · ${time}`;
 }
-const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+const fmtDate = (iso: string) => formatDate(iso);
 
 type Section = 'tasks' | 'meetings' | 'notes' | 'files' | 'about' | 'people';
 
@@ -57,7 +59,19 @@ export default function ProjectWorkspace() {
   const [draft, setDraft] = useState({ title: '', description: '', dueAt: '', assigneeEmail: '' });
 
   const myEmail = (session?.user?.email || '').toLowerCase();
-  const isOwner = !!project && (project.ownerId?.email || '').toLowerCase() === myEmail;
+  const isOwner = isProjectOwner(project, myEmail);
+  const isCreator = isProjectCreator(project, myEmail);
+  const [busyOwner, setBusyOwner] = useState('');
+
+  const handleOwner = async (email: string, promote: boolean) => {
+    setBusyOwner(email);
+    const res = promote ? await addOwner(projectId, email) : await removeOwner(projectId, email);
+    setBusyOwner('');
+    if (!res.success) return toast(res.error || 'Something went wrong', 'error');
+    toast(promote ? `${email} is now an owner` : `${email} is no longer an owner`, 'success');
+    load();
+  };
+
   const memberOptions = useMemo(
     () => (project ? [...new Set([project.ownerId?.email, ...(project.memberEmails || [])])].filter(Boolean) as string[] : []),
     [project]
@@ -271,13 +285,13 @@ export default function ProjectWorkspace() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <input className="ws-title" value={renaming} onChange={e => setRenaming(e.target.value)} onBlur={handleRename}
               onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-              disabled={!isOwner} title={isOwner ? 'Click to rename' : 'Only the owner can rename'} />
+              disabled={!isOwner} title={isOwner ? 'Click to rename' : 'Only an owner can rename'} />
             <p className="page-subtitle">
               {[overdue.length && `${overdue.length} overdue`, `${open.length} open`, `${moms.length} meeting${moms.length === 1 ? '' : 's'}`, `${memberOptions.length} member${memberOptions.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}
             </p>
           </div>
           <button className="icon-btn" onClick={() => window.print()} title="Download as PDF"><Download size={16} /></button>
-          {isOwner && <button className="icon-btn danger" onClick={handleDeleteProject} title="Delete project"><Trash2 size={16} /></button>}
+          {isCreator && <button className="icon-btn danger" onClick={handleDeleteProject} title="Delete project"><Trash2 size={16} /></button>}
         </header>
 
         <div className="ws-grid">
@@ -383,7 +397,8 @@ export default function ProjectWorkspace() {
           {openSections.people && (
             <>
               {memberOptions.map(email => {
-                const owner = email === (project.ownerId?.email || '').toLowerCase();
+                const creator = isProjectCreator(project, email);
+                const owner = creator || isProjectOwner(project, email);
                 const load = open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length;
                 return (
                   <div key={email} className="task-row">
@@ -395,13 +410,20 @@ export default function ProjectWorkspace() {
                       <div className="task-meta">
                         {/* The address still matters — it is what an invite was sent to */}
                         {people.get(email)?.name && <span className="chip" title={email}>{email}</span>}
-                        {owner && <span className="chip">owner</span>}
+                        {owner && <span className="chip" title={creator ? 'Created this project — always an owner' : 'Can add members, rename, and delete shared work'}>{creator ? 'creator' : 'owner'}</span>}
                         <span className="chip">{load} open</span>
                         {/* "pending", not "invite sent" — members added before invite emails
                             existed never got one, and the chip should not claim otherwise */}
                         {!people.get(email)?.hasAccount && <span className="chip" title="No account yet — they see the project once they sign up with this address">pending</span>}
                       </div>
                     </div>
+                    {/* Any owner may promote or demote; the creator is permanent, so their row
+                        offers nothing. Removing a co-owner strips their owner rights too. */}
+                    {isOwner && !creator && email !== myEmail && (
+                      <button className="subtle-link" onClick={() => handleOwner(email, !owner)} disabled={busyOwner === email}>
+                        {owner ? 'Remove owner' : 'Make owner'}
+                      </button>
+                    )}
                     {isOwner && !owner && <button className="task-del" onClick={() => handleRemove(email)} title="Remove">×</button>}
                   </div>
                 );
@@ -504,7 +526,7 @@ export default function ProjectWorkspace() {
         <h2>People</h2>
         <ul>
           {memberOptions.map(email => (
-            <li key={email}>{email}{email === (project.ownerId?.email || '').toLowerCase() ? ' — owner' : ''} · {open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length} open</li>
+            <li key={email}>{email}{isProjectOwner(project, email) ? ' — owner' : ''} · {open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length} open</li>
           ))}
         </ul>
 

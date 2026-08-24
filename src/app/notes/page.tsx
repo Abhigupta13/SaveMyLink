@@ -8,6 +8,8 @@ import { getProjects, createProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
 import { useFeedback } from '@/components/ui/Feedback';
 import { shrinkImage } from '@/lib/shrinkImage';
+import { formatTime, formatDay } from '@/lib/time';
+import { isProjectOwner } from '@/lib/scope';
 
 const isImage = (a: any) => (a.mimeType || '').startsWith('image/');
 const sizeOf = (b?: number) => !b ? '' : b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
@@ -16,8 +18,7 @@ const preview = (b: string) => b.replace(/\s+/g, ' ').slice(0, 160);
 const when = (iso: string) => {
   const d = new Date(iso), today = new Date();
   const sameDay = d.toDateString() === today.toDateString();
-  return sameDay ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-                 : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  return sameDay ? formatTime(d) : formatDay(d);
 };
 
 export default function NotesPage() {
@@ -115,12 +116,12 @@ export default function NotesPage() {
     load();
   };
 
-  // Notes in a project are the project owner's to delete; personal notes are mine.
+  // Notes in a project are a project owner's to delete; personal notes are mine.
   const canRemove = (n: any) => {
     const pid = n?.projectId?._id || n?.projectId;
     if (!pid) return true;
     const proj = projects.find((p: any) => String(p._id) === String(pid));
-    return (proj?.ownerId?.email || '').toLowerCase() === myEmail;
+    return isProjectOwner(proj, myEmail);
   };
 
   const inScope = notes.filter(n => (scope ? n.projectId?._id === scope._id : !n.projectId));

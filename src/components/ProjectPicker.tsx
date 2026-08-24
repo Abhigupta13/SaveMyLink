@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Search, Plus, MoreHorizontal, Pencil, Trash2, UserPlus, Check, X, FolderOpen } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useFeedback } from '@/components/ui/Feedback';
+import { isProjectOwner, isProjectCreator } from '@/lib/scope';
 
-export interface PickerProject { _id: string; name: string; count?: number; ownerId?: any; memberEmails?: string[] }
+export interface PickerProject { _id: string; name: string; count?: number; ownerId?: any; ownerEmails?: string[]; memberEmails?: string[] }
 
 interface Props {
   projects: PickerProject[];
@@ -28,9 +29,11 @@ export default function ProjectPicker({
   const { confirm } = useFeedback();
   const { data: session } = useSession();
   const myEmail = (session?.user?.email || '').toLowerCase();
-  // getProjects populates ownerId with {email,name} — same check the project page uses.
-  const ownerEmail = (p: PickerProject) => (p.ownerId?.email || '').toLowerCase();
-  const isOwner = (p: PickerProject) => ownerEmail(p) === myEmail;
+  // getProjects populates ownerId with {email,name} — the shared rule reads both that and a raw id.
+  const ownerEmail = (p: PickerProject) => ((p.ownerId as { email?: string })?.email || '').toLowerCase();
+  const isOwner = (p: PickerProject) => isProjectOwner(p, myEmail);
+  // Deleting a whole project stays with whoever created it; the server refuses anyone else.
+  const isCreator = (p: PickerProject) => isProjectCreator(p, myEmail);
   const ownerLabel = (p: PickerProject) => ownerEmail(p) || 'its owner';
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -155,7 +158,7 @@ export default function ProjectPicker({
                               <UserPlus size={13} /> Invite someone
                             </button>
                           )}
-                          {onDelete && (
+                          {onDelete && isCreator(p) && (
                             <button className="danger" onClick={async () => {
                               const ok = await confirm({ title: `Delete “${p.name}”?`, message: 'Its tasks and meetings go with it. This cannot be undone.', danger: true, confirmLabel: 'Delete project' });
                               if (!ok) return;

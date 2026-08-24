@@ -188,8 +188,8 @@ export async function deleteTask(id: string) {
     // In a project only the owner may delete; outside one, only the person it belongs to.
     const task = await Task.findById(id);
     if (!task) return { success: false, error: 'Task not found' };
-    if (!await canDelete(task, session.user.id)) {
-      return { success: false, error: 'Only the project owner can delete this task' };
+    if (!await canDelete(task, session.user.id, session.user.email)) {
+      return { success: false, error: 'Only a project owner can delete this task' };
     }
     await task.deleteOne();
 

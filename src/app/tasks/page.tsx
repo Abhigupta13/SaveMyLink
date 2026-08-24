@@ -9,6 +9,8 @@ import { getProjects, createProject, deleteProject, renameProject } from '@/acti
 import ProjectPicker from '@/components/ProjectPicker';
 import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
 import { useFeedback } from '@/components/ui/Feedback';
+import { formatTime, formatDay } from '@/lib/time';
+import { isProjectOwner } from '@/lib/scope';
 
 type Group = { key: string; label: string; tasks: any[]; cls?: string };
 
@@ -18,12 +20,12 @@ function fmtDue(iso: string) {
   const d = new Date(iso);
   const today = startOfDay(new Date());
   const diffDays = Math.round((startOfDay(d).getTime() - today.getTime()) / 86400000);
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const time = formatTime(d);
   if (diffDays === 0) return `Today · ${time}`;
   if (diffDays === 1) return `Tomorrow · ${time}`;
   if (diffDays === -1) return `Yesterday · ${time}`;
-  if (diffDays > 1 && diffDays < 7) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} · ${time}`;
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ` · ${time}`;
+  if (diffDays > 1 && diffDays < 7) return `${d.toLocaleDateString('en-GB', { weekday: 'short' })} · ${time}`;
+  return `${formatDay(d)} · ${time}`;
 }
 
 function groupTasks(tasks: any[]): Group[] {
@@ -104,7 +106,7 @@ export default function TasksPage() {
     const pid = t?.projectId?._id || t?.projectId;
     if (!pid) return true;
     const proj = projects.find((p: any) => String(p._id) === String(pid)) || activeProject;
-    return (proj?.ownerId?.email || '').toLowerCase() === myEmail;
+    return isProjectOwner(proj, myEmail);
   };
 
   const memberOptions = activeProject

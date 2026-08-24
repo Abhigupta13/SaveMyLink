@@ -9,6 +9,9 @@ import { projectForMember } from "@/lib/projectAccess";
 import { User } from "@/lib/models/User";
 import { Contact } from "@/lib/models/Contact";
 import { sendMail, inviteEmail } from "@/lib/mailer";
+import { ownerFilter, myProjectFilter } from "@/lib/projectAccess";
+import { appUrl } from "@/lib/url";
+import { isProjectCreator, type OwnableProject } from "@/lib/scope";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 
@@ -43,12 +46,8 @@ export async function getProjects() {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
-    const projects = await Project.find({
-      $or: [
-        { ownerId: session.user.id },
-        { memberEmails: (session.user.email || '').toLowerCase() },
-      ],
-    }).populate('ownerId', 'email name').sort({ createdAt: 1 }).lean();
+    const projects = await Project.find(await myProjectFilter(session.user.id, session.user.email))
+      .populate('ownerId', 'email name').sort({ createdAt: 1 }).lean();
 
     // One lookup for every member of every project rather than one per project
     const names = await displayNames(
@@ -103,9 +102,9 @@ export async function addMember(projectId: string, email: string) {
       return { success: false, error: "You're already on this project" };
     }
 
-    // Owner only
+    // Any owner — the creator or anyone they promoted
     const res = await Project.findOneAndUpdate(
-      { _id: projectId, ownerId: session.user.id },
+      { _id: projectId, ...(await ownerFilter(session.user.id, session.user.email)) },
       { $addToSet: { memberEmails: normalized } }
     );
     if (!res) return { success: false, error: 'Project not found or not owner' };
@@ -113,7 +112,7 @@ export async function addMember(projectId: string, email: string) {
     // Tell them. Adding an email silently was the whole reason invites never worked: a typo
     // looked identical to success, and someone without an account was never asked to make one.
     const invitee = await User.findOne({ email: normalized }).select('name').lean() as any;
-    const base = (process.env.NEXTAUTH_URL || '').replace(/\/$/, '');
+    const base = appUrl();
     const link = invitee
       ? `${base}/projects/${projectId}`
       : `${base}/auth/signup?email=${encodeURIComponent(normalized)}`;
@@ -145,14 +144,19 @@ export async function removeMember(projectId: string, email: string) {
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
     const normalized = email.trim().toLowerCase();
-    // Owner only — and the owner cannot remove themselves out of their own project
+    // Any owner — but nobody removes themselves, and nobody removes the creator
     if (normalized === (session.user.email || '').toLowerCase()) return { success: false, error: "You can't remove yourself" };
 
-    const res = await Project.findOneAndUpdate(
-      { _id: projectId, ownerId: session.user.id },
-      { $pull: { memberEmails: normalized } }
-    );
-    if (!res) return { success: false, error: 'Project not found or not owner' };
+    const filter = { _id: projectId, ...(await ownerFilter(session.user.id, session.user.email)) };
+    const project = await Project.findOne(filter).populate('ownerId', 'email');
+    if (!project) return { success: false, error: 'Project not found or not owner' };
+    if (isProjectCreator(project as unknown as OwnableProject, normalized)) {
+      return { success: false, error: "The project's creator can't be removed" };
+    }
+
+    // Owner rights leave with the membership. A co-owner pulled from memberEmails but left in
+    // ownerEmails would keep rename and delete powers that no screen shows any more.
+    await Project.updateOne(filter, { $pull: { memberEmails: normalized, ownerEmails: normalized } });
 
     // Their assignments stay, but nobody is holding them any more
     await Task.updateMany({ projectId, assigneeEmail: normalized }, { $unset: { assigneeId: '', assigneeEmail: '' } });
@@ -172,9 +176,8 @@ export async function getProjectStats() {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
-    const projects = await Project.find({
-      $or: [{ ownerId: session.user.id }, { memberEmails: (session.user.email || '').toLowerCase() }],
-    }).select('_id').lean();
+    const projects = await Project.find(await myProjectFilter(session.user.id, session.user.email))
+      .select('_id').lean();
     const ids = projects.map(p => p._id);
 
     const [tasks, moms] = await Promise.all([
@@ -218,6 +221,8 @@ export async function deleteProject(projectId: string) {
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
     // Owner only; project tasks go with it
+    // Creator only, deliberately narrower than every other owner action: this is the one with no
+    // undo, and a co-owner having a bad day should not be able to erase a team's whole history.
     const res = await Project.findOneAndDelete({ _id: projectId, ownerId: session.user.id });
     if (!res) return { success: false, error: 'Project not found or not owner' };
     await Task.deleteMany({ projectId });
@@ -236,12 +241,69 @@ export async function renameProject(projectId: string, name: string) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
     if (!name.trim()) return { success: false, error: 'Name required' };
-    const res = await Project.findOneAndUpdate({ _id: projectId, ownerId: session.user.id }, { name: name.trim() }, { new: true });
-    if (!res) return { success: false, error: 'Only the project owner can rename it' };
+    const res = await Project.findOneAndUpdate(
+      { _id: projectId, ...(await ownerFilter(session.user.id, session.user.email)) },
+      { name: name.trim() }, { new: true });
+    if (!res) return { success: false, error: 'Only a project owner can rename it' };
     revalidatePath('/tasks');
     return { success: true, project: JSON.parse(JSON.stringify(res)) };
   } catch (error) {
     console.error('Failed to rename project:', error);
     return { success: false, error: 'Failed to rename project' };
+  }
+}
+
+/**
+ * Promote a member to co-owner. Any owner may do this — trusting someone with ownership includes
+ * trusting their judgement about the next one. They must already be a member, so ownership is
+ * never granted to a mistyped address.
+ */
+export async function addOwner(projectId: string, email: string) {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+    const normalized = (email || '').trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(normalized)) return { success: false, error: 'Invalid email' };
+
+    const filter = { _id: projectId, ...(await ownerFilter(session.user.id, session.user.email)) };
+    const project = await Project.findOne(filter).select('memberEmails').lean<{ memberEmails?: string[] } | null>();
+    if (!project) return { success: false, error: 'Project not found or not owner' };
+    if (!(project.memberEmails || []).includes(normalized)) {
+      return { success: false, error: 'Add them to the project first, then make them an owner' };
+    }
+
+    await Project.updateOne(filter, { $addToSet: { ownerEmails: normalized } });
+    revalidatePath('/projects');
+    return { success: true, owner: normalized };
+  } catch (error) {
+    console.error('Failed to add owner:', error);
+    return { success: false, error: 'Could not make them an owner' };
+  }
+}
+
+/** Step someone back down to an ordinary member. The creator is permanent and cannot be demoted. */
+export async function removeOwner(projectId: string, email: string) {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+    const normalized = (email || '').trim().toLowerCase();
+    const filter = { _id: projectId, ...(await ownerFilter(session.user.id, session.user.email)) };
+    const project = await Project.findOne(filter).populate('ownerId', 'email');
+    if (!project) return { success: false, error: 'Project not found or not owner' };
+    if (isProjectCreator(project as unknown as OwnableProject, normalized)) {
+      return { success: false, error: "The project's creator is always an owner" };
+    }
+
+    await Project.updateOne(filter, { $pull: { ownerEmails: normalized } });
+
+    revalidatePath('/projects');
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to remove owner:', error);
+    return { success: false, error: 'Could not remove them as an owner' };
   }
 }

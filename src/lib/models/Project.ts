@@ -4,6 +4,7 @@ import { defineModel } from './registry';
 export interface IProject extends MongooseDocument {
   name: string;
   ownerId: mongoose.Types.ObjectId;
+  ownerEmails: string[];
   memberEmails: string[];
   notes?: string;
   createdAt: Date;
@@ -12,7 +13,11 @@ export interface IProject extends MongooseDocument {
 
 const ProjectSchema = new Schema<IProject>({
   name: { type: String, required: true },
-  ownerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  ownerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },   // the creator: permanent, never demotable
+  // Promoted co-owners. They stay in memberEmails too, so every read path keeps working and
+  // ownership is an extra capability rather than a separate class of access. Absent on every
+  // project that predates this, which reads as [] — exactly the old single-owner behaviour.
+  ownerEmails: [{ type: String, lowercase: true }],
   memberEmails: [{ type: String, lowercase: true }],
   notes: { type: String, default: '' },
 }, { timestamps: true });

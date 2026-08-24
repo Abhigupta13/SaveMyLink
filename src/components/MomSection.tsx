@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { getMoms, uploadMomAudio, uploadMomAudioSarvam, pollMomTranscription, extractMomTasks, confirmMomTasks, deleteMom, updateMom } from '@/actions/mom';
 import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
+import { isProjectOwner } from '@/lib/scope';
+import { formatDay, formatDate } from '@/lib/time';
 
 interface MomSectionProps {
   projects?: any[]; // all projects, so items can be routed to any of them
@@ -41,8 +43,8 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   };
   const projectId: string = project?._id || '';
   const allProjects = projects.length ? projects : [project].filter(Boolean);
-  // A project meeting belongs to the project owner; a personal one to whoever recorded it.
-  const canRemove = !project || (project.ownerId?.email || '').toLowerCase() === (myEmail || '').toLowerCase();
+  // A project meeting belongs to its owners; a personal one to whoever recorded it.
+  const canRemove = !project || isProjectOwner(project, myEmail);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -115,7 +117,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     if (timerRef.current) clearInterval(timerRef.current);
   };
 
-  const meetingTitle = () => `Meeting ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+  const meetingTitle = () => `Meeting ${formatDay(new Date())}`;
 
   const runExtraction = async (momId: string) => {
     setPipeline('Extracting tasks…');
@@ -253,7 +255,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const handleShare = async (mom: any) => {
     const tasksText = (mom.candidates || []).map((c: any) =>
       `• ${c.title}${c.assigneeEmail ? ` — ${c.assigneeEmail}` : ''}`).join('\n');
-    const text = `📋 ${mom.title} (${new Date(mom.createdAt).toLocaleDateString()})\n\n${mom.summary || ''}\n\nAction items:\n${tasksText}`;
+    const text = `📋 ${mom.title} (${formatDate(mom.createdAt)})\n\n${mom.summary || ''}\n\nAction items:\n${tasksText}`;
     try {
       const { Capacitor } = await import('@capacitor/core');
       if (Capacitor.isNativePlatform()) {
@@ -325,7 +327,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                   <span style={{ fontWeight: 800, color: 'var(--text-primary)', flex: 1 }}>{mom.title}</span>
                 )}
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontWeight: 600 }}>
-                  {new Date(mom.createdAt).toLocaleDateString()}
+                  {formatDay(mom.createdAt)}
                 </span>
                 {editing === mom._id ? (
                   <button onClick={() => saveMomEdits(mom._id)} className="icon-btn" title="Save"><Check size={16} /></button>

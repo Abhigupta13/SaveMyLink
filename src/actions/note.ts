@@ -98,9 +98,9 @@ export async function deleteNote(id: string) {
     if (!who) return { success: false, error: 'Unauthorized' };
     const note = await noteIWrite(id, who.userId, who.email);
     if (!note) return { success: false, error: 'Note not found' };
-    // Editable by every member, removable only by the project owner
-    if (!await canDelete(note, who.userId)) {
-      return { success: false, error: 'Only the project owner can delete this note' };
+    // Editable by every member, removable only by a project owner
+    if (!await canDelete(note, who.userId, who.email)) {
+      return { success: false, error: 'Only a project owner can delete this note' };
     }
     await note.deleteOne();
     // Attachments belong to the note, so they go with it rather than lingering as paid-for bytes
