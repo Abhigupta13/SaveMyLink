@@ -7,6 +7,7 @@ import { getServerSession } from "next-auth";
 import { saveUpload } from "@/lib/storage";
 import { isAdmin, adminEmails } from "@/lib/isAdmin";
 import { sendMail, suggestionEmail } from "@/lib/mailer";
+import { appUrl } from "@/lib/url";
 
 /**
  * "Help us improve" — anyone signed in can send a bug, an idea, or anything else, with an
@@ -51,7 +52,7 @@ export async function submitSuggestion(formData: FormData) {
     try {
       const to = adminEmails().join(',');
       if (to) {
-        const base = (process.env.NEXTAUTH_URL || '').replace(/\/$/, '');
+        const base = appUrl();
         await sendMail({
           to,
           replyTo: from || undefined,   // hitting reply answers the reporter, not us

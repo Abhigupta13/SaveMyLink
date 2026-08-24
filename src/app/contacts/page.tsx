@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
-import { Phone, Mail, MessageCircle, Plus, Pencil, Trash2, X } from 'lucide-react';
-import { getContacts, createContact, updateContact, deleteContact, ContactInput } from '@/actions/contact';
+import { Phone, Mail, MessageCircle, Plus, Pencil, Trash2, X, UserPlus } from 'lucide-react';
+import { getContacts, createContact, updateContact, deleteContact, inviteContact, ContactInput } from '@/actions/contact';
 import { useFeedback } from '@/components/ui/Feedback';
 
 const EMPTY: ContactInput = { name: '', phone: '', email: '', company: '', note: '' };
@@ -18,6 +18,9 @@ export default function ContactsPage() {
   const [form, setForm] = useState<ContactInput | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  // Set only when the person we just saved has no account. Offered, never sent on its own —
+  // the message goes out under the user's name, so it stays the user's decision.
+  const [invitee, setInvitee] = useState<{ email: string; name: string } | null>(null);
 
   const load = useCallback(async () => {
     const res = await getContacts();
@@ -32,8 +35,19 @@ export default function ContactsPage() {
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form) return;
+    const name = form.name;
     const res = editingId ? await updateContact(editingId, form) : await createContact(form);
-    if (res.success) { setForm(null); setEditingId(null); load(); } else toast(res.error || 'Something went wrong', 'error');
+    if (!res.success) return toast(res.error || 'Something went wrong', 'error');
+    setForm(null); setEditingId(null);
+    if (res.inviteAvailable) setInvitee({ email: res.inviteAvailable, name });
+    load();
+  };
+
+  const sendInvite = async () => {
+    if (!invitee) return;
+    const res = await inviteContact(invitee.email);
+    toast(res.success ? `Invite sent to ${invitee.email}` : (res.error || 'Could not send the invite'), res.success ? 'success' : 'error');
+    setInvitee(null);
   };
 
   const remove = async () => {
@@ -85,6 +99,24 @@ export default function ContactsPage() {
             <button type="submit" className="btn-primary" style={{ padding: '10px 22px', borderRadius: '12px', fontWeight: 800 }}>Save</button>
           </div>
         </form>
+      )}
+
+      {invitee && (
+        <div className="card" style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '12px', padding: '14px' }}>
+          <span className="row-icon"><UserPlus size={18} strokeWidth={2.2} /></span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontWeight: 700, color: 'var(--text-primary)' }}>
+              {invitee.name || invitee.email} isn’t on the app yet
+            </span>
+            <span style={{ display: 'block', fontSize: '0.8rem', lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+              Send them an invite so you can share projects and assign them tasks.
+            </span>
+          </span>
+          <button className="subtle-link" onClick={() => setInvitee(null)}>Not now</button>
+          <button className="btn-primary" onClick={sendInvite} style={{ padding: '9px 16px', borderRadius: '12px', fontWeight: 800, flexShrink: 0 }}>
+            Invite
+          </button>
+        </div>
       )}
 
       {contacts.length > 5 && (

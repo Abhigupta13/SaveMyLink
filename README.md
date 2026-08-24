@@ -47,6 +47,12 @@ The APK is a thin native shell (share-sheet receiver, local notifications, nativ
 MONGODB_URI=...          # MongoDB connection string
 NEXTAUTH_SECRET=...      # also signs the private-safe cookie
 NEXTAUTH_URL=https://<your-domain>
+
+# The app's public address, used for links that leave the machine: the share link, the /download
+# QR code, and every link inside an email. Kept separate from NEXTAUTH_URL on purpose — that one
+# must be http://localhost:3000 in development or sign-in breaks, so it cannot also mean "where
+# this app lives on the internet". Merging them puts localhost links in other people's inboxes.
+NEXT_PUBLIC_APP_URL=https://<your-domain>
 GEMINI_API_KEY=...       # Jarvis + MOM task extraction (aistudio.google.com/apikey)
 GEMINI_MODEL=...         # optional, defaults to gemini-3.6-flash; falls back to 3.5/3.7 on 503
 GROQ_API_KEY=...         # Jarvis voice + free-tier MOM transcription (whisper-large-v3)
