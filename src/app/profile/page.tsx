@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut, Lock, Unlock } from 'lucide-react';
+import { LogOut, Lock, Unlock, Share2, FileText, BarChart3 } from 'lucide-react';
 import { getContacts } from '@/actions/contact';
 import { getMyOpenTasks } from '@/actions/task';
 import { getProjects } from '@/actions/project';
@@ -10,12 +10,16 @@ import { useFeedback } from '@/components/ui/Feedback';
 import { useUser } from '@/components/UserContext';
 import ThemeToggle from '@/components/ThemeToggle';
 import SuggestBox from '@/components/SuggestBox';
+import Link from 'next/link';
+import { appUrl } from '@/lib/url';
+import { amIAdmin } from '@/actions/admin';
 
 export default function ProfilePage() {
   const { confirm, toast } = useFeedback();
   const { privateSafe, setPrivateSafe, setPinModalOpen } = useUser();
   const { data: session, status } = useSession();
   const [stats, setStats] = useState<{ tasks: number; projects: number; contacts: number } | null>(null);
+  const [admin, setAdmin] = useState(false);
   const user = session?.user;
   const initial = (user?.name || user?.email || 'U')[0].toUpperCase();
 
@@ -29,6 +33,32 @@ export default function ProfilePage() {
       });
     });
   }, [status]);
+
+  // Only decides whether the row is drawn; /admin's own actions are what actually gate the data
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+    amIAdmin().then(r => setAdmin(r.admin)).catch(() => {});
+  }, [status]);
+
+  // Same fallback ladder MomSection uses: native sheet on the phone, Web Share on a browser that
+  // has it, clipboard everywhere else — so the button always does something.
+  const shareApp = async () => {
+    // The live site, never whatever host this happens to be running on — a shared localhost
+    // link is one the person receiving it cannot open.
+    const url = `${appUrl()}/download`;
+    const text = `I'm using ALL YOU NEED to keep my links, notes, tasks and meetings in one place — for work and everything else. Get it here: ${url}`;
+    try {
+      const { Capacitor } = await import('@capacitor/core');
+      if (Capacitor.isNativePlatform()) {
+        const { Share } = await import('@capacitor/share');
+        await Share.share({ title: 'ALL YOU NEED', text, url });
+        return;
+      }
+    } catch { /* fall through */ }
+    if (navigator.share) return void navigator.share({ title: 'ALL YOU NEED', text, url }).catch(() => {});
+    await navigator.clipboard.writeText(text);
+    toast('Invite link copied', 'success');
+  };
 
   return (
     <div className="page narrow">
@@ -75,6 +105,47 @@ export default function ProfilePage() {
           <span className="slider round"></span>
         </label>
       </div>
+
+      {admin && (
+        <Link href="/admin" className="card" style={{
+          display: 'flex', alignItems: 'center', gap: '12px',
+          marginTop: '14px', textDecoration: 'none', color: 'inherit',
+        }}>
+          <span className="row-icon"><BarChart3 size={18} strokeWidth={2.2} /></span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontWeight: 700 }}>Admin</span>
+            <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              How the app is doing, and everything sent through Help us improve
+            </span>
+          </span>
+        </Link>
+      )}
+
+      <button onClick={shareApp} className="card" style={{
+        display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
+        marginTop: '14px', textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit',
+      }}>
+        <span className="row-icon"><Share2 size={18} strokeWidth={2.2} /></span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontWeight: 700 }}>Share the app</span>
+          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            Send someone the download link and install steps
+          </span>
+        </span>
+      </button>
+
+      <Link href="/terms" className="card" style={{
+        display: 'flex', alignItems: 'center', gap: '12px',
+        marginTop: '10px', marginBottom: '4px', textDecoration: 'none', color: 'inherit',
+      }}>
+        <span className="row-icon"><FileText size={18} strokeWidth={2.2} /></span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontWeight: 700 }}>Terms &amp; your data</span>
+          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            What is stored, who can see it
+          </span>
+        </span>
+      </Link>
 
       <SuggestBox />
 

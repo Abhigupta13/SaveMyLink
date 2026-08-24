@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { Bug, Lightbulb, MessageSquare } from 'lucide-react';
 import { getSuggestions } from '@/actions/suggestion';
+import { formatInZone } from '@/lib/time';
+import Link from 'next/link';
 
 /**
  * Everything sent through "Help us improve". Admin only — the server action is the gate, this
@@ -12,9 +14,7 @@ import { getSuggestions } from '@/actions/suggestion';
 
 const ICON = { bug: Bug, idea: Lightbulb, other: MessageSquare } as const;
 
-const when = (iso: string) => new Date(iso).toLocaleString(undefined, {
-  day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
-});
+const when = (iso: string) => formatInZone(iso);
 
 export default function FeedbackInboxPage() {
   const { status } = useSession();
@@ -37,7 +37,7 @@ export default function FeedbackInboxPage() {
     <div className="page narrow">
       <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Help us improve</h1>
       <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '20px' }}>
-        {rows.length} {rows.length === 1 ? 'submission' : 'submissions'}
+        {rows.length} {rows.length === 1 ? 'submission' : 'submissions'} · <Link href="/admin" style={{ color: 'var(--accent-text)', fontWeight: 700 }}>see the numbers</Link>
       </p>
 
       {!rows.length && <p style={{ color: 'var(--text-secondary)' }}>Nothing yet.</p>}

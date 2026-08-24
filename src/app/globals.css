@@ -2764,3 +2764,155 @@ main { padding-bottom: 84px; }
   .print-only tr, .print-only .print-block { break-inside: avoid; }
   .print-only ul { margin: 2mm 0 0 5mm; }
 }
+
+/* ── Confirm-your-email banner ───────────────────────────────────────────────
+   Sits above the page rather than fixed: it is important but not urgent, and a
+   sticky bar eats the top of a phone screen on every single view. Phone-first —
+   it stacks to a column under 640px so the code boxes never squeeze. */
+.verify-banner {
+  display: flex; align-items: flex-start; gap: 12px;
+  max-width: 960px; margin: 12px auto 0; padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--warn-color) 10%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--warn-color) 32%, transparent);
+}
+.verify-banner-icon {
+  display: grid; place-items: center; flex-shrink: 0;
+  width: 34px; height: 34px; border-radius: 11px;
+  background: color-mix(in srgb, var(--warn-color) 18%, transparent);
+  color: var(--warn-color);
+}
+.verify-banner-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.verify-banner-body strong { font-size: 0.9rem; font-weight: 800; color: var(--text-primary); line-height: 1.35; }
+.verify-banner-body > span { font-size: 0.8rem; line-height: 1.5; color: var(--text-secondary); overflow-wrap: anywhere; }
+.verify-banner-note { color: var(--success-color) !important; font-weight: 600; }
+.verify-banner-error { color: var(--danger-color) !important; font-weight: 600; }
+.verify-banner-code { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+/* .otp-box is flex:1, sized to fill the narrow auth card. In a full-width banner that let six
+   boxes stretch past the edge, so the row gets an explicit ceiling and its own smaller boxes. */
+.verify-banner-code .otp-row { flex: 1 1 260px; min-width: 0; max-width: 300px; gap: 6px; }
+.verify-banner-code .otp-box { height: 44px; font-size: 1.05rem; border-radius: 10px; }
+.verify-banner-code .btn-primary,
+.verify-banner-cta {
+  flex-shrink: 0; padding: 10px 16px; height: 42px;
+  border-radius: 12px; font-weight: 800; font-size: 0.85rem; white-space: nowrap;
+}
+.verify-banner .icon-btn { flex-shrink: 0; }
+
+/* On the desktop rail layout the content is inset; match it so the banner lines up */
+@media (min-width: 768px) { .verify-banner { margin-left: calc(var(--rail-w) + 16px); margin-right: 16px; } }
+
+@media (max-width: 640px) {
+  .verify-banner { flex-wrap: wrap; margin: 10px 12px 0; padding: 13px 14px; }
+  .verify-banner-code .otp-row { max-width: none; }
+  .verify-banner-cta { width: 100%; margin-top: 4px; }
+  .verify-banner-code { width: 100%; }
+  .verify-banner-code .btn-primary { flex: 1; }
+}
+
+/* Download-page QR. currentColor on the SVG means one asset serves both themes. */
+.download-qr { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-bottom: 26px; }
+.download-qr-code { width: 168px; height: 168px; padding: 12px; border-radius: var(--radius-lg); background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); }
+.download-qr-code svg { width: 100%; height: 100%; display: block; }
+.download-qr p { font-size: 0.75rem; color: var(--text-tertiary); text-align: center; }
+
+/* ── Admin dashboard ─────────────────────────────────────────────────────────
+   Chart colours are their own tokens, not the UI accent, because they answer to a
+   different rule: each step was validated against the surface it sits on (ordinal
+   ramp, monotone lightness, light end clearing 2:1; single-series fill inside the
+   mode's lightness band at >=3:1). Dark is the app's default theme, so :root holds
+   the dark steps and the light ones are stamped by the toggle and the OS setting —
+   the same three scopes the rest of this file uses. */
+:root {
+  --viz-fill: #d2734f;
+  --viz-s1: #f2ad95;
+  --viz-s2: #e08a6a;
+  --viz-s3: #c96442;
+  --viz-s4: #9c4a2b;
+}
+:root[data-theme="light"] {
+  --viz-fill: #c05a38;
+  --viz-s1: #eba086;
+  --viz-s2: #d97a57;
+  --viz-s3: #c05a38;
+  --viz-s4: #8f3f22;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --viz-fill: #c05a38;
+    --viz-s1: #eba086;
+    --viz-s2: #d97a57;
+    --viz-s3: #c05a38;
+    --viz-s4: #8f3f22;
+  }
+}
+
+.viz .viz-card { margin-bottom: 14px; }
+.viz-title { font-size: 1rem; font-weight: 800; color: var(--text-primary); margin-bottom: 2px; }
+.viz-sub { font-size: 0.8rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 16px; }
+.viz-empty { font-size: 0.85rem; color: var(--text-tertiary); }
+
+/* Hero — exactly one per view. Proportional figures: tabular-nums makes a big
+   number look loose because every digit gets the width of a zero. */
+.viz-hero { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
+.viz-hero-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-tertiary); }
+.viz-hero-value { font-size: 3rem; line-height: 1.05; font-weight: 800; color: var(--text-primary); letter-spacing: -0.03em; }
+.viz-hero-sub { font-size: 0.82rem; color: var(--text-secondary); }
+
+.viz-kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 14px; }
+@media (min-width: 720px) { .viz-kpis { grid-template-columns: repeat(4, 1fr); } }
+.viz-kpi { display: flex; flex-direction: column; gap: 3px; padding: 14px; }
+.viz-kpi-value { font-size: 1.5rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em; }
+.viz-kpi-label { font-size: 0.72rem; line-height: 1.35; font-weight: 600; color: var(--text-secondary); }
+
+/* Columns: capped thickness so the slot keeps its air, 4px rounded data-end,
+   square at the baseline, and a hairline baseline instead of a grid. */
+.viz-cols { display: flex; align-items: flex-end; gap: 4px; height: 132px; padding-bottom: 18px; border-bottom: 1px solid var(--border-color); position: relative; }
+.viz-col-slot { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; position: relative; }
+.viz-col { display: block; width: 100%; max-width: 24px; background: var(--viz-fill); border-radius: 4px 4px 0 0; }
+.viz-col-value { font-size: 0.68rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 3px; font-variant-numeric: tabular-nums; }
+.viz-col-tick { position: absolute; bottom: -18px; font-size: 0.63rem; color: var(--text-tertiary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Funnel: an ordinal ramp, so the darkening carries the sequence and the width
+   carries the magnitude. The drop line under each stage is the actual finding. */
+.viz-funnel { display: flex; flex-direction: column; gap: 14px; }
+.viz-funnel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 5px; }
+.viz-funnel-label { font-size: 0.84rem; font-weight: 600; color: var(--text-primary); }
+.viz-funnel-value { font-size: 0.95rem; font-weight: 800; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.viz-funnel-bar { display: block; height: 12px; max-width: 100%; border-radius: 0 4px 4px 0; }
+.viz-funnel-bar.s1 { background: var(--viz-s1); }
+.viz-funnel-bar.s2 { background: var(--viz-s2); }
+.viz-funnel-bar.s3 { background: var(--viz-s3); }
+.viz-funnel-bar.s4 { background: var(--viz-s4); }
+.viz-funnel-drop { display: block; margin-top: 5px; font-size: 0.72rem; color: var(--text-tertiary); }
+
+.viz-ranked { display: flex; flex-direction: column; gap: 9px; }
+.viz-ranked-row { display: grid; grid-template-columns: 96px 1fr 46px; align-items: center; gap: 10px; }
+.viz-ranked-label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); }
+.viz-ranked-track { display: block; height: 10px; border-radius: 5px; background: var(--bg-tertiary); }
+.viz-ranked-bar { display: block; height: 100%; background: var(--viz-fill); border-radius: 0 4px 4px 0; }
+.viz-ranked-value { font-size: 0.82rem; font-weight: 700; color: var(--text-primary); text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 420px) { .viz-ranked-row { grid-template-columns: 84px 1fr 40px; } }
+
+.viz-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.viz-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; background: var(--bg-tertiary); font-size: 0.78rem; font-weight: 700; color: var(--text-secondary); }
+.viz-context { font-size: 0.82rem; color: var(--text-secondary); margin: -6px 0 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); }
+.viz-context strong { color: var(--text-primary); font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* Icon chip for a list row. NOT .tile-icon — that one gets its width and height from
+   `.tiles.grid`/`.tiles.list`, so outside the Home grid it has no intrinsic size and stretches to
+   the height of whatever text sits beside it. Reusing it in a three-line row drew a tall pill. */
+.row-icon {
+  width: 40px; height: 40px; flex-shrink: 0; align-self: center;
+  display: grid; place-items: center;
+  border-radius: 12px; background: var(--bg-tertiary); color: var(--accent-text);
+}
+/* Beside a multi-line block, a centred chip drifts away from the heading it belongs to */
+.row-icon.top { align-self: flex-start; }
+
+/* What the APK asks for, on the download page. Two lines per row so the reason sits with the
+   permission — a bare permission name is what makes people nervous in the first place. */
+.perm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.perm-list li { display: flex; flex-direction: column; gap: 1px; padding-left: 12px; border-left: 2px solid var(--border-color); }
+.perm-what { font-size: 0.84rem; font-weight: 700; color: var(--text-primary); }
+.perm-why { font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }

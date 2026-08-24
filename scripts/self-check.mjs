@@ -1,10 +1,13 @@
 // Minimal self-check for the pure helpers. Run: node scripts/self-check.mjs
 import assert from 'node:assert';
-import { extractUrl, hostnameOf, normalizeUrl, youtubeId } from '../src/lib/url.ts';
+import { extractUrl, hostnameOf, normalizeUrl, youtubeId, appUrl } from '../src/lib/url.ts';
 import { escapeRegex } from '../src/lib/regex.ts';
 import { hinglishEnabled } from '../src/lib/sarvam.ts';
 import { isAdmin, adminEmails } from '../src/lib/isAdmin.ts';
-import { suggestionEmail } from '../src/lib/mailer.ts';
+import { suggestionEmail, inviteEmail, otpEmail } from '../src/lib/mailer.ts';
+import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, formatInZone } from '../src/lib/time.ts';
+import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
+import { projectScope, ownerScope, isProjectOwner, isProjectCreator } from '../src/lib/scope.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -51,6 +54,23 @@ allowlist(',,');
 assert.equal(hinglishEnabled(''), false, 'blank list entries never match a blank email');
 allowlist(undefined);
 
+// Both founders reach /admin with nothing configured. This is the regression test for Abhishek
+// silently losing access the next time someone deploys without setting ADMIN_EMAILS.
+delete process.env.ADMIN_EMAILS;
+assert.deepEqual(adminEmails(), ['swarajdangare2016@gmail.com', 'abhishek.akg13@gmail.com'], 'both founders by default');
+assert.equal(isAdmin('swarajdangare2016@gmail.com'), true);
+assert.equal(isAdmin('ABHISHEK.AKG13@GMAIL.COM'), true, 'case-insensitive');
+assert.equal(isAdmin('abhishek.akg13@gmail.com.c'), false, 'a near-miss address is not an admin');
+assert.equal(isAdmin('someone@else.com'), false, 'nobody else, by default');
+assert.equal(isAdmin(''), false);
+assert.equal(isAdmin(null), false);
+
+// ADMIN_EMAILS overrides completely, including narrowing the list — a misconfigured Vercel
+// variable must lock people out visibly rather than silently leaving the defaults in place
+process.env.ADMIN_EMAILS = 'swarajdangare2016@gmail.com';
+assert.equal(isAdmin('abhishek.akg13@gmail.com'), false, 'the env list replaces the default, it does not extend it');
+assert.equal(isAdmin('swarajdangare2016@gmail.com'), true);
+
 // Admin allowlist gates the feedback inbox, so it fails closed the same way
 process.env.ADMIN_EMAILS = 'boss@x.com, Other@Y.com';
 assert.deepEqual(adminEmails(), ['boss@x.com', 'other@y.com'], 'trimmed and lowercased');
@@ -68,5 +88,145 @@ assert.ok(evil.html.includes('&amp;'), 'ampersands escaped');
 assert.ok(!evil.html.includes('View screenshot'), 'no screenshot button when there is no shot');
 assert.ok(suggestionEmail({ kind: 'idea', message: 'x', from: 'a@b.com', shotUrl: 'https://h/s' })
   .html.includes('View screenshot'), 'screenshot button appears when there is one');
+
+
+// A model writes a bare wall clock in the USER's zone; parsing it in the SERVER's zone is what
+// made "tomorrow 5pm" fire at 22:30 in India. These pin the whole bug shut.
+const iso = (d) => d.toISOString();
+assert.equal(iso(zonedToUtc('2026-08-26T17:00', 'Asia/Kolkata')), '2026-08-26T11:30:00.000Z', 'IST wall clock anchors 5.5h back');
+assert.equal(iso(zonedToUtc('2026-08-26T17:00', 'UTC')), '2026-08-26T17:00:00.000Z', 'UTC is its own wall clock');
+assert.equal(iso(zonedToUtc('2026-01-15T12:00', 'America/New_York')), '2026-01-15T17:00:00.000Z', 'winter offset');
+assert.equal(iso(zonedToUtc('2026-07-15T12:00', 'America/New_York')), '2026-07-15T16:00:00.000Z', 'summer offset — DST is read, not assumed');
+assert.equal(iso(zonedToUtc('2026-08-26T17:00:30', 'Asia/Kolkata')), '2026-08-26T11:30:30.000Z', 'seconds survive');
+
+// Already-zoned input round-trips through the confirm screen and must never shift twice
+assert.equal(iso(zonedToUtc('2026-08-26T11:30:00.000Z', 'Asia/Kolkata')), '2026-08-26T11:30:00.000Z', 'ISO with Z passes through');
+assert.equal(iso(zonedToUtc('2026-08-26T17:00:00+05:30', 'UTC')), '2026-08-26T11:30:00.000Z', 'explicit offset wins over the zone argument');
+const already = new Date('2026-08-26T11:30:00.000Z');
+assert.equal(iso(zonedToUtc(already, 'Asia/Kolkata')), iso(already), 'a Date is returned untouched');
+
+// Callers rely on null to keep their existing "no due date" branch
+assert.equal(zonedToUtc(null), null);
+assert.equal(zonedToUtc(''), null);
+assert.equal(zonedToUtc(undefined), null);
+assert.equal(zonedToUtc('sometime next week'), null, 'prose is not a date');
+
+// A client sends the zone, so junk must not lose the date entirely
+assert.equal(safeZone('Not/AZone'), DEFAULT_TZ, 'unknown zone falls back');
+assert.equal(safeZone(''), DEFAULT_TZ, 'blank falls back');
+assert.equal(safeZone(null), DEFAULT_TZ, 'missing falls back');
+assert.equal(safeZone('Asia/Kolkata'), 'Asia/Kolkata', 'a real zone is kept');
+assert.equal(DEFAULT_TZ, 'Asia/Kolkata', 'the fallback is India, never UTC');
+assert.ok(zonedToUtc('2026-08-26T17:00', 'Not/AZone') instanceof Date, 'a bad zone still yields a date');
+
+// Every clock the user reads is 12-hour with am/pm, and it must not drift back to the device locale
+const noon = '2026-08-26T06:30:00.000Z';   // 12:00 in Kolkata
+assert.equal(formatTime(noon, 'Asia/Kolkata'), '12:00 pm');
+assert.equal(formatTime('2026-08-26T11:30:00.000Z', 'Asia/Kolkata'), '5:00 pm', 'the 17:00 case reads as 5 pm');
+assert.equal(formatTime('2026-08-26T18:30:00.000Z', 'Asia/Kolkata'), '12:00 am', 'midnight is 12 am, never 24:00');
+assert.equal(formatTime('2026-08-25T22:45:00.000Z', 'Asia/Kolkata'), '4:15 am');
+assert.equal(formatDay(noon, 'Asia/Kolkata'), '26 Aug');
+// A bare toLocaleDateString() renders 8/26/2026 on a US-locale browser. Pinning the locale is the
+// whole point — day-first, never month-first, whatever the device is set to.
+assert.equal(formatDate(noon, 'Asia/Kolkata'), '26 Aug 2026', 'dates carry the year day-first');
+assert.ok(!formatDate(noon, 'Asia/Kolkata').startsWith('8/'), 'never US month/day order');
+assert.equal(formatDate(null), '');
+assert.equal(formatInZone(noon, 'Asia/Kolkata'), '26 Aug, 12:00 pm');
+assert.equal(formatTime(null), '', 'nothing renders for no date');
+assert.equal(formatInZone('not a date', 'Asia/Kolkata'), '', 'junk renders as nothing, not "Invalid Date"');
+
+// OTP gates both password reset and email verification — every ambiguous state must fail closed
+const future = new Date(Date.now() + 60_000);
+const past = new Date(Date.now() - 1);
+const code = '123456';
+const good = { token: hashOtp(code), expiry: future, attempts: 0 };
+assert.equal(checkOtp(good, code), 'ok');
+assert.equal(checkOtp(good, '654321'), 'wrong');
+assert.equal(checkOtp({ ...good, expiry: past }, code), 'expired', 'an expired code is dead even if correct');
+assert.equal(checkOtp({ ...good, token: null }, code), 'expired', 'no pending code reads as expired, not as a match');
+assert.equal(checkOtp({ ...good, expiry: null }, code), 'expired');
+assert.equal(checkOtp({ ...good, attempts: MAX_OTP_ATTEMPTS }, code), 'locked', 'lockout beats a correct code');
+assert.equal(checkOtp({ ...good, attempts: MAX_OTP_ATTEMPTS + 1 }, code), 'locked');
+assert.equal(checkOtp({ token: 'short', expiry: future, attempts: 0 }, code), 'wrong', 'a malformed stored token never matches');
+assert.equal(checkOtp(good, ''), 'wrong');
+assert.ok(isSixDigits('012345') && !isSixDigits('12345') && !isSixDigits('abcdef') && !isSixDigits(''));
+assert.ok(/^\d{6}$/.test(newOtp()), 'codes are always 6 digits, leading zeros kept');
+assert.notEqual(hashOtp('123456'), '123456', 'only the hash is ever stored');
+
+// One invite template, two shapes — a projectless invite must not leak "undefined" into the copy
+const withProject = inviteEmail({ projectName: 'Mogli', inviterName: 'Swaraj', link: 'https://x/y', hasAccount: true });
+assert.ok(withProject.subject.includes('Mogli') && withProject.html.includes('Mogli'));
+const noProject = inviteEmail({ inviterName: 'Swaraj', link: 'https://x/y', hasAccount: false });
+assert.ok(!noProject.subject.includes('undefined') && !noProject.html.includes('undefined') && !noProject.text.includes('undefined'), 'no stray undefined without a project');
+assert.ok(noProject.html.includes('Create your account'), 'a stranger is asked to sign up');
+
+// The code email serves reset and verification; the wrong copy on the wrong one is a support ticket
+assert.ok(otpEmail('123456', 'S', 'verify').subject.includes('confirmation'));
+assert.ok(otpEmail('123456', 'S').subject.includes('password reset'), 'reset stays the default');
+assert.ok(otpEmail('123456', 'S', 'verify').html.includes('123456'));
+
+// Project membership is granted by raw email string. Until a signup proves it owns that address
+// the string is only a claim, so the memberEmails branch must not appear for an unverified user —
+// this is the regression test for "register boss@theirclient.com and read all their work".
+const scoped = (verified) => JSON.stringify(projectScope('u1', 'Boss@Client.com', verified));
+assert.equal(scoped(false), JSON.stringify({ $or: [{ ownerId: 'u1' }] }), 'unverified claims nothing by email');
+assert.ok(scoped(true).includes('boss@client.com'), 'verified matches, lowercased');
+assert.ok(scoped(false).includes('ownerId'), 'an unverified user still keeps the projects they created');
+assert.equal(JSON.stringify(projectScope('u1', '', true)), JSON.stringify({ $or: [{ ownerId: 'u1' }] }), 'a blank email never matches a blank memberEmails entry');
+assert.equal(JSON.stringify(projectScope('u1', null, true)), JSON.stringify({ $or: [{ ownerId: 'u1' }] }), 'no session email claims nothing');
+
+// Owner rights are granted by email too, so the verification gate has to hold here as well —
+// an unverified account claiming an owner address would get DELETE rights over a team's shared
+// work, which is strictly worse than the read access that gate was built for.
+const owned = (verified) => JSON.stringify(ownerScope('u1', 'Boss@Client.com', verified));
+assert.equal(owned(false), JSON.stringify({ $or: [{ ownerId: 'u1' }] }), 'unverified claims no ownership by email');
+assert.ok(owned(true).includes('ownerEmails'), 'verified co-owner matches');
+assert.ok(owned(true).includes('boss@client.com'), 'lowercased');
+assert.ok(owned(false).includes('ownerId'), 'a creator never loses their own project');
+assert.equal(JSON.stringify(ownerScope('u1', '', true)), JSON.stringify({ $or: [{ ownerId: 'u1' }] }), 'a blank email never matches a blank ownerEmails entry');
+
+// Display side. The creator is permanent; co-owners are equal except for deleting the project.
+const proj = { ownerId: { email: 'Creator@x.com' }, ownerEmails: ['Co@x.com'], memberEmails: ['co@x.com', 'member@x.com'] };
+assert.ok(isProjectOwner(proj, 'creator@x.com'), 'creator is an owner');
+assert.ok(isProjectOwner(proj, 'CO@X.COM'), 'co-owner is an owner, case-insensitively');
+assert.ok(!isProjectOwner(proj, 'member@x.com'), 'a plain member is not');
+assert.ok(!isProjectOwner(proj, 'stranger@x.com'));
+assert.ok(!isProjectOwner(proj, ''), 'no email owns nothing');
+assert.ok(!isProjectOwner(null, 'creator@x.com'), 'no project owns nothing');
+assert.ok(isProjectCreator(proj, 'Creator@x.com'), 'creator is the creator');
+assert.ok(!isProjectCreator(proj, 'co@x.com'), 'a co-owner is NOT the creator — they cannot delete the project');
+
+// A raw document carries ownerId as an id, not a populated {email}; one rule reads both shapes
+const raw = { ownerId: 'user-1', ownerEmails: ['co@x.com'] };
+assert.ok(isProjectOwner(raw, 'anything@x.com', 'user-1'), 'creator matched by id');
+assert.ok(isProjectCreator(raw, 'anything@x.com', 'user-1'));
+assert.ok(isProjectOwner(raw, 'CO@x.com', 'someone-else'), 'co-owner still matched by email');
+assert.ok(!isProjectOwner(raw, 'member@x.com', 'someone-else'));
+assert.ok(!isProjectCreator(raw, 'co@x.com', 'someone-else'), 'a co-owner is not the creator on a raw doc either');
+
+// Every project that predates co-ownership has no ownerEmails at all — it must behave as before
+const old = { ownerId: { email: 'creator@x.com' }, memberEmails: ['member@x.com'] };
+assert.ok(isProjectOwner(old, 'creator@x.com'), 'sole owner unchanged');
+assert.ok(!isProjectOwner(old, 'member@x.com'), 'members gain nothing');
+
+// Links that leave this machine must carry the public address, not whatever host the code runs on.
+// The bug this pins shut: an invite sent from a dev box arrived with a localhost link.
+const env = (pub, auth) => {
+  if (pub === undefined) delete process.env.NEXT_PUBLIC_APP_URL; else process.env.NEXT_PUBLIC_APP_URL = pub;
+  if (auth === undefined) delete process.env.NEXTAUTH_URL; else process.env.NEXTAUTH_URL = auth;
+};
+const savedPub = process.env.NEXT_PUBLIC_APP_URL, savedAuth = process.env.NEXTAUTH_URL;
+
+env('https://live.example.com', 'http://localhost:3000');
+assert.equal(appUrl(), 'https://live.example.com', 'the public address beats the auth URL');
+env('https://live.example.com/', 'http://localhost:3000');
+assert.equal(appUrl() + '/download', 'https://live.example.com/download', 'trailing slash trimmed, never a double slash');
+env('https://live.example.com///', undefined);
+assert.equal(appUrl(), 'https://live.example.com', 'several trailing slashes trimmed');
+env(undefined, 'https://fallback.example.com/');
+assert.equal(appUrl(), 'https://fallback.example.com', 'falls back before the new variable is deployed');
+env(undefined, undefined);
+assert.equal(appUrl(), '', 'empty, never the string "undefined" — callers concatenate onto it');
+env(savedPub, savedAuth);
 
 console.log('self-check: all assertions passed');
