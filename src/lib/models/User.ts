@@ -8,6 +8,10 @@ export interface IUser extends Document {
   resetToken?: string;
   resetTokenExpiry?: Date;
   resetAttempts?: number;
+  emailVerified?: Date | null;
+  verifyToken?: string;
+  verifyTokenExpiry?: Date;
+  verifyAttempts?: number;
   createdAt: Date;
   updatedAt: Date;
   privatePin?: string;
@@ -21,6 +25,13 @@ const UserSchema: Schema<IUser> = new Schema({
   resetToken: { type: String },
   resetTokenExpiry: { type: Date },
   resetAttempts: { type: Number, default: 0 },
+  // Absent on every row that existed before verification shipped, which reads as unverified.
+  // Deliberate: projectAccess withholds shared data until it is stamped, so old accounts keep
+  // their own vault and verify only when they actually reach for someone else's project.
+  emailVerified: { type: Date, default: null },
+  verifyToken: { type: String },
+  verifyTokenExpiry: { type: Date },
+  verifyAttempts: { type: Number, default: 0 },
   privatePin: { type: String },
   image: { type: String }
 }, { timestamps: true });

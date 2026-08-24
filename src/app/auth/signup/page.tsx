@@ -3,10 +3,11 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Check, AlertCircle } from 'lucide-react';
-import { registerUser, authProviders } from '@/actions/auth';
+import { Check, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { registerUser, verifyEmail, resendVerification, authProviders } from '@/actions/auth';
 import AuthField from '@/components/auth/AuthField';
 import GoogleButton from '@/components/auth/GoogleButton';
+import OtpInput from '@/components/auth/OtpInput';
 import { PASSWORD_RULES, validateName, validateEmail, validatePassword } from '@/lib/validation';
 
 function SignupForm() {
@@ -23,7 +24,19 @@ function SignupForm() {
   const [formError, setFormError] = useState('');
   const [loading, setLoading] = useState(false);
   const [google, setGoogle] = useState(false);
+  // Second step rather than a second page: a half-finished signup that survives a refresh would
+  // need the password kept somewhere, and the account already exists by the time the code is sent.
+  const [step, setStep] = useState<'form' | 'code'>('form');
+  const [code, setCode] = useState('');
+  const [banner, setBanner] = useState('');
+  const [devCode, setDevCode] = useState('');
+  const [seconds, setSeconds] = useState(0);
   useEffect(() => { authProviders().then(p => setGoogle(p.google)); }, []);
+  useEffect(() => {
+    if (!seconds) return;
+    const t = setTimeout(() => setSeconds(s => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [seconds]);
 
   const check = () => ({
     name: validateName(name),
@@ -49,10 +62,69 @@ function SignupForm() {
     setLoading(true);
     const res = await registerUser({ name, email, password });
     setLoading(false);
-    if (res.success) router.push('/auth/signin?message=Account created. Please sign in.');
-    else if (res.field) { setErrors(e => ({ ...e, [res.field!]: res.error! })); setTouched(t => ({ ...t, [res.field!]: true })); }
+    if ('success' in res) {
+      setStep('code');
+      setSeconds(45);
+      setDevCode(('code' in res && res.code) || '');
+      setBanner(res.message || 'Check your email for the 6-digit code.');
+      setErrors({});
+    } else if (res.field) { setErrors(e => ({ ...e, [res.field!]: res.error! })); setTouched(t => ({ ...t, [res.field!]: true })); }
     else setFormError(res.error || 'Could not create your account. Please try again.');
   };
+
+  const submitCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!/^\d{6}$/.test(code)) return setErrors({ code: 'Enter the 6-digit code' });
+    setLoading(true);
+    const res = await verifyEmail(email.trim(), code);
+    setLoading(false);
+    if ('success' in res) router.push('/auth/signin?message=Email confirmed. Please sign in.');
+    else setErrors({ [res.field || 'code']: res.error || 'Could not confirm your email.' });
+  };
+
+  const resend = async () => {
+    setLoading(true);
+    const res = await resendVerification(email.trim());
+    setLoading(false);
+    if ('error' in res && res.error) return setErrors({ code: res.error });
+    setSeconds(45);
+    setDevCode(('code' in res && res.code) || '');
+    setBanner(('message' in res && res.message) || 'New code sent.');
+    setErrors({});
+  };
+
+  if (step === 'code') return (
+    <div className="auth-wrap">
+      <div className="auth-box">
+        <h1 className="auth-h1">Confirm your email</h1>
+        <p className="auth-sub">
+          We sent a 6-digit code to <strong style={{ color: 'var(--text-primary)' }}>{email}</strong> · expires in 10 minutes.
+        </p>
+
+        {banner && <div className="auth-banner success"><CheckCircle2 size={16} /> {banner}</div>}
+        {devCode && <div className="auth-banner success" style={{ letterSpacing: '0.2em', fontWeight: 800 }}>{devCode}</div>}
+
+        <form onSubmit={submitCode} noValidate>
+          <div className="auth-field">
+            <div className="auth-label-row"><label>6-digit code</label></div>
+            <OtpInput value={code} onChange={v => { setCode(v); setErrors({}); }} invalid={!!errors.code} />
+            {errors.code && <span className="auth-field-error"><AlertCircle size={12} style={{ verticalAlign: '-2px' }} /> {errors.code}</span>}
+          </div>
+          <button type="submit" className="btn-primary auth-submit" disabled={loading}>
+            {loading ? 'Confirming…' : 'Confirm email'}
+          </button>
+        </form>
+
+        <p className="auth-foot">
+          {seconds > 0
+            ? <span style={{ color: 'var(--text-tertiary)' }}>Resend code in {seconds}s</span>
+            : <button className="subtle-link" onClick={resend} disabled={loading}>Resend code</button>}
+          {' · '}
+          <button className="subtle-link" onClick={() => { setStep('form'); setCode(''); setBanner(''); setErrors({}); }}>Use a different email</button>
+        </p>
+      </div>
+    </div>
+  );
 
   return (
     <div className="auth-wrap">
@@ -61,7 +133,7 @@ function SignupForm() {
         <p className="auth-sub">
           {invitedEmail
             ? 'Finish signing up and the project you were invited to will be waiting.'
-            : 'Links, notes, tasks and meetings — all in one place.'}
+            : 'Links, notes, tasks and meetings — for work and for everything else.'}
         </p>
 
         {formError && <div className="auth-banner error"><AlertCircle size={16} /> {formError}</div>}
@@ -90,6 +162,9 @@ function SignupForm() {
         </form>
 
         <p className="auth-foot">Already have an account? <Link href="/auth/signin">Sign in</Link></p>
+        <p className="auth-foot" style={{ fontSize: '0.72rem' }}>
+          By creating an account you agree to our <Link href="/terms">Terms &amp; how your data is handled</Link>.
+        </p>
       </div>
     </div>
   );

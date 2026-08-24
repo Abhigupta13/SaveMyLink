@@ -57,7 +57,11 @@ export const authOptions = {
       try {
         await connectToDatabase();
         const existing = await User.findOne({ email });
-        if (!existing) await User.create({ email, name: user.name, image: user.image });
+        // Google has already proven the address. That is the whole job of our own OTP, so a
+        // Google sign-in settles it — including for a password account that predates verification
+        // and is now signing in this way (allowDangerousEmailAccountLinking makes them one row).
+        if (!existing) await User.create({ email, name: user.name, image: user.image, emailVerified: new Date() });
+        else if (!existing.emailVerified) { existing.emailVerified = new Date(); await existing.save(); }
       } catch (err) {
         console.error('[google signIn] could not upsert user:', err);
         return false; // fail loudly rather than creating a session with no account

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import AddLinkForm from './AddLinkForm';
 import PinModal from './PinModal';
+import VerifyBanner from './VerifyBanner';
 import { useSession } from 'next-auth/react';
 import { Search, Plus, Home, X } from 'lucide-react';
 import { NAV, MOBILE_NAV } from '@/lib/nav';
@@ -65,6 +66,8 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
 
   return (
     <>
+      <VerifyBanner />
+
       {/* Desktop / tablet: left rail */}
       <aside className="side-rail">
         <a href="/" className="rail-wordmark">ALL<span>YOU NEED</span></a>
