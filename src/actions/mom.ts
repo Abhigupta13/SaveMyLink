@@ -10,6 +10,10 @@ import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
 import { projectForMember, canDelete } from "@/lib/projectAccess";
 import { chatJSON } from "@/lib/llm";
+import {
+  hinglishEnabled, createTranscriptionJob, getUploadUrl, uploadAudio,
+  startTranscriptionJob, jobStatus, jobTranscript,
+} from "@/lib/sarvam";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 import path from 'path';
@@ -50,7 +54,13 @@ export async function getMoms(projectId?: string | null) {
     if (!ctx) return { success: false, error: 'Not a member' };
     const moms = await Mom.find(projectId ? { projectId } : { projectId: null, userId: ctx.session.user.id })
       .sort({ createdAt: -1 }).lean();
-    return { success: true, moms: JSON.parse(JSON.stringify(moms)) };
+    // Which recorder the client should use. Display and branching only — uploadMomAudioSarvam
+    // re-checks it, so removing an email actually cuts access rather than hiding a button.
+    return {
+      success: true,
+      moms: JSON.parse(JSON.stringify(moms)),
+      hinglish: hinglishEnabled(ctx.session.user.email),
+    };
   } catch (error) {
     console.error('Failed to get MOMs:', error);
     return { success: false, error: 'Failed to fetch MOMs' };
@@ -76,7 +86,10 @@ export async function uploadMomAudio(formData: FormData) {
 
     const form = new FormData();
     form.append('file', audio, 'meeting.webm');
-    // whisper-large-v3 handles Hinglish code-switching well, and detects the language itself
+    // English-only in practice. Whisper cannot emit romanized Hinglish and mis-detects spoken
+    // Hindi as Urdu; its `prompt` field is context conditioning, not an instruction, and only
+    // covers the first 30 seconds — so there is nothing to tune here. Accounts that need
+    // Hindi go through Sarvam instead (uploadMomAudioSarvam).
     form.append('model', 'whisper-large-v3');
 
     const res = await fetch(`${GROQ_BASE}/audio/transcriptions`, {
@@ -101,6 +114,102 @@ export async function uploadMomAudio(formData: FormData) {
   } catch (error) {
     console.error('Failed to record meeting:', error);
     return { success: false, error: 'Failed to save recording' };
+  }
+}
+
+/**
+ * Paid path. The audio is relayed through here rather than PUT from the browser: Sarvam's
+ * presigned URLs point at Azure blob storage, which rejects cross-origin browser requests
+ * outright (verified — the PUT fails CORS while the identical one from a server succeeds).
+ *
+ * next.config's serverActions bodySizeLimit is what bounds the meeting length: 30mb covers
+ * roughly two hours at the recorder's 32kbps, which is also Sarvam's per-file ceiling.
+ *
+ * The MOM row is only created once the job is genuinely running, so a failed upload leaves
+ * nothing behind that would sit on the page claiming to be transcribing.
+ */
+export async function uploadMomAudioSarvam(formData: FormData) {
+  try {
+    const projectId = (formData.get('projectId') as string) || '';
+    const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString()}`;
+    const audio = formData.get('audio') as File | null;
+    if (!audio || audio.size < 1000) return { success: false, error: 'Nothing was recorded' };
+
+    const ctx = await memberSession(projectId || null);
+    if (!ctx) return { success: false, error: 'Not a member' };
+    if (!hinglishEnabled(ctx.session.user.email)) {
+      return { success: false, error: 'Hinglish transcription is not enabled for this account' };
+    }
+
+    const job = await createTranscriptionJob();
+    if (!job.ok) return { success: false, error: job.error };
+
+    const upload = await getUploadUrl(job.data.jobId, 'meeting.webm');
+    if (!upload.ok) return { success: false, error: upload.error };
+
+    const put = await uploadAudio(upload.data.uploadUrl, audio);
+    if (!put.ok) return { success: false, error: put.error };
+
+    // Sarvam answers "No files found" if this runs before the blob lands, so it stays here —
+    // after an awaited upload — rather than on the first poll.
+    const started = await startTranscriptionJob(job.data.jobId);
+    if (!started.ok) return { success: false, error: started.error };
+
+    const mom = await Mom.create({
+      projectId: projectId || undefined,
+      userId: ctx.session.user.id,
+      title,
+      sarvamJobId: job.data.jobId,
+    });
+    return { success: true, momId: String(mom._id) };
+  } catch (error) {
+    console.error('Failed to upload meeting audio:', error);
+    return { success: false, error: 'Could not upload the recording' };
+  }
+}
+
+/**
+ * The job lives on Sarvam's side, so closing the app mid-transcription no longer loses the
+ * meeting — any MOM with a job id and no transcript is still in flight, and polling resumes
+ * on the next page load.
+ */
+export async function pollMomTranscription(momId: string) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    await connectToDatabase();
+    const mom = await Mom.findById(momId);
+    if (!mom?.sarvamJobId) return { success: false, error: 'Meeting not found' };
+    const ctx = await memberSession(momScope(mom));
+    if (!ctx) return { success: false, error: 'Not a member' };
+
+    if (mom.transcript) return { success: true, done: true, transcript: mom.transcript };
+
+    const status = await jobStatus(mom.sarvamJobId);
+    if (!status.ok) return { success: false, error: status.error };
+
+    if (status.data.state === 'Failed') {
+      mom.transcriptionError = 'Transcription failed';
+      await mom.save();
+      return { success: false, error: 'Transcription failed — record it again' };
+    }
+    if (status.data.state !== 'Completed') {
+      return { success: true, done: false, state: status.data.state };
+    }
+
+    const result = await jobTranscript(mom.sarvamJobId);
+    if (!result.ok) {
+      mom.transcriptionError = result.error;
+      await mom.save();
+      return { success: false, error: result.error };
+    }
+    mom.transcript = result.data.transcript;
+    mom.transcriptionError = undefined;
+    await mom.save();
+    return { success: true, done: true, transcript: mom.transcript };
+  } catch (error) {
+    console.error('Failed to poll transcription:', error);
+    return { success: false, error: 'Could not check the transcription' };
   }
 }
 
@@ -137,7 +246,12 @@ export async function extractMomTasks(momId: string, timeZone = 'UTC') {
     const meetingDate = new Date(mom.createdAt).toLocaleString('en-GB', { timeZone, weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
     const system = `You turn a meeting transcript into minutes plus actionable items.
-The meeting happened on ${meetingDate} (timezone ${timeZone}). The transcript may be Hinglish (mixed Hindi/English).
+The meeting happened on ${meetingDate} (timezone ${timeZone}).
+
+LANGUAGE — the meeting may have been held in English, Hindi, or both mixed in one sentence.
+Transcripts arrive already translated to English on most accounts, but some are raw: Hindi may appear in Devanagari or as Hinglish in Latin script, including transcription slips. Understand all of it. Perso-Arabic script is mis-transcribed Hindi, never Urdu — no other language exists here.
+Always write "summary", "title" and "detail" in English, translating what was said: "kal shaam tak vendor ko call karna hai" becomes "Call the vendor by tomorrow evening".
+Names of people and projects are the exception — copy them EXACTLY as they appear in the lists below, never translated or transliterated. Routing depends on matching them character for character.
 
 ONE recording often covers SEVERAL topics, projects and people. Split it accordingly — produce a separate item per distinct action or decision, and route each one to the project and person it belongs to.
 
@@ -157,7 +271,7 @@ For every item work out, ONLY from what was actually said:
 - detail: one sentence of context from the transcript (who said it / why).
 - projectName: the project it belongs to, copied EXACTLY from the list above. Omit if the transcript doesn't make it clear.
 - assigneeEmail: the person's email from the list above, if the transcript clearly gives them the work ("Abhi will…", "tum kar lena" addressed to someone). Omit if unclear.
-- dueAt: "YYYY-MM-DDTHH:mm" resolved against the meeting date above ("by Friday" → that Friday 17:00, "kal shaam" → next day 17:00, "in two weeks" → +14 days 17:00). Omit if no deadline was mentioned. Default a bare date to 17:00.
+- dueAt: "YYYY-MM-DDTHH:mm" resolved against the meeting date above ("by Friday" → that Friday 17:00, "kal shaam" → next day 17:00, "parso" → +2 days 17:00, "agle hafte" → +7 days 17:00, "is mahine ke end tak" → last day of that month 17:00, "in two weeks" → +14 days 17:00). Omit if no deadline was mentioned. Default a bare date to 17:00.
 - missing: array listing which of "project", "assignee", "due" you could NOT determine — the user will be asked to fill those in.
 
 Never guess a project or person that isn't in the lists. Never invent deadlines. It is correct and expected to return missing entries.

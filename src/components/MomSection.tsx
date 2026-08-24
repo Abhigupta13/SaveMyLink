@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { getMoms, uploadMomAudio, extractMomTasks, confirmMomTasks, deleteMom, updateMom } from '@/actions/mom';
+import { getMoms, uploadMomAudio, uploadMomAudioSarvam, pollMomTranscription, extractMomTasks, confirmMomTasks, deleteMom, updateMom } from '@/actions/mom';
 import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
 
@@ -12,6 +12,8 @@ interface MomSectionProps {
   memberOptions: string[];
   onTasksCreated: () => void;
 }
+
+const MAX_SECONDS = 2 * 60 * 60;   // Sarvam accepts at most 2 hours in one file
 
 export default function MomSection({ project, projects = [], myEmail, memberOptions, onTasksCreated }: MomSectionProps) {
   const { toast, confirm } = useFeedback();
@@ -47,11 +49,13 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const [editing, setEditing] = useState<string | null>(null);   // momId whose title/summary is being edited
   const [draftMom, setDraftMom] = useState<{ title: string; summary: string }>({ title: '', summary: '' });
   const [showTranscript, setShowTranscript] = useState<string | null>(null);
+  const [hinglish, setHinglish] = useState(false);   // account is allowlisted for Sarvam
 
   const fetchMoms = useCallback(async () => {
     const res = await getMoms(projectId);
     if (res.success) {
       setMoms(res.moms || []);
+      setHinglish(!!res.hinglish);
       // Seed editable drafts for MOMs awaiting review
       setDrafts(prev => {
         const next = { ...prev };
@@ -94,7 +98,12 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       recorderRef.current = recorder;
       setRecording(true);
       setElapsed(0);
-      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
+      timerRef.current = setInterval(() => setElapsed(s => {
+        // Sarvam's hard per-file limit is 2 hours, and it bills per minute — so a recorder
+        // left running is both a rejected upload and a real bill. Stop it ourselves.
+        if (s + 1 >= MAX_SECONDS) { stopRecording(); toast('Stopped at 2 hours — the limit for one recording.', 'error'); }
+        return s + 1;
+      }), 1000);
     } catch (err) {
       toast('Microphone unavailable. Check app permissions.', 'error');
     }
@@ -106,21 +115,85 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     if (timerRef.current) clearInterval(timerRef.current);
   };
 
-  const runPipeline = async (blob: Blob) => {
-    setPipeline('Transcribing… (this can take a minute)');
-    const formData = new FormData();
-    formData.append('projectId', projectId);
-    formData.append('title', `Meeting ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`);
-    formData.append('audio', blob, 'meeting.webm');
-    const up = await uploadMomAudio(formData);   // transcribes in the same call
-    if (!up.success) { setPipeline(''); toast(up.error || 'Something went wrong', 'error'); return; }
+  const meetingTitle = () => `Meeting ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
 
+  const runExtraction = async (momId: string) => {
     setPipeline('Extracting tasks…');
-    const ex = await extractMomTasks(up.mom._id, Intl.DateTimeFormat().resolvedOptions().timeZone);
+    const ex = await extractMomTasks(momId, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setPipeline('');
     if (!ex.success) toast(ex.error || 'Something went wrong', 'error');
     fetchMoms();
   };
+
+  /**
+   * Sarvam's job runs for minutes, so wait on it here rather than in a server action. Failure
+   * leaves the MOM alone: the job id is stored, so a reload picks the poll back up.
+   */
+  const waitForTranscript = async (momId: string, background = false) => {
+    // A resumed poll runs quietly: the meeting's own card already says it is transcribing, and
+    // occupying `pipeline` would disable the recorder — one stuck meeting would then block
+    // every new recording in this scope.
+    const say = (s: string) => { if (!background) setPipeline(s); };
+    say('Transcribing… this can take a few minutes');
+    // ~20 minutes of waiting. Giving up only stops watching — the job id stays on the MOM, so
+    // a reload picks it back up rather than the meeting being lost to a slow queue.
+    for (let i = 0; i < 150; i++) {
+      await new Promise(r => setTimeout(r, 8000));
+      const res = await pollMomTranscription(momId);
+      if (!res.success) { say(''); toast(res.error || 'Something went wrong', 'error'); fetchMoms(); return false; }
+      if (res.done) return true;
+    }
+    say('');
+    toast('Still transcribing — reopen this page in a bit to pick it up.', 'error');
+    fetchMoms();
+    return false;
+  };
+
+  // Paid path. The audio is relayed by the server — Sarvam's presigned URLs are Azure blob
+  // storage, which refuses cross-origin browser PUTs. Meeting length is bounded by
+  // next.config's serverActions bodySizeLimit (30mb ≈ 2 hours at 32kbps).
+  const runSarvamPipeline = async (blob: Blob) => {
+    setPipeline('Uploading…');
+    const formData = new FormData();
+    formData.append('projectId', projectId);
+    formData.append('title', meetingTitle());
+    formData.append('audio', blob, 'meeting.webm');
+    const up = await uploadMomAudioSarvam(formData);
+    if (!up.success || !up.momId) {
+      setPipeline(''); toast(up.error || 'Something went wrong', 'error'); return;
+    }
+    fetchMoms();   // the meeting exists now — show it as in-flight straight away
+    if (await waitForTranscript(up.momId)) await runExtraction(up.momId);
+  };
+
+  // Free path, unchanged: audio goes through the server action and Whisper answers inline.
+  const runWhisperPipeline = async (blob: Blob) => {
+    setPipeline('Transcribing… (this can take a minute)');
+    const formData = new FormData();
+    formData.append('projectId', projectId);
+    formData.append('title', meetingTitle());
+    formData.append('audio', blob, 'meeting.webm');
+    const up = await uploadMomAudio(formData);   // transcribes in the same call
+    if (!up.success) { setPipeline(''); toast(up.error || 'Something went wrong', 'error'); return; }
+    await runExtraction(up.mom._id);
+  };
+
+  const runPipeline = (blob: Blob) => (hinglish ? runSarvamPipeline(blob) : runWhisperPipeline(blob));
+
+  /**
+   * A job id with no transcript means Sarvam is still working on it. Because the job lives on
+   * their side, closing the app mid-transcription no longer loses the meeting — pick it back up.
+   */
+  const resumedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (pipeline) return;   // already waiting on one
+    const stuck = moms.find((m: any) =>
+      m.sarvamJobId && !m.transcript && !m.transcriptionError && !resumedRef.current.has(m._id));
+    if (!stuck) return;
+    resumedRef.current.add(stuck._id);
+    (async () => { if (await waitForTranscript(stuck._id, true)) await runExtraction(stuck._id); })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moms, pipeline]);
 
   // Resume a meeting whose task extraction failed. The audio is gone once transcribed,
   // so a meeting with no transcript can only be recorded again.
@@ -205,7 +278,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     <div>
       {/* Recorder */}
       <div className="mom-recorder" style={{
-        display: 'flex', alignItems: 'center', gap: '16px', padding: '20px', marginBottom: '24px',
+        display: 'flex', alignItems: 'center', gap: '16px', padding: '20px', marginBottom: hinglish ? '24px' : '8px',
         background: 'var(--bg-secondary)', borderRadius: '24px', border: '1px solid var(--border-color)'
       }}>
         {!recording ? (
@@ -225,6 +298,14 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
             : 'Record → transcribe → each action item routed to the project it belongs to.')}
         </span>
       </div>
+
+      {/* Say why a Hindi meeting comes out badly, rather than letting it look broken */}
+      {!hinglish && (
+        <p style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem', fontWeight: 600, margin: '0 0 24px', padding: '0 4px', lineHeight: 1.5 }}>
+          Meetings are transcribed in English. Hindi and Hinglish need the upgraded transcription,
+          which isn’t enabled on this account.
+        </p>
+      )}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}><div className="loading-spinner"></div></div>
@@ -269,7 +350,20 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                 </p>
               )}
 
-              {!mom.tasksConfirmed && (!mom.transcript || !mom.summary) && !pipeline && (
+              {/* Still with Sarvam. Survives a reload, so say so rather than offering a dead button. */}
+              {mom.sarvamJobId && !mom.transcript && !mom.transcriptionError && (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 700, margin: '0 0 8px' }}>
+                  Transcribing… this can take a few minutes. Safe to leave the page.
+                </p>
+              )}
+
+              {mom.transcriptionError && !mom.transcript && (
+                <p style={{ fontSize: '0.8rem', color: 'var(--danger-color)', fontWeight: 700, margin: '0 0 8px' }}>
+                  {mom.transcriptionError} — the audio is gone, so this one needs recording again.
+                </p>
+              )}
+
+              {!mom.tasksConfirmed && (!mom.transcript || !mom.summary) && !pipeline && !mom.sarvamJobId && (
                 <button onClick={() => handleProcess(mom)}
                   style={{ padding: '8px 18px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', cursor: 'pointer', marginBottom: '8px' }}>
                   {mom.transcript ? 'Extract tasks' : 'Transcribe & extract tasks'}

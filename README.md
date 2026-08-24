@@ -49,7 +49,13 @@ NEXTAUTH_SECRET=...      # also signs the private-safe cookie
 NEXTAUTH_URL=https://<your-domain>
 GEMINI_API_KEY=...       # Jarvis + MOM task extraction (aistudio.google.com/apikey)
 GEMINI_MODEL=...         # optional, defaults to gemini-3.6-flash; falls back to 3.5/3.7 on 503
-GROQ_API_KEY=...         # voice + MOM transcription only (whisper-large-v3)
+GROQ_API_KEY=...         # Jarvis voice + free-tier MOM transcription (whisper-large-v3)
+
+# Hindi/Hinglish meeting transcription (paid, ~Rs 30/hour of audio). Whisper cannot do this:
+# it never emits romanized Hinglish and mis-hears spoken Hindi as Urdu. Accounts NOT listed
+# here keep the free Whisper path, which is English-only.
+SARVAM_API_KEY=...            # dashboard.sarvam.ai
+SARVAM_ENABLED_EMAILS=...     # comma-separated allowlist, e.g. you@x.com,teammate@y.com
 
 # File uploads (note attachments + Digi Locker). Without these, files are written to
 # public/uploads — fine on a dev machine, broken on Vercel's read-only filesystem.
@@ -76,6 +82,14 @@ TLS is mandatory (NextAuth cookies + microphone need a secure context).
 
 ```
 npm install && npm run build && npm start   # behind nginx/caddy with https
+```
+
+Meeting audio is relayed through the server (Sarvam's presigned URLs are Azure blob storage,
+which refuses cross-origin browser PUTs), so the proxy must let a whole recording through —
+otherwise long meetings fail at upload with a 413:
+
+```
+client_max_body_size 30m;   # nginx; matches serverActions.bodySizeLimit in next.config.ts
 ```
 
 Weekly dead-link check (cron): `0 3 * * 0 cd /path/to/app && node scripts/check-dead-links.js`

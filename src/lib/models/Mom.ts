@@ -9,6 +9,9 @@ export interface IMom extends MongooseDocument {
   userId: mongoose.Types.ObjectId;
   title: string;
   audioUrl?: string;
+  // Sarvam batch job, paid path only. A job id with no transcript means still transcribing.
+  sarvamJobId?: string;
+  transcriptionError?: string;
   transcript?: string;
   summary?: string;
   candidates: {
@@ -30,6 +33,8 @@ const MomSchema = new Schema<IMom>({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   title: { type: String, required: true },
   audioUrl: { type: String },   // legacy: audio is transcribed on upload and never stored now
+  sarvamJobId: { type: String },
+  transcriptionError: { type: String },
   transcript: { type: String },
   summary: { type: String },
   candidates: [{
