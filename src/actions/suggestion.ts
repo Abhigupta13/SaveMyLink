@@ -5,7 +5,8 @@ import connectToDatabase from "@/lib/mongodb";
 import { Suggestion } from "@/lib/models/Suggestion";
 import { getServerSession } from "next-auth";
 import { saveUpload } from "@/lib/storage";
-import { isAdmin } from "@/lib/isAdmin";
+import { isAdmin, adminEmails } from "@/lib/isAdmin";
+import { sendMail, suggestionEmail } from "@/lib/mailer";
 
 /**
  * "Help us improve" — anyone signed in can send a bug, an idea, or anything else, with an
@@ -34,14 +35,36 @@ export async function submitSuggestion(formData: FormData) {
       shot = { key, url, mimeType, size };   // no extractText — it is a picture of a broken screen
     }
 
+    const from = (session.user.email || '').toLowerCase();
+    const page = String(formData.get('page') || '').slice(0, 200);
+    const userAgent = String(formData.get('userAgent') || '').slice(0, 400);
+
     await Suggestion.create({
       userId: session.user.id,
-      email: (session.user.email || '').toLowerCase(),
-      kind, message,
-      page: String(formData.get('page') || '').slice(0, 200),
-      userAgent: String(formData.get('userAgent') || '').slice(0, 400),
-      shot,
+      email: from,
+      kind, message, page, userAgent, shot,
     });
+
+    // Mail the admins so a report is seen today rather than whenever the inbox is next opened.
+    // Deliberately after the write and deliberately swallowed: the suggestion is already saved,
+    // so a broken SMTP box must not tell the reporter their message was lost.
+    try {
+      const to = adminEmails().join(',');
+      if (to) {
+        const base = (process.env.NEXTAUTH_URL || '').replace(/\/$/, '');
+        await sendMail({
+          to,
+          replyTo: from || undefined,   // hitting reply answers the reporter, not us
+          ...suggestionEmail({
+            kind, message, from: from || 'a signed-in user', page, userAgent,
+            shotUrl: shot && base ? `${base}${shot.url}` : undefined,
+          }),
+        });
+      }
+    } catch (error) {
+      console.error('Suggestion saved but the notification email failed:', error);
+    }
+
     return { success: true };
   } catch (error) {
     console.error('Failed to submit suggestion:', error);

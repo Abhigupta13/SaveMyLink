@@ -3,6 +3,8 @@ import assert from 'node:assert';
 import { extractUrl, hostnameOf, normalizeUrl, youtubeId } from '../src/lib/url.ts';
 import { escapeRegex } from '../src/lib/regex.ts';
 import { hinglishEnabled } from '../src/lib/sarvam.ts';
+import { isAdmin, adminEmails } from '../src/lib/isAdmin.ts';
+import { suggestionEmail } from '../src/lib/mailer.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -48,5 +50,23 @@ assert.equal(hinglishEnabled('a@x.com'), true, 'whitespace around entries tolera
 allowlist(',,');
 assert.equal(hinglishEnabled(''), false, 'blank list entries never match a blank email');
 allowlist(undefined);
+
+// Admin allowlist gates the feedback inbox, so it fails closed the same way
+process.env.ADMIN_EMAILS = 'boss@x.com, Other@Y.com';
+assert.deepEqual(adminEmails(), ['boss@x.com', 'other@y.com'], 'trimmed and lowercased');
+assert.equal(isAdmin('BOSS@X.COM'), true, 'match is case-insensitive');
+assert.equal(isAdmin('stranger@x.com'), false, 'unlisted address denied');
+assert.equal(isAdmin(null), false, 'no email denies');
+assert.equal(isAdmin(''), false, 'blank email denies');
+delete process.env.ADMIN_EMAILS;
+
+// A suggestion is user-typed text dropped into an HTML email — it must not carry markup through
+const evil = suggestionEmail({ kind: 'bug', message: '<script>alert(1)</script> & <b>bold</b>', from: 'a@b.com' });
+assert.ok(!evil.html.includes('<script>'), 'script tag must not survive into the email');
+assert.ok(evil.html.includes('&lt;script&gt;'), 'it is escaped, not stripped');
+assert.ok(evil.html.includes('&amp;'), 'ampersands escaped');
+assert.ok(!evil.html.includes('View screenshot'), 'no screenshot button when there is no shot');
+assert.ok(suggestionEmail({ kind: 'idea', message: 'x', from: 'a@b.com', shotUrl: 'https://h/s' })
+  .html.includes('View screenshot'), 'screenshot button appears when there is one');
 
 console.log('self-check: all assertions passed');

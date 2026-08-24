@@ -4,7 +4,10 @@ import nodemailer from 'nodemailer';
 const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM } = process.env;
 export const mailConfigured = !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
 
-export async function sendMail({ to, subject, html, text }: { to: string; subject: string; html: string; text: string }) {
+export async function sendMail(
+  { to, subject, html, text, replyTo }:
+  { to: string; subject: string; html: string; text: string; replyTo?: string }
+) {
   if (!mailConfigured) {
     console.warn(`[mail] SMTP not configured — would have sent to ${to}:\n${text}`);
     return { delivered: false as const };
@@ -16,7 +19,9 @@ export async function sendMail({ to, subject, html, text }: { to: string; subjec
     secure: port === 465, // 465 = implicit TLS, 587 = STARTTLS
     auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
-  await transport.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, html, text });
+  // From stays our own address — providers reject mail claiming to be from someone else's
+  // domain. replyTo is what actually makes "hit reply" reach the person who wrote in.
+  await transport.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, html, text, replyTo });
   return { delivered: true as const };
 }
 
@@ -128,4 +133,87 @@ It expires in 10 minutes. If you didn't request this, ignore this email — your
 </body>
 </html>`;
   return { subject: `${code} is your password reset code`, html, text };
+}
+
+/**
+ * "Help us improve" lands in the admin's inbox as well as the app, so a bug report is seen
+ * the day it is written rather than the next time someone opens the inbox page. The reporter's
+ * address is the Reply-To, so answering them is one keystroke.
+ */
+export function suggestionEmail(opts: {
+  kind: string; message: string; from: string; page?: string; userAgent?: string; shotUrl?: string;
+}) {
+  const { kind, message, from, page, userAgent, shotUrl } = opts;
+  const label = kind === 'bug' ? '🐞 Bug' : kind === 'idea' ? '💡 Idea' : '💬 Feedback';
+  const rows = [
+    ['From', from],
+    ['Page', page || '—'],
+    ['Browser', userAgent || '—'],
+  ];
+
+  const text = `${label} from ${from}
+
+${message}
+
+Page: ${page || '—'}
+Browser: ${userAgent || '—'}${shotUrl ? `\nScreenshot: ${shotUrl}` : ''}
+
+Reply to this email to answer them directly.`;
+
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const html = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#0f1117;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1117;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#161922;border:1px solid #262b39;border-radius:20px;overflow:hidden;">
+
+        <tr><td style="padding:28px 32px 0;">
+          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#7c83ff;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
+        </td></tr>
+
+        <tr><td style="padding:22px 32px 0;">
+          <h1 style="margin:0 0 6px;font-size:20px;line-height:1.3;font-weight:800;color:#f1f3f9;letter-spacing:-0.02em;">${label}</h1>
+          <p style="margin:0;font-size:13px;line-height:1.6;color:#9aa3b8;">Someone just used “Help us improve”.</p>
+        </td></tr>
+
+        <tr><td style="padding:20px 32px 0;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1117;border:1px solid #2b3142;border-radius:16px;">
+            <tr><td style="padding:20px;">
+              <p style="margin:0;font-size:15px;line-height:1.65;color:#e6e9f2;white-space:pre-wrap;">${esc(message)}</p>
+            </td></tr>
+          </table>
+        </td></tr>
+
+        <tr><td style="padding:18px 32px 0;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            ${rows.map(([k, v]) => `<tr>
+              <td style="padding:4px 0;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#6f7891;width:80px;vertical-align:top;">${k}</td>
+              <td style="padding:4px 0;font-size:12px;line-height:1.5;color:#9aa3b8;word-break:break-word;">${esc(String(v))}</td>
+            </tr>`).join('')}
+          </table>
+        </td></tr>
+
+        ${shotUrl ? `<tr><td style="padding:18px 32px 0;">
+          <a href="${shotUrl}" style="display:inline-block;padding:10px 18px;border-radius:12px;background:#7c83ff;color:#0f1117;font-size:13px;font-weight:800;text-decoration:none;">View screenshot</a>
+          <div style="margin-top:8px;font-size:11px;color:#5a6274;">Opens in the app — you'll need to be signed in.</div>
+        </td></tr>` : ''}
+
+        <tr><td style="padding:22px 32px 28px;">
+          <p style="margin:0;font-size:12px;line-height:1.6;color:#6f7891;">Reply to this email to answer ${esc(from)} directly.</p>
+        </td></tr>
+
+        <tr><td style="padding:16px 32px;border-top:1px solid #262b39;">
+          <p style="margin:0;font-size:11px;color:#5a6274;">Sent by ALL YOU NEED · Help us improve</p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  return { subject: `${label} from ${from}`, html, text };
 }

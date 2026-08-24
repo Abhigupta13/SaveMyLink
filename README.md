@@ -64,6 +64,10 @@ AWS_REGION=ap-south-1
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 
+# Who reads the "Help us improve" inbox, and who gets emailed when someone submits.
+# Comma-separated. Needs SMTP below for the email half to actually send.
+ADMIN_EMAILS=you@gmail.com
+
 # Password-reset email (optional — without it the reset link is shown on screen)
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
