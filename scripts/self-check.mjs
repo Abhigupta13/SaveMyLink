@@ -9,6 +9,7 @@ import { suggestionEmail, inviteEmail, otpEmail } from '../src/lib/mailer.ts';
 import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, formatInZone } from '../src/lib/time.ts';
 import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
 import { projectScope, ownerScope, isProjectOwner, isProjectCreator } from '../src/lib/scope.ts';
+import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -241,5 +242,35 @@ env(savedPub, savedAuth);
   assert.equal(authSrc.split('dev only').length - 1, 2, 'exactly two dev-only code reveals');
   assert.equal(authSrc.split(', code };').length - 1, 2, 'and nothing else returns a raw code');
 }
+
+// One address book. A person from a project and a person you typed in must never appear twice,
+// and an address you deleted must not come back on the next page load.
+const PROJECTS = [
+  { name: 'Mowgli', ownerId: { email: 'Me@x.com' }, memberEmails: ['Boss@X.com', 'new@x.com'] },
+  { name: 'M400', ownerId: { email: 'Me@x.com' }, memberEmails: ['boss@x.com'] },
+];
+
+const byEmail = peopleByProject(PROJECTS, 'me@x.com');
+assert.deepEqual(byEmail.get('boss@x.com'), ['Mowgli', 'M400'], 'both projects, matched case-insensitively');
+assert.ok(!byEmail.has('me@x.com'), 'you are never your own contact');
+
+// A contact added by hand whose address is on a project picks up its chips — the half that was
+// missing before: a saved teammate showed nothing about the projects they share with you.
+const saved = [{ email: 'Boss@X.com', name: 'The Boss', phone: '123' }, { name: 'No Email Person' }];
+const m = mergeContacts({ contacts: saved, projects: PROJECTS, seeded: [], myEmail: 'me@x.com' });
+assert.deepEqual(m.missing, ['new@x.com'], 'only the person with no contact row is created');
+const rows = m.withProjects(saved);
+assert.deepEqual(rows.find(r => r.name === 'The Boss').projects, ['Mowgli', 'M400'], 'saved contact gets chips');
+assert.deepEqual(rows.find(r => r.name === 'No Email Person').projects, [], 'no email, no chips, still listed');
+assert.equal(rows.length, 2, 'merging never drops a contact');
+assert.equal(rows[0].name, 'No Email Person', 'sorted by name');
+
+// The whole point of contactsSeeded: a deleted contact stays deleted
+const afterDelete = mergeContacts({ contacts: [], projects: PROJECTS, seeded: ['Boss@X.com', 'new@x.com'], myEmail: 'me@x.com' });
+assert.deepEqual(afterDelete.missing, [], 'nothing is re-created once seeded, whatever the casing');
+
+// A fresh account with nothing seeded gets everyone once
+const fresh = mergeContacts({ contacts: [], projects: PROJECTS, seeded: null, myEmail: 'me@x.com' });
+assert.deepEqual(fresh.missing.sort(), ['boss@x.com', 'new@x.com'], 'first load seeds every teammate');
 
 console.log('self-check: all assertions passed');

@@ -13,7 +13,6 @@ export default function ContactsPage() {
   const { toast, confirm } = useFeedback();
   const { status } = useSession();
   const [contacts, setContacts] = useState<any[]>([]);
-  const [team, setTeam] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<ContactInput | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -24,7 +23,7 @@ export default function ContactsPage() {
 
   const load = useCallback(async () => {
     const res = await getContacts();
-    if (res.success) { setContacts(res.contacts || []); setTeam(res.team || []); }
+    if (res.success) setContacts(res.contacts || []);
     setLoading(false);
   }, []);
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
@@ -57,7 +56,11 @@ export default function ContactsPage() {
     if (res.success) { setForm(null); setEditingId(null); load(); } else toast(res.error || 'Something went wrong', 'error');
   };
 
-  const filtered = contacts.filter(c => !q || [c.name, c.company, c.email, c.phone].join(' ').toLowerCase().includes(q.toLowerCase()));
+  const filtered = contacts.filter(c =>
+    !q || [c.name, c.company, c.email, c.phone, ...(c.projects || [])].join(' ').toLowerCase().includes(q.toLowerCase()));
+  const shared = contacts.filter(c => (c.projects || []).length).length;
+  // Somebody who arrived from a project and has had nothing filled in yet
+  const bare = (c: { phone?: string; company?: string; note?: string }) => !c.phone && !c.company && !c.note;
 
   const actions = (c: { phone?: string; email?: string }) => (
     <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
@@ -72,7 +75,10 @@ export default function ContactsPage() {
       <header style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '20px', gap: '12px' }}>
         <div>
           <h1 className="page-title">Contacts</h1>
-          <p className="page-subtitle">{contacts.length} saved{team.length ? ` · ${team.length} from projects` : ''}</p>
+          <p className="page-subtitle">
+            {contacts.length} {contacts.length === 1 ? 'person' : 'people'}
+            {shared ? ` · ${shared} on your projects` : ''}
+          </p>
         </div>
         {!form && (
           <button className="btn-primary" onClick={() => startAdd()} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px', borderRadius: '12px', fontWeight: 800 }}>
@@ -135,38 +141,29 @@ export default function ContactsPage() {
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {filtered.map(c => (
-              <div key={c._id} className="card" style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px' }}>
-                <div className="avatar-xs" style={{ width: '38px', height: '38px', fontSize: '0.95rem', flexShrink: 0 }}>{c.name[0].toUpperCase()}</div>
-                <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => startEdit(c)}>
-                  <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{c.name}</div>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div key={c._id} className="card contact-row">
+                <div className="avatar-xs contact-avatar">{(c.name || c.email || '?')[0].toUpperCase()}</div>
+
+                <div className="contact-main" onClick={() => startEdit(c)}>
+                  <div className="contact-name">{c.name || c.email}</div>
+                  <div className="contact-sub">
                     {[c.company, c.phone, c.email].filter(Boolean).join(' · ')}
                   </div>
+                  {(!!(c.projects || []).length || bare(c)) && (
+                    <div className="contact-chips">
+                      {(c.projects || []).map((name: string) => (
+                        <span key={name} className="chip" title={`Shares ${name} with you`}>{name}</span>
+                      ))}
+                      {bare(c) && <button className="subtle-link" onClick={e => { e.stopPropagation(); startEdit(c); }}>Add details</button>}
+                    </div>
+                  )}
                 </div>
+
                 {actions(c)}
                 <button className="icon-btn contact-edit" onClick={() => startEdit(c)} title="Edit"><Pencil size={15} /></button>
               </div>
             ))}
           </div>
-
-          {team.length > 0 && (
-            <div style={{ marginTop: '28px' }}>
-              <p className="task-group-label">From your projects</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {team.map(t => (
-                  <div key={t.email} className="card" style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px' }}>
-                    <div className="avatar-xs" style={{ width: '38px', height: '38px', fontSize: '0.95rem', flexShrink: 0 }}>{(t.name || t.email)[0].toUpperCase()}</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{t.name || t.email}</div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{t.projects.join(', ')}</div>
-                    </div>
-                    {actions({ email: t.email })}
-                    <button className="subtle-link" onClick={() => startAdd({ name: t.name || '', email: t.email })}>Save</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </>
       )}
     </div>

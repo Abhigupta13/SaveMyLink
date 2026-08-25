@@ -8,10 +8,14 @@ import { User } from "@/lib/models/User";
 import { sendMail, inviteEmail } from "@/lib/mailer";
 import { myProjectFilter } from "@/lib/projectAccess";
 import { appUrl } from "@/lib/url";
+import { mergeContacts, type ProjectPeopleSource } from "@/lib/contacts";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 
 export interface ContactInput { name: string; phone?: string; email?: string; company?: string; note?: string }
+
+/** A saved contact as it comes back from mongo, plus the projects that person shares with you. */
+interface ContactRow extends ContactInput { _id?: unknown; projects?: string[]; [key: string]: unknown }
 
 /**
  * Saving someone who has no account is the one moment the app knows a real person is worth
@@ -24,37 +28,49 @@ async function invitable(email?: string) {
   return (await User.exists({ email: normalized })) ? undefined : normalized;
 }
 
+/**
+ * Everyone you work with, in one list.
+ *
+ * People on your projects used to come back as a separate second-class list — an email and some
+ * project names, with no phone, no role, and no way to edit them. They are now real contacts, so
+ * every row behaves the same; and a contact you added by hand who happens to be on a project now
+ * carries its chips too, which was the half that was missing entirely.
+ */
 export async function getContacts() {
   try {
     await connectToDatabase();
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    const userId = session.user.id;
     const myEmail = (session.user.email || '').toLowerCase();
 
-    const [contacts, projects] = await Promise.all([
-      Contact.find({ userId: session.user.id }).sort({ name: 1 }).lean(),
-      Project.find(await myProjectFilter(session.user.id, myEmail))
-        .populate('ownerId', 'email name').lean(),
+    const [contacts, projects, me] = await Promise.all([
+      Contact.find({ userId }).sort({ name: 1 }).lean<ContactRow[]>(),
+      // populate turns ownerId into { email, name }, which is what peopleByProject reads
+      Project.find(await myProjectFilter(userId, myEmail))
+        .populate('ownerId', 'email name').lean<ProjectPeopleSource[]>(),
+      User.findById(userId).select('contactsSeeded').lean<{ contactsSeeded?: string[] } | null>(),
     ]);
 
-    // People from my projects (not yet saved as contacts)
-    const saved = new Set<string>(contacts.map(c => c.email).filter(Boolean) as string[]);
-    const team = new Map<string, { email: string; name?: string; projects: string[] }>();
-    for (const p of projects as any[]) {
-      const people = [{ email: p.ownerId?.email, name: p.ownerId?.name }, ...(p.memberEmails || []).map((e: string) => ({ email: e }))];
-      for (const { email, name } of people) {
-        if (!email || email === myEmail || saved.has(email)) continue;
-        const entry = team.get(email) || { email, name, projects: [] as string[] };
-        entry.projects.push(p.name);
-        team.set(email, entry);
-      }
+    const { missing, withProjects } = mergeContacts({ contacts, projects, seeded: me?.contactsSeeded, myEmail });
+
+    let all: ContactRow[] = contacts;
+    if (missing.length) {
+      /* Seeding happens on a read on purpose: doing it in addMember would miss everyone a teammate
+         adds to a shared project. The contactsSeeded guard is what keeps that idempotent — and is
+         why deleting one of these makes it stay deleted. */
+      const accounts = await User.find({ email: { $in: missing } }).select('email name')
+        .lean<{ email: string; name?: string }[]>();
+      const nameOf = new Map(accounts.map(u => [String(u.email).toLowerCase(), u.name]));
+      const created = await Contact.insertMany(
+        missing.map(email => ({ userId, email, name: nameOf.get(email) || email.split('@')[0] })),
+        { ordered: false },
+      );
+      await User.updateOne({ _id: userId }, { $addToSet: { contactsSeeded: { $each: missing } } });
+      all = [...all, ...JSON.parse(JSON.stringify(created))];
     }
 
-    return {
-      success: true,
-      contacts: JSON.parse(JSON.stringify(contacts)),
-      team: [...team.values()],
-    };
+    return { success: true, contacts: JSON.parse(JSON.stringify(withProjects(all))) };
   } catch (error) {
     console.error('Failed to get contacts:', error);
     return { success: false, error: 'Failed to fetch contacts' };

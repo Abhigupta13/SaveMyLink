@@ -26,7 +26,8 @@ export default function PersonPicker({ exclude, onPick, busy, label = 'Add a tea
     if (!open) return;
     getContacts().then(r => {
       if (!r.success) return;
-      const all: Person[] = [...(r.contacts || []), ...(r.team || [])]
+      // One list now — project people are real contacts, so there is no second source to merge
+      const all: Person[] = (r.contacts || [])
         .filter((c: any) => c.email)
         .map((c: any) => ({ email: String(c.email).toLowerCase(), name: c.name }));
       setPeople([...new Map(all.map(p => [p.email, p])).values()]);

@@ -16,6 +16,7 @@ export interface IUser extends Document {
   updatedAt: Date;
   privatePin?: string;
   image?: string;
+  contactsSeeded?: string[];
 }
 
 const UserSchema: Schema<IUser> = new Schema({
@@ -33,7 +34,11 @@ const UserSchema: Schema<IUser> = new Schema({
   verifyTokenExpiry: { type: Date },
   verifyAttempts: { type: Number, default: 0 },
   privatePin: { type: String },
-  image: { type: String }
+  image: { type: String },
+  // Addresses already turned into a Contact from a project's people. Without this the seeding in
+  // getContacts would re-create anyone you deleted on the very next page load, and there would be
+  // no way to remove them from the UI at all.
+  contactsSeeded: [{ type: String, lowercase: true }]
 }, { timestamps: true });
 
 export const User: Model<IUser> = defineModel<IUser>('User', UserSchema);
