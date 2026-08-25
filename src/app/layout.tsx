@@ -7,6 +7,7 @@ import { ViewProvider } from "@/components/ViewContext";
 import { UserProvider } from "@/components/UserContext";
 import AuthProvider from "@/components/AuthProvider";
 import SendIntentListener from "@/components/SendIntentListener";
+import BackButtonListener from "@/components/BackButtonListener";
 import JarvisWidget from "@/components/JarvisWidget";
 import { FeedbackProvider } from "@/components/ui/Feedback";
 import { cookies } from "next/headers";
@@ -51,6 +52,7 @@ export default async function RootLayout({
             <PreviewProvider>
               <ViewProvider initialColumns={columns}>
                 <SendIntentListener />
+                <BackButtonListener />
                 <TopNav initialCategories={categories} />
                 <main className="flex-1">
                   {children}
