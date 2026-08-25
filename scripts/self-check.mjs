@@ -95,6 +95,37 @@ assert.equal(sarvamSource({ email: 'listed@x.com' }, ''), null, 'the env list wi
 allowlist(undefined);
 
 // ---------------------------------------------------------------------------
+// A dead Sarvam balance must cost a nicer transcript, not the meeting. Every step BEFORE the job
+// is running falls through to the free chain — after that the audio is gone from our side and
+// only Sarvam can finish it. This reads the source because the branch only fires while a paid
+// third party is failing, which is not a state a test can put it in.
+{
+  const momSrc = readFileSync(new URL('../src/actions/mom.ts', import.meta.url), 'utf8');
+  const paid = momSrc.slice(
+    momSrc.indexOf('export async function uploadMomAudioSarvam'),
+    momSrc.indexOf('export async function pollMomTranscription'));
+  assert.ok(paid.length > 500, 'found the paid upload action');
+
+  const steps = paid.match(/if \(!(job|upload|put|started)\.ok\)/g) || [];
+  assert.equal(steps.length, 4, 'four Sarvam steps run before the job exists');
+  assert.equal((paid.match(/fallBackToFree\(/g) || []).length, 4, 'and every one of them falls back');
+  assert.ok(!/if \(!(job|upload|put|started)\.ok\) return \{ success: false/.test(paid),
+    'no pre-job step returns an error instead of falling back');
+
+  // One failure, one fallback. A retry here would let an exhausted balance eat a second call on
+  // every single upload for as long as it stayed exhausted.
+  assert.equal((paid.match(/createTranscriptionJob\(/g) || []).length, 1, 'Sarvam is never retried');
+
+  // Both paths share ONE free chain, so a fix to it cannot land on one and miss the other.
+  assert.equal((momSrc.match(/await freeTranscript\(/g) || []).length, 2,
+    'the free path and the paid fallback call the same helper');
+
+  // The extraction prompt is not this round's to touch — r4 said so out loud.
+  assert.ok(momSrc.includes('You turn a meeting transcript into minutes plus actionable items.'),
+    'the extraction prompt is still there, unrenamed');
+}
+
+// ---------------------------------------------------------------------------
 // secretBox holds a THIRD PARTY's paid credential — a user's own Sarvam key. The failure that
 // matters is not "it did not decrypt", it is "it decrypted to something else and we sent that
 // somewhere as a credential". GCM is what makes tampering an error instead of garbage.

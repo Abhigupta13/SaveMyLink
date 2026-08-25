@@ -183,6 +183,16 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       setPipeline(''); toast(up.error || 'Something went wrong', 'error'); return;
     }
     fetchMoms();   // the meeting exists now — show it as in-flight straight away
+
+    // Sarvam could not take it (dead balance, revoked key, their API down) and the server
+    // transcribed it on the free engine instead. There is no job to wait for — the transcript
+    // is already on the meeting, so go straight to extraction and say what happened.
+    if (up.fallback) {
+      toast(up.fallback, 'info');
+      await runExtraction(up.momId);
+      return;
+    }
+
     if (await waitForTranscript(up.momId)) await runExtraction(up.momId);
   };
 

@@ -13,7 +13,7 @@ import { chatJSON } from "@/lib/llm";
 import { transcribeAudio } from "@/lib/geminiAudio";
 import {
   createTranscriptionJob, getUploadUrl, uploadAudio,
-  startTranscriptionJob, jobStatus, jobTranscript,
+  startTranscriptionJob, jobStatus, jobTranscript, type SarvamResult,
 } from "@/lib/sarvam";
 import { hinglishEnabled, sarvamKeyFor } from "@/lib/sarvamAccess";
 import { DEFAULT_TZ, safeZone, zonedToUtc } from "@/lib/time";
@@ -85,6 +85,47 @@ export async function getMoms(projectId?: string | null) {
 }
 
 /**
+ * The free chain, in one place: Gemini (Hindi + English, 20/day/model) then Whisper (English
+ * only, effectively unlimited). Both the free path and the paid path's fallback come through
+ * here, so "what happens when the good engine is unavailable" has exactly one answer, and a
+ * fix to it cannot land on one caller and miss the other.
+ */
+async function freeTranscript(audio: File): Promise<SarvamResult<{ transcript: string; engine: 'gemini' | 'whisper' }>> {
+  if (audio.size <= GEMINI_MAX_BYTES) {
+    const gem = await transcribeAudio(audio);
+    if (gem.ok) return { ok: true, data: { transcript: gem.data.text, engine: 'gemini' } };
+    // Quota, contention or a rejected file — all of them mean "use the other engine", and
+    // none of them are worth showing a user who just wants their meeting written down.
+    console.warn('Gemini transcription unavailable, falling back to Whisper:', gem.error);
+  }
+
+  if (!process.env.GROQ_API_KEY) return { ok: false, error: 'GROQ_API_KEY not configured' };
+
+  const form = new FormData();
+  form.append('file', audio, 'meeting.webm');
+  // English-only in practice. Whisper cannot emit romanized Hinglish and mis-detects spoken
+  // Hindi as Urdu; its `prompt` field is context conditioning, not an instruction, and only
+  // covers the first 30 seconds — so there is nothing to tune here. This is the floor, not
+  // the plan: Gemini above is what a Hindi meeting is meant to land on.
+  form.append('model', 'whisper-large-v3');
+
+  const res = await fetch(`${GROQ_BASE}/audio/transcriptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+    body: form,
+  });
+  if (!res.ok) {
+    console.error('Groq transcription failed:', await res.text().catch(() => ''));
+    return { ok: false, error: `Transcription failed (${res.status})` };
+  }
+  const { text } = await res.json();
+  return { ok: true, data: { transcript: String(text || ''), engine: 'whisper' } };
+}
+
+/** Shown to whoever recorded the meeting when the paid engine could not take it. */
+const FELL_BACK = 'Upgraded engine unavailable — used the free one.';
+
+/**
  * Records straight to a transcript. The audio is never written to disk: nothing plays it
  * back, the only thing that ever read it was transcription, and on a serverless host the
  * filesystem is read-only (and per-instance), so storing it failed in production and left
@@ -104,52 +145,15 @@ export async function uploadMomAudio(formData: FormData) {
     const ctx = await memberSession(projectId);
     if (!ctx) return { success: false, error: 'Not a member' };
 
-    let transcript: string | null = null;
-    let engine: 'gemini' | 'whisper' = 'whisper';
-
-    if (audio.size <= GEMINI_MAX_BYTES) {
-      const gem = await transcribeAudio(audio);
-      if (gem.ok) {
-        transcript = gem.data.text;
-        engine = 'gemini';
-      } else {
-        // Quota, contention or a rejected file — all of them mean "use the other engine", and
-        // none of them are worth showing a user who just wants their meeting written down.
-        console.warn('Gemini transcription unavailable, falling back to Whisper:', gem.error);
-      }
-    }
-
-    if (transcript === null) {
-      if (!process.env.GROQ_API_KEY) return { success: false, error: 'GROQ_API_KEY not configured' };
-
-      const form = new FormData();
-      form.append('file', audio, 'meeting.webm');
-      // English-only in practice. Whisper cannot emit romanized Hinglish and mis-detects spoken
-      // Hindi as Urdu; its `prompt` field is context conditioning, not an instruction, and only
-      // covers the first 30 seconds — so there is nothing to tune here. This is the floor, not
-      // the plan: Gemini above is what a Hindi meeting is meant to land on.
-      form.append('model', 'whisper-large-v3');
-
-      const res = await fetch(`${GROQ_BASE}/audio/transcriptions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-        body: form,
-      });
-      if (!res.ok) {
-        const err = await res.text();
-        console.error('Groq transcription failed:', err);
-        return { success: false, error: `Transcription failed (${res.status})` };
-      }
-      const { text } = await res.json();
-      transcript = String(text || '');
-    }
+    const free = await freeTranscript(audio);
+    if (!free.ok) return { success: false, error: free.error };
 
     const mom = await Mom.create({
       projectId: projectId || undefined,
       userId: ctx.session.user.id,
       title,
-      transcript,
-      engine,
+      transcript: free.data.transcript,
+      engine: free.data.engine,
     });
     await recordEvent({ projectId: mom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: mom.title });
     return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
@@ -171,6 +175,15 @@ export async function uploadMomAudio(formData: FormData) {
  *
  * The MOM row is only created once the job is genuinely running, so a failed upload leaves
  * nothing behind that would sit on the page claiming to be transcribing.
+ *
+ * A dead Sarvam balance used to kill the meeting outright. Every step BEFORE the job is running
+ * now falls through to the free chain instead: the recording is still in memory here, so nothing
+ * is lost, and a lapsed subscription costs a nicer transcript rather than the whole meeting.
+ * Once the job IS running the audio is gone from here and only Sarvam can finish it — which is
+ * why the fallback stops at that line rather than covering polling too.
+ *
+ * One failure, one fallback. Sarvam is never retried automatically: an exhausted balance would
+ * otherwise eat a retry on every upload for as long as it stayed exhausted.
  */
 export async function uploadMomAudioSarvam(formData: FormData) {
   try {
@@ -187,19 +200,38 @@ export async function uploadMomAudioSarvam(formData: FormData) {
       return { success: false, error: 'Upgraded transcription is not enabled for this account' };
     }
 
+    // Quota gone, key revoked, Sarvam down — from here they are all the same decision, and the
+    // user finds out in a toast rather than by losing the meeting.
+    const fallBackToFree = async (step: string, why: string) => {
+      console.warn(`Sarvam ${step} failed (${why}) — transcribing on the free engine instead`);
+      const free = await freeTranscript(audio);
+      if (!free.ok) return { success: false, error: free.error };
+      const fallbackMom = await Mom.create({
+        projectId: projectId || undefined,
+        userId: ctx.session.user.id,
+        title,
+        transcript: free.data.transcript,
+        engine: free.data.engine,
+      });
+      await recordEvent({ projectId: fallbackMom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: fallbackMom.title });
+      // momId, like the paid path — but with a transcript already on it, so the client extracts
+      // straight away instead of polling a job that does not exist.
+      return { success: true, momId: String(fallbackMom._id), fallback: FELL_BACK };
+    };
+
     const job = await createTranscriptionJob(sarvam.key);
-    if (!job.ok) return { success: false, error: job.error };
+    if (!job.ok) return fallBackToFree('job creation', job.error);
 
     const upload = await getUploadUrl(sarvam.key, job.data.jobId, 'meeting.webm');
-    if (!upload.ok) return { success: false, error: upload.error };
+    if (!upload.ok) return fallBackToFree('upload URL', upload.error);
 
     const put = await uploadAudio(upload.data.uploadUrl, audio);
-    if (!put.ok) return { success: false, error: put.error };
+    if (!put.ok) return fallBackToFree('audio upload', put.error);
 
     // Sarvam answers "No files found" if this runs before the blob lands, so it stays here —
     // after an awaited upload — rather than on the first poll.
     const started = await startTranscriptionJob(sarvam.key, job.data.jobId);
-    if (!started.ok) return { success: false, error: started.error };
+    if (!started.ok) return fallBackToFree('job start', started.error);
 
     const mom = await Mom.create({
       projectId: projectId || undefined,
@@ -209,7 +241,9 @@ export async function uploadMomAudioSarvam(formData: FormData) {
       engine: 'sarvam',
     });
     await recordEvent({ projectId: mom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: mom.title });
-    return { success: true, momId: String(mom._id) };
+    // `fallback` spelled out even when there wasn't one: both returns then carry the field, so
+    // the client can read it without narrowing the union first.
+    return { success: true, momId: String(mom._id), fallback: undefined as string | undefined };
   } catch (error) {
     console.error('Failed to upload meeting audio:', error);
     return { success: false, error: 'Could not upload the recording' };
