@@ -53,8 +53,9 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     else router.push('/search');
   };
 
-  // Auth pages get no app chrome — just the brand
+  // The landing and the auth pages carry their own brand; other public pages get the bare strip.
   if (!session || pathname.startsWith('/auth')) {
+    if (pathname === '/' || pathname.startsWith('/auth')) return null;
     return (
       <>
         <header className="topbar">
