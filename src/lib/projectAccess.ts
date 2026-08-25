@@ -1,6 +1,6 @@
 import { Project } from '@/lib/models/Project';
 import { User } from '@/lib/models/User';
-import { projectScope, ownerScope, writerScope } from '@/lib/scope';
+import { projectScope, ownerScope, writerScope, canAccessDoc } from '@/lib/scope';
 
 /**
  * Membership is granted by raw email string, and until a signup proves it owns that address the
@@ -85,6 +85,20 @@ export async function amProjectOwner(projectId: unknown, userId: string, email?:
 export async function canDelete(doc: { projectId?: any; userId?: any }, userId: string, email?: string | null) {
   if (doc.projectId) return amProjectOwner(doc.projectId, userId, email);
   return String(doc.userId) === String(userId);
+}
+
+/**
+ * canDelete's sibling for everything short of deleting: may I open this record, and change it?
+ *
+ * A record already exists here, so its projectId decides the gate — never an id the client sent.
+ * Shared records go through the project's write gate (a viewer gets nothing); a personal record is
+ * its creator's alone. Actions that hold a document and were gating on `projectId ? gate : ok`
+ * belong here instead — that shape reads as "unshared means unguarded", which it is not.
+ */
+export async function canAccess(doc: { projectId?: unknown; userId?: unknown }, userId: string, email?: string | null) {
+  return canAccessDoc(doc, userId, doc.projectId
+    ? !!(await projectForWriter(String(doc.projectId), userId, email))
+    : false);
 }
 
 /** Mine, or in one of my projects. The standard read scope for project-aware records. */

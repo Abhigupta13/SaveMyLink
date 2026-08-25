@@ -37,6 +37,23 @@ export function writerScope(userId: string, email: string | null | undefined, ve
 }
 
 /**
+ * May this person touch this one record? The rule with the database answer handed in, so it can be
+ * asserted without one — `canAccess` in projectAccess.ts is this function plus the project lookup.
+ *
+ * The personal branch is the point. "No project" is not "no owner": a record with no projectId
+ * belongs to whoever created it, and treating an absent project as an absent gate is how every
+ * personal meeting in the database became readable by any signed-in user holding its id.
+ */
+export function canAccessDoc(
+  doc: { projectId?: unknown; userId?: unknown },
+  userId: string | null | undefined,
+  inProject: boolean,
+): boolean {
+  if (doc.projectId) return inProject;
+  return !!userId && !!doc.userId && String(doc.userId) === String(userId);
+}
+
+/**
  * Narrow a read scope to one project. The projectId arrives from the client, so it is ANDed onto
  * the scope and never substituted for it: the worst a forged id can do is match nothing. Writing
  * `{ ...scope, projectId }` instead would look identical and work identically right up until the

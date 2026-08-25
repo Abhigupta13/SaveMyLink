@@ -8,7 +8,7 @@ import { Project } from "@/lib/models/Project";
 import { Contact } from "@/lib/models/Contact";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember, projectForWriter, canDelete, myProjectFilter } from "@/lib/projectAccess";
+import { projectForMember, projectForWriter, canAccess, canDelete, myProjectFilter } from "@/lib/projectAccess";
 import { chatJSON } from "@/lib/llm";
 import { transcribeAudio } from "@/lib/geminiAudio";
 import {
@@ -34,6 +34,30 @@ const GROQ_BASE = 'https://api.groq.com/openai/v1';
 // rejected request rather than a slow one. Past this, go straight to Whisper (which streams it).
 const GEMINI_MAX_BYTES = 15 * 1024 * 1024;
 
+/**
+ * The ceiling for a submitted recording, and the SELF-HOSTED one: a serverless host caps the
+ * request body far lower (~4.5MB on Vercel), where the upload dies before this line ever runs.
+ * It is here so a local or self-hosted deployment has a bound at all — without one, an arbitrary
+ * body is read into memory and base64'd for Gemini.
+ */
+const MAX_AUDIO_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Both upload entry points take a file straight off the wire and hand it to a paid API, so the
+ * checks live here rather than in either one of them.
+ *
+ * An empty Content-Type still counts as a recording — geminiAudio's audioMime says the same, and a
+ * mobile webview that strips the header should not lose a meeting. Anyone crafting a request would
+ * simply set `audio/webm` anyway; the point of the type check is to stop a video or a PDF being
+ * spent as transcription quota, not to authenticate the caller.
+ */
+function audioProblem(audio: File): string | null {
+  if (audio.size < 1000) return 'Nothing was recorded';
+  if (audio.type && !audio.type.toLowerCase().startsWith('audio/')) return 'That file is not audio — record or attach an audio file';
+  if (audio.size > MAX_AUDIO_BYTES) return 'That recording is too large (16MB max) — record it in shorter parts';
+  return null;
+}
+
 // Transcripts mis-spell project names; match on letters only, then by containment
 const norm = (v: string) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 function matchProject(name: string, projects: any[]) {
@@ -45,8 +69,12 @@ function matchProject(name: string, projects: any[]) {
       || null;
 }
 
-// No projectId = a personal meeting: it belongs to the recorder alone, and every
-// item is routed from the transcript instead of inheriting a project.
+// The gate for "I am about to CREATE something here": no projectId means a personal meeting, which
+// belongs to the recorder alone and has no group to be a member of.
+//
+// It cannot gate an EXISTING meeting — "no project" there means "no project check", which let any
+// signed-in user with a momId read, re-transcribe and overwrite someone else's personal meeting.
+// Anything holding a Mom document uses projectAccess's canAccess instead, which owns that branch.
 //
 // `write` defaults to TRUE deliberately. Nearly everything here writes — recording, extracting,
 // confirming, editing the minutes — and a gate whose safe setting is the one you have to
@@ -62,8 +90,6 @@ async function memberSession(projectId?: string | null, write = true) {
   if (!project) return null;
   return { session, project };
 }
-
-const momScope = (mom: any) => (mom.projectId ? String(mom.projectId) : null);
 
 export async function getMoms(projectId?: string | null) {
   try {
@@ -139,8 +165,10 @@ export async function uploadMomAudio(formData: FormData) {
   try {
     const projectId = (formData.get('projectId') as string) || '';   // empty = personal meeting
     const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString('en-GB', { timeZone: DEFAULT_TZ })}`;
-    const audio = formData.get('audio') as File | null;
-    if (!audio || audio.size < 1000) return { success: false, error: 'Nothing was recorded' };
+    const audio = formData.get('audio');
+    if (!(audio instanceof File)) return { success: false, error: 'Nothing was recorded' };
+    const bad = audioProblem(audio);
+    if (bad) return { success: false, error: bad };
 
     const ctx = await memberSession(projectId);
     if (!ctx) return { success: false, error: 'Not a member' };
@@ -189,8 +217,10 @@ export async function uploadMomAudioSarvam(formData: FormData) {
   try {
     const projectId = (formData.get('projectId') as string) || '';
     const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString('en-GB', { timeZone: DEFAULT_TZ })}`;
-    const audio = formData.get('audio') as File | null;
-    if (!audio || audio.size < 1000) return { success: false, error: 'Nothing was recorded' };
+    const audio = formData.get('audio');
+    if (!(audio instanceof File)) return { success: false, error: 'Nothing was recorded' };
+    const bad = audioProblem(audio);
+    if (bad) return { success: false, error: bad };
 
     const ctx = await memberSession(projectId || null);
     if (!ctx) return { success: false, error: 'Not a member' };
@@ -262,8 +292,8 @@ export async function pollMomTranscription(momId: string) {
     await connectToDatabase();
     const mom = await Mom.findById(momId);
     if (!mom?.sarvamJobId) return { success: false, error: 'Meeting not found' };
-    const ctx = await memberSession(momScope(mom));
-    if (!ctx) return { success: false, error: 'Not a member' };
+    // Before the key resolution below, which spends the RECORDER's Sarvam balance.
+    if (!await canAccess(mom, session.user.id, session.user.email)) return { success: false, error: 'Not a member' };
 
     if (mom.transcript) return { success: true, done: true, transcript: mom.transcript };
 
@@ -307,15 +337,14 @@ export async function extractMomTasks(momId: string, timeZone = '') {
     await connectToDatabase();
     const mom = await Mom.findById(momId);
     if (!mom?.transcript) return { success: false, error: 'No transcript yet' };
-    const ctx = await memberSession(momScope(mom));
-    if (!ctx) return { success: false, error: 'Not a member' };
+    if (!await canAccess(mom, session.user.id, session.user.email)) return { success: false, error: 'Not a member' };
 
-    const myEmail = (ctx.session.user.email || '').toLowerCase();
+    const myEmail = (session.user.email || '').toLowerCase();
     // Everything the model needs to route items: all my projects and all known people
     const [projects, contacts] = await Promise.all([
-      Project.find(await myProjectFilter(ctx.session.user.id, myEmail))
+      Project.find(await myProjectFilter(session.user.id, myEmail))
         .populate('ownerId', 'email name').lean(),
-      Contact.find({ userId: ctx.session.user.id }).select('name email').lean(),
+      Contact.find({ userId: session.user.id }).select('name email').lean(),
     ]);
 
     const projectLines = (projects as any[]).map(p =>
@@ -417,10 +446,9 @@ export async function confirmMomTasks(
     await connectToDatabase();
     const mom = await Mom.findById(momId);
     if (!mom) return { success: false, error: 'MOM not found' };
-    const ctx = await memberSession(momScope(mom));
-    if (!ctx) return { success: false, error: 'Not a member' };
+    if (!await canAccess(mom, session.user.id, session.user.email)) return { success: false, error: 'Not a member' };
 
-    const myEmail = (ctx.session.user.email || '').toLowerCase();
+    const myEmail = (session.user.email || '').toLowerCase();
     let tasks = 0, notes = 0, briefs = 0;
 
     for (const item of items) {
@@ -501,8 +529,7 @@ export async function momImpact(momId: string) {
     const mom = await Mom.findById(momId);
     if (!mom) return { success: false, error: 'MOM not found' };
     // Same gate as the delete it precedes — the counts are about shared work.
-    const ctx = await memberSession(momScope(mom));
-    if (!ctx) return { success: false, error: 'Not a member' };
+    if (!await canAccess(mom, session.user.id, session.user.email)) return { success: false, error: 'Not a member' };
 
     const [notes, tasks] = await Promise.all([
       Note.countDocuments({ momId: mom._id }),
@@ -561,8 +588,7 @@ export async function updateMom(momId: string, data: { title?: string; summary?:
     await connectToDatabase();
     const mom = await Mom.findById(momId);
     if (!mom) return { success: false, error: 'MOM not found' };
-    const ctx = await memberSession(momScope(mom));
-    if (!ctx) return { success: false, error: 'Not a member' };
+    if (!await canAccess(mom, session.user.id, session.user.email)) return { success: false, error: 'Not a member' };
 
     if (data.title !== undefined) mom.title = data.title.trim() || mom.title;
     if (data.summary !== undefined) mom.summary = data.summary;

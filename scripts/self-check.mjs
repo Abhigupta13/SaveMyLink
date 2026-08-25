@@ -9,7 +9,7 @@ import { isAdmin, adminEmails } from '../src/lib/isAdmin.ts';
 import { suggestionEmail, inviteEmail, otpEmail } from '../src/lib/mailer.ts';
 import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, formatInZone } from '../src/lib/time.ts';
 import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
-import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite, withinProject } from '../src/lib/scope.ts';
+import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite, withinProject, canAccessDoc } from '../src/lib/scope.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
@@ -196,6 +196,12 @@ assert.equal(isAdmin('BOSS@X.COM'), true, 'match is case-insensitive');
 assert.equal(isAdmin('stranger@x.com'), false, 'unlisted address denied');
 assert.equal(isAdmin(null), false, 'no email denies');
 assert.equal(isAdmin(''), false, 'blank email denies');
+
+// ADMIN_EMAILS="" is a deliberate "nobody is an admin" — an empty string is set, not unset, and
+// `||` read the two as the same thing and handed the inbox straight back to the founders.
+process.env.ADMIN_EMAILS = '';
+assert.deepEqual(adminEmails(), [], 'an empty list means no admins');
+assert.equal(isAdmin('swarajdangare2016@gmail.com'), false, 'empty ADMIN_EMAILS does not restore the defaults');
 delete process.env.ADMIN_EMAILS;
 
 // A suggestion is user-typed text dropped into an HTML email — it must not carry markup through
@@ -618,6 +624,36 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
     assert.ok(src.includes('withinProject('), `${file} narrows through withinProject`);
     assert.ok(!/\{\s*\.\.\.scope,\s*projectId\s*\}/.test(src), `${file} never spreads the id over the scope`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Who may touch one record. The project half is handed in (that answer needs a database); the
+// half asserted here is the one that was missing — a record with NO project is not unowned, and
+// reading "no projectId" as "no gate" left every personal meeting readable, re-transcribable and
+// editable by any signed-in user who had its id.
+{
+  const personal = { userId: 'me' };
+  const shared = { projectId: 'p1', userId: 'me' };
+
+  assert.equal(canAccessDoc(personal, 'me', false), true, 'my own personal record is mine');
+  assert.equal(canAccessDoc(personal, 'stranger', false), false, 'a stranger cannot touch a personal record');
+  assert.equal(canAccessDoc(personal, 'stranger', true), false, 'and no project membership can grant it');
+
+  assert.equal(canAccessDoc(shared, 'me', true), true, 'a member reaches a project record');
+  assert.equal(canAccessDoc(shared, 'someone-else', true), true, 'membership, not authorship, is the gate there');
+  assert.equal(canAccessDoc(shared, 'me', false), false, 'non-members refused even on a record they created');
+
+  // Fails closed on missing halves rather than matching everything to everything.
+  assert.equal(canAccessDoc({}, 'me', false), false, 'a record with no owner belongs to nobody');
+  assert.equal(canAccessDoc(personal, '', false), false, 'no session id, no access');
+  assert.equal(canAccessDoc(personal, undefined, false), false);
+  assert.equal(canAccessDoc({ userId: { toString: () => 'me' } }, 'me', false), true, 'an ObjectId compares as a string');
+
+  // The five MOM actions that gate an existing meeting must go through it. `memberSession(momScope(mom))`
+  // is the shape that was wrong: it asks about a project the personal case does not have.
+  const mom = readFileSync(new URL('../src/actions/mom.ts', import.meta.url), 'utf8');
+  assert.ok(!mom.includes('momScope'), 'mom.ts no longer gates an existing meeting on its projectId alone');
+  assert.equal((mom.match(/canAccess\(mom,/g) || []).length, 5, 'poll, extract, confirm, impact and update each check the document');
 }
 
 console.log('self-check: all assertions passed');
