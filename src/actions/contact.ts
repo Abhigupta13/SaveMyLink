@@ -38,9 +38,10 @@ async function invitable(email?: string) {
  */
 export async function getContacts() {
   try {
-    await connectToDatabase();
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+    await connectToDatabase();
     const userId = session.user.id;
     const myEmail = (session.user.email || '').toLowerCase();
 

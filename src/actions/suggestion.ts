@@ -16,10 +16,10 @@ import { appUrl } from "@/lib/url";
 
 export async function submitSuggestion(formData: FormData) {
   try {
-    await connectToDatabase();
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
+    await connectToDatabase();
     const message = String(formData.get('message') || '').trim();
     if (!message) return { success: false, error: 'Tell us what happened first' };
     const kinds = ['bug', 'idea', 'other'] as const;

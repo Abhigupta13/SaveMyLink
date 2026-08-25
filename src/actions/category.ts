@@ -11,10 +11,10 @@ import { escapeRegex } from '@/lib/regex';
 import { hasSafe } from '@/lib/safeCookie';
 
 export async function getCategories(privateSafe: boolean = false) {
-  await connectToDatabase();
   const session = await getServerSession(authOptions);
-
   if (!session?.user) return [];
+
+  await connectToDatabase();
   const userId = (session.user as any).id;
   if (privateSafe && !(await hasSafe(userId))) privateSafe = false;
   const userObjectId = new mongoose.Types.ObjectId(userId);

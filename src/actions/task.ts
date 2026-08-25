@@ -22,10 +22,10 @@ async function claimAssignments(userId: string, email?: string | null) {
 
 export async function getTasks(projectId?: string) {
   try {
-    await connectToDatabase();
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
+    await connectToDatabase();
     // Claim tasks assigned to my email before I had an account
     await claimAssignments(session.user.id, session.user.email);
 
