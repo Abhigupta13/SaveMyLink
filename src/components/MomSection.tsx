@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { getMoms, uploadMomAudio, uploadMomAudioSarvam, pollMomTranscription, extractMomTasks, confirmMomTasks, deleteMom, updateMom } from '@/actions/mom';
+import { getMoms, uploadMomAudio, uploadMomAudioSarvam, pollMomTranscription, extractMomTasks, confirmMomTasks, deleteMom, momImpact, updateMom } from '@/actions/mom';
 import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
 import { isProjectOwner, canWrite } from '@/lib/scope';
@@ -272,10 +272,40 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     else { await navigator.clipboard.writeText(text); toast('MOM copied to clipboard', 'error'); }
   };
 
+  /**
+   * Deleting a meeting asks what should happen to what it produced, because a meeting becoming
+   * real work is the whole pitch and a routine tidy-up of old recordings must not silently undo
+   * it. Two questions rather than a three-way dialog: the second only appears when there is
+   * actually work at stake, its safe answer is the focused one, and destroying the work takes a
+   * deliberate second yes.
+   */
   const handleDelete = async (momId: string) => {
-    if (!(await confirm({ title: 'Delete this MOM and its recording?', danger: true, confirmLabel: 'Delete' }))) return;
-    const res = await deleteMom(momId);
-    if (res.success) fetchMoms(); else toast(res.error || 'Something went wrong', 'error');
+    const impact = await momImpact(momId);
+    const n = impact.success ? (impact.notes || 0) : 0;
+    const t = impact.success ? (impact.tasks || 0) : 0;
+    const made = [n && `${n} note${n === 1 ? '' : 's'}`, t && `${t} task${t === 1 ? '' : 's'}`].filter(Boolean).join(' and ');
+
+    if (!(await confirm({
+      title: 'Delete this meeting?',
+      message: made
+        ? `It produced ${made}. They stay in the project, labelled “from a deleted meeting”, unless you say otherwise next.`
+        : 'The recording and its minutes go with it.',
+      danger: true,
+      confirmLabel: 'Delete meeting',
+    }))) return;
+
+    const alsoDeleteWork = made
+      ? await confirm({
+          title: `Delete the ${made} too?`,
+          message: 'This cannot be undone. Keeping them is almost always what you want.',
+          danger: true,
+          confirmLabel: `Delete the ${made}`,
+          cancelLabel: 'Keep them',
+        })
+      : false;
+
+    const res = await deleteMom(momId, { alsoDeleteWork });
+    if (res.success) { fetchMoms(); onTasksCreated(); } else toast(res.error || 'Something went wrong', 'error');
   };
 
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;

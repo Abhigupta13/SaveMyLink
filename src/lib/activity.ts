@@ -62,3 +62,21 @@ export function sinceDays(days?: unknown, now: number = Date.now()): Date {
   const safe = Number.isFinite(n) && n >= 1 ? Math.min(n, 365) : DEFAULT_DAYS;
   return new Date(now - safe * 86_400_000);
 }
+
+/**
+ * What a note says about where it came from.
+ *
+ * Two fields, not one, and that is the point. `momId` survives the meeting being deleted;
+ * `momTitle` is filled in only when the meeting still resolves. Populating the reference instead
+ * would collapse both cases to null — mongoose turns a dangling ref into null exactly like a
+ * field that was never set — and a note that outlived its meeting would silently pretend it had
+ * been typed by hand.
+ *
+ * Pure and mongoose-free so scripts/self-check.mjs can hold the fallback to account, because the
+ * broken version of this reads "from undefined" and nobody notices until a user does.
+ */
+export function fromMeeting(note: { momId?: unknown; momTitle?: string | null }): string {
+  if (!note?.momId) return '';
+  const title = String(note.momTitle ?? '').trim();
+  return title ? `from ${title}` : 'from a deleted meeting';
+}

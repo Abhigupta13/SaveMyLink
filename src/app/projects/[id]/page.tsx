@@ -8,7 +8,7 @@ import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote,
 import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask } from '@/actions/task';
 import { getProjects, addMember, removeMember, setProjectRole, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
 import { getMoms } from '@/actions/mom';
-import { getNotes } from '@/actions/note';
+import { getNotes, createNote, deleteNote } from '@/actions/note';
 import { getDocuments } from '@/actions/document';
 import PersonPicker from '@/components/PersonPicker';
 import MomSection from '@/components/MomSection';
@@ -16,7 +16,7 @@ import { useFeedback } from '@/components/ui/Feedback';
 import { formatTime, formatDay, formatDate } from '@/lib/time';
 import { isProjectOwner, isProjectCreator, isProjectViewer, canWrite } from '@/lib/scope';
 import { needsOwner, assigneeEmailOf } from '@/lib/taskAccess';
-import { phrase, DEFAULT_DAYS } from '@/lib/activity';
+import { phrase, DEFAULT_DAYS, fromMeeting } from '@/lib/activity';
 
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
@@ -68,6 +68,8 @@ export default function ProjectWorkspace() {
   const [assignee, setAssignee] = useState('');
   const [inviting, setInviting] = useState(false);
   const [notesDraft, setNotesDraft] = useState('');
+  const [noteDraft, setNoteDraft] = useState({ title: '', body: '' });
+  const [savingNote, setSavingNote] = useState(false);
   const [notesSaved, setNotesSaved] = useState(true);
   const [renaming, setRenaming] = useState('');
   const [showDone, setShowDone] = useState(false);
@@ -247,6 +249,31 @@ export default function ProjectWorkspace() {
     const res = await updateProjectNotes(projectId, notesDraft);
     if (res.success) { setNotesSaved(true); setProject((p: any) => ({ ...p, notes: notesDraft })); }
     else toast(res.error || 'Something went wrong', 'error');
+  };
+
+  /**
+   * Writing a note without leaving the group. The Notes tab was a link with no project in it, so
+   * "write a note" from inside a project dropped you into Personal and the note ended up nowhere
+   * near the work it was about. Attachments still go through the full editor.
+   */
+  const handleAddNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!noteDraft.title.trim() && !noteDraft.body.trim()) return;
+    setSavingNote(true);
+    const res = await createNote({ title: noteDraft.title.trim(), body: noteDraft.body.trim(), projectId });
+    setSavingNote(false);
+    if (!res.success) return toast(res.error || 'Something went wrong', 'error');
+    setNoteDraft({ title: '', body: '' });
+    fetchNotes();
+  };
+
+  const handleDeleteNote = async (note: { _id: string; title?: string }) => {
+    if (!await confirm({ title: `Delete "${note.title || 'this note'}"?`, message: 'It goes for everyone in the group.', danger: true, confirmLabel: 'Delete' })) return;
+    const res = await deleteNote(note._id);
+    // canDelete is owner-only for project notes and is enforced server-side; if it refuses,
+    // say so rather than removing the row optimistically and putting it back.
+    if (!res.success) return toast(res.error || 'Could not delete', 'error');
+    fetchNotes();
   };
 
   const handleInvite = async (raw: string) => {
@@ -464,25 +491,51 @@ export default function ProjectWorkspace() {
           {sectionHead('notes', 'Notes', notes.length)}
           {openSections.notes && (
             <>
+              {/* The composer, not a link out. Writing a note here used to mean following a
+                  link with no project in it, landing in Personal, and filing the note away from
+                  the work it was about. */}
+              {canEdit && (
+                <form onSubmit={handleAddNote} className="quick-add" style={{ display: 'block' }}>
+                  <div className="quick-add-main">
+                    <input type="text" placeholder={`Note title — ${project.name}`} value={noteDraft.title}
+                      onChange={e => setNoteDraft(d => ({ ...d, title: e.target.value }))} />
+                    <button type="submit" className="btn-primary" disabled={savingNote || (!noteDraft.title.trim() && !noteDraft.body.trim())}
+                      style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: (noteDraft.title.trim() || noteDraft.body.trim()) ? 1 : 0.5 }}>
+                      {savingNote ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                  <textarea className="field" rows={3} placeholder="What happened, what was decided…" value={noteDraft.body}
+                    onChange={e => setNoteDraft(d => ({ ...d, body: e.target.value }))}
+                    style={{ marginTop: '8px', resize: 'vertical', lineHeight: 1.55 }} />
+                </form>
+              )}
+
               {notes.length === 0 ? (
                 <p style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.85rem', padding: '8px 0' }}>
                   No notes yet — meetings file them here automatically.
                 </p>
-              ) : notes.map(n => (
-                <Link key={n._id} href="/notes" className="task-row" style={{ textDecoration: 'none', alignItems: 'flex-start' }}>
-                  <StickyNote size={15} style={{ flexShrink: 0, marginTop: '3px', color: 'var(--text-tertiary)' }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="task-title">{n.title || 'Untitled note'}</div>
-                    {n.body && <div className="task-desc">{n.body.replace(/\s+/g, ' ').slice(0, 140)}</div>}
-                    <div className="task-meta">
-                      <span className="chip">{n.userId?.name || n.userId?.email || 'me'}</span>
-                      <span className="chip">{fmtDate(n.updatedAt)}</span>
-                    </div>
+              ) : notes.map(n => {
+                const origin = fromMeeting(n);
+                return (
+                  <div key={n._id} className="task-row" style={{ alignItems: 'flex-start' }}>
+                    <StickyNote size={15} style={{ flexShrink: 0, marginTop: '3px', color: 'var(--text-tertiary)' }} />
+                    {/* The project travels with the link, so the editor opens on this group */}
+                    <Link href={`/notes?project=${projectId}`} style={{ flex: 1, minWidth: 0, textDecoration: 'none', color: 'inherit' }}>
+                      <div className="task-title">{n.title || 'Untitled note'}</div>
+                      {n.body && <div className="task-desc">{n.body.replace(/\s+/g, ' ').slice(0, 140)}</div>}
+                      <div className="task-meta">
+                        <span className="chip">{n.userId?.name || n.userId?.email || 'me'}</span>
+                        <span className="chip">{fmtDate(n.updatedAt)}</span>
+                        {origin && <span className="chip" title="This note came out of a meeting">{origin}</span>}
+                      </div>
+                    </Link>
+                    {/* canDelete is owner-only for project notes; the server enforces it either way */}
+                    {isOwner && <button className="task-del" onClick={() => handleDeleteNote(n)} title="Delete">×</button>}
                   </div>
-                </Link>
-              ))}
-              <Link href="/notes" className="subtle-link" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem' }}>
-                Write a note →
+                );
+              })}
+              <Link href={`/notes?project=${projectId}`} className="subtle-link" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem' }}>
+                Open the full editor — attachments, pinning →
               </Link>
             </>
           )}

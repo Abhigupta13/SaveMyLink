@@ -11,7 +11,7 @@ import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src
 import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite } from '../src/lib/scope.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
-import { VERBS, phrase, sinceDays, DEFAULT_DAYS } from '../src/lib/activity.ts';
+import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -410,5 +410,19 @@ assert.equal(canWrite(ownerAndViewer, VIEWER), true);
 // canWriteProject first and this assertion exists to say so out loud.
 assert.equal(canWorkOn({ projectId: 'p1', assigneeEmail: VIEWER }, 'u9', VIEWER, false), true,
   'canWorkOn alone would let an assigned viewer tick — the write gate has to run before it');
+
+// ---------------------------------------------------------------------------
+// Where a note came from.
+// The broken version of this reads "from undefined" at a user, and the interesting case — a note
+// that outlived the meeting it came out of — is invisible in dev because you have to delete a
+// meeting to see it. Hence a test rather than a look.
+
+assert.equal(fromMeeting({ momId: 'm1', momTitle: 'Meeting Aug 23' }), 'from Meeting Aug 23');
+assert.equal(fromMeeting({ momId: 'm1', momTitle: undefined }), 'from a deleted meeting',
+  'the reference outlives the meeting, and the note says so rather than passing as typed');
+assert.equal(fromMeeting({ momId: 'm1', momTitle: '  ' }), 'from a deleted meeting', 'a blank title is not a title');
+assert.equal(fromMeeting({}), '', 'a note that never came from a meeting claims nothing');
+assert.equal(fromMeeting({ momId: null, momTitle: 'ghost' }), '', 'no momId, no origin, whatever else is lying around');
+assert.ok(!fromMeeting({ momId: 'm1', momTitle: undefined }).includes('undefined'));
 
 console.log('self-check: all assertions passed');

@@ -372,7 +372,7 @@ export async function confirmMomTasks(
       }
 
       if (item.kind === 'note') {
-        await Note.create({ userId: session.user.id, projectId: projectId || undefined, title: item.title.trim(), body: item.detail || '' });
+        await Note.create({ userId: session.user.id, projectId: projectId || undefined, title: item.title.trim(), body: item.detail || '', momId: mom._id });
         notes++;
         continue;
       }
@@ -412,7 +412,41 @@ export async function confirmMomTasks(
   }
 }
 
-export async function deleteMom(momId: string) {
+/**
+ * What this meeting actually produced. Asked before the delete confirm, so an owner tidying up
+ * old recordings is told what is about to be at stake rather than finding out afterwards.
+ */
+export async function momImpact(momId: string) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    await connectToDatabase();
+    const mom = await Mom.findById(momId);
+    if (!mom) return { success: false, error: 'MOM not found' };
+    // Same gate as the delete it precedes — the counts are about shared work.
+    const ctx = await memberSession(momScope(mom));
+    if (!ctx) return { success: false, error: 'Not a member' };
+
+    const [notes, tasks] = await Promise.all([
+      Note.countDocuments({ momId: mom._id }),
+      Task.countDocuments({ momId: mom._id }),
+    ]);
+    return { success: true, notes, tasks };
+  } catch (error) {
+    console.error('Failed to measure MOM impact:', error);
+    return { success: false, error: 'Could not check what this meeting produced' };
+  }
+}
+
+/**
+ * `alsoDeleteWork` defaults to false, and that default is the decision.
+ *
+ * A meeting becoming real work is the entire pitch of this product. Routine cleanup of old
+ * recordings must never quietly undo it, so the tasks and notes stay unless somebody chooses
+ * otherwise — and the ones that stay keep their momId, which is what lets them go on saying
+ * "from a deleted meeting" instead of passing themselves off as typed.
+ */
+export async function deleteMom(momId: string, opts: { alsoDeleteWork?: boolean } = {}) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
@@ -423,9 +457,19 @@ export async function deleteMom(momId: string) {
     if (!await canDelete(mom, session.user.id, session.user.email)) {
       return { success: false, error: 'Only a project owner can delete this meeting' };
     }
+
+    if (opts.alsoDeleteWork === true) {
+      await Promise.all([
+        Note.deleteMany({ momId: mom._id }),
+        Task.deleteMany({ momId: mom._id }),
+      ]);
+    }
+
     await mom.deleteOne();
     // Recordings made before transcripts replaced stored audio may still have a file
     if (mom.audioUrl) await unlink(path.join(process.cwd(), 'public', mom.audioUrl)).catch(() => {});
+    revalidatePath('/notes');
+    revalidatePath('/tasks');
     return { success: true };
   } catch (error) {
     console.error('Failed to delete MOM:', error);

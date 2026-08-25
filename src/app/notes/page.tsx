@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSession } from 'next-auth/react';
+import { useSearchParams } from 'next/navigation';
 import { Plus, Pin, Trash2, X, Paperclip, Camera, FileText, Image as ImageIcon } from 'lucide-react';
 import { getNotes, createNote, updateNote, deleteNote, attachToNote, removeAttachment } from '@/actions/note';
 import { getProjects, createProject } from '@/actions/project';
@@ -42,12 +43,22 @@ export default function NotesPage() {
   // Attaching creates the note server-side if it did not exist, so later saves target that row
   const noteIdRef = useRef<string | null>(null);
 
+  // Arriving from a group's workspace: ?project=<id> opens this page already in that scope, so
+  // "write a note" from inside a project does not silently drop you into Personal. The page is
+  // dynamically rendered, so useSearchParams needs no Suspense boundary here.
+  const wantedProject = useSearchParams().get('project');
+
   const load = useCallback(async () => {
     const [res, p] = await Promise.all([getNotes(), getProjects()]);
     if (res.success) setNotes(res.notes || []);
-    if (p.success) setProjects(p.projects || []);
+    if (p.success) {
+      setProjects(p.projects || []);
+      // Only a project actually returned to me — the id came from a URL and is not to be trusted
+      // into the picker just because it was typed there.
+      if (wantedProject) setScope((p.projects || []).find((x: { _id: string }) => String(x._id) === wantedProject) || null);
+    }
     setLoading(false);
-  }, []);
+  }, [wantedProject]);
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
   // `capture` is ignored on desktop, where the button would just be a second file picker.
   // Checked after mount so the server and first client render agree.

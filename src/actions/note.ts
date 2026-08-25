@@ -3,6 +3,7 @@
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import { Note } from "@/lib/models/Note";
+import { Mom } from "@/lib/models/Mom";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 import { projectForWriter, mineOrMyProjects, canDelete } from "@/lib/projectAccess";
@@ -39,7 +40,18 @@ export async function getNotes() {
       .populate('projectId', 'name')   // meeting notes carry their project — shown as a chip on the card
       .populate('userId', 'email name')  // a project note may not be mine, so say whose it is
       .sort({ pinned: -1, updatedAt: -1 }).limit(500).lean();
-    return { success: true, notes: JSON.parse(JSON.stringify(notes)) };
+
+    // Titles resolved separately rather than by populate: a populated reference to a deleted
+    // meeting comes back as null, identical to a note that never came from one, and telling
+    // those apart is the whole point of "from a deleted meeting".
+    const momIds = [...new Set(notes.map(n => n.momId).filter(Boolean).map(String))];
+    const found = momIds.length
+      ? await Mom.find({ _id: { $in: momIds } }).select('title').lean<{ _id: unknown; title?: string }[]>()
+      : [];
+    const titles = new Map(found.map(m => [String(m._id), m.title || '']));
+    const withOrigin = notes.map(n => ({ ...n, momTitle: n.momId ? titles.get(String(n.momId)) : undefined }));
+
+    return { success: true, notes: JSON.parse(JSON.stringify(withOrigin)) };
   } catch (error) {
     console.error('Failed to get notes:', error);
     return { success: false, error: 'Failed to fetch notes' };

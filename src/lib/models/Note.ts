@@ -13,6 +13,7 @@ export interface INoteAttachment {
 export interface INote extends MongooseDocument {
   userId: mongoose.Types.ObjectId;
   projectId?: mongoose.Types.ObjectId | null;   // set when the note came out of a project meeting
+  momId?: mongoose.Types.ObjectId | null;       // the meeting it came out of, mirroring Task
   title?: string;
   body: string;
   pinned: boolean;
@@ -24,6 +25,12 @@ export interface INote extends MongooseDocument {
 const NoteSchema = new Schema<INote>({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   projectId: { type: Schema.Types.ObjectId, ref: 'Project' },
+  // Task has carried this since MOM shipped; Note never did, so a note out of a meeting was
+  // indistinguishable from a typed one — untraceable back to what was said, and invisible to
+  // anything asking what a meeting actually produced.
+  // Notes that predate this stay plain notes: the link cannot be reconstructed, and a wrong
+  // guess about which meeting a note came from is worse than no guess.
+  momId: { type: Schema.Types.ObjectId, ref: 'Mom' },
   title: { type: String },
   body: { type: String, default: '' },
   pinned: { type: Boolean, default: false },
