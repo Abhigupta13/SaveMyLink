@@ -6,12 +6,14 @@ import { Link } from '@/lib/models/Link';
 import Task from '@/lib/models/Task';
 import { Project } from '@/lib/models/Project';
 import { projectNameMap, sharedLabel } from '@/lib/visibility';
+import { myProjectFilter } from '@/lib/projectAccess';
 import { formatInZone } from '@/lib/time';
 
 export default async function DigestPage() {
   const session = await getServerSession(authOptions);
   if (!session?.user) redirect('/auth/signin');
   const userId = (session.user as any).id;
+  const email = (session.user.email || '').toLowerCase();
 
   await connectToDatabase();
   const weekAgo = new Date(Date.now() - 7 * 24 * 3600e3);
@@ -27,9 +29,11 @@ export default async function DigestPage() {
     }).sort({ dueAt: 1 }).limit(30).lean(),
   ]);
 
-  // A task assigned to me from a group is visible to that group; the row should say so
+  // A task assigned to me from a group is visible to that group; the row should say so.
+  // Scoped through the verified read gate: an ex-member or unverified assignee gets no name.
   const projectIds = [...new Set(dueTasks.map(t => t.projectId).filter(Boolean).map(String))];
-  const names = projectNameMap(projectIds.length ? await Project.find({ _id: { $in: projectIds } }).select('name').lean() : []);
+  const names = projectNameMap(projectIds.length
+    ? await Project.find({ _id: { $in: projectIds }, ...(await myProjectFilter(userId, email)) }).select('name').lean() : []);
   const links = JSON.parse(JSON.stringify(savedLinks));
   const tasks = JSON.parse(JSON.stringify(dueTasks.map(t => ({ ...t, projectName: sharedLabel(t, names) }))));
 

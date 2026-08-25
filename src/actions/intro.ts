@@ -53,8 +53,17 @@ export async function createSampleMeeting(timeZone = '') {
   const claimed = await User.updateOne({ _id: userId, introDone: { $ne: 'sample' } }, { $addToSet: { introDone: 'sample' } });
   if (!claimed.modifiedCount) return { success: false as const, error: 'The sample meeting was already created' };
 
-  const project = await Project.create({ name: 'Sample: product launch', ownerId: userId, memberEmails: [] });
-  const mom = await Mom.create({ userId, projectId: project._id, title: 'Sample: launch planning', transcript: SAMPLE_TRANSCRIPT });
+  let project, mom;
+  try {
+    project = await Project.create({ name: 'Sample: product launch', ownerId: userId, memberEmails: [] });
+    mom = await Mom.create({ userId, projectId: project._id, title: 'Sample: launch planning', transcript: SAMPLE_TRANSCRIPT });
+  } catch (error) {
+    // Nothing to land on yet, so hand the claim back — otherwise one failed insert means no retry, ever
+    console.error('Sample meeting failed:', error);
+    await User.updateOne({ _id: userId }, { $pull: { introDone: 'sample' } });
+    if (project) await Project.deleteOne({ _id: project._id });
+    return { success: false as const, error: 'Could not create the sample meeting — try again' };
+  }
   const ex = await extractMomTasks(String(mom._id), timeZone);
   revalidatePath('/');
   // The meeting exists either way; the page's "Extract again" covers a failed AI call
