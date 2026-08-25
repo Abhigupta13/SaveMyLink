@@ -13,6 +13,7 @@ import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
 import { projectNameMap, sharedLabel, needsShareNotice, memberCount } from '../src/lib/visibility.ts';
+import { INTRO_STEPS, introProgress, isIntroStep } from '../src/lib/intro.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -446,5 +447,25 @@ assert.equal(needsShareNotice(undefined, 'p1'), true, 'no record yet means never
 assert.equal(memberCount({ ownerId: { email: 'a@x.com' }, memberEmails: ['A@x.com', 'b@x.com'], viewerEmails: ['c@x.com'] }), 3, 'owner in memberEmails is not counted twice');
 assert.equal(memberCount({ ownerId: 'rawid' }), 1, 'a raw id still counts the creator');
 assert.equal(memberCount(null), 0);
+
+// ---------------------------------------------------------------------------
+// Getting started. A step is done by the record it leaves, or by an explicit mark for the
+// ones that leave none; the meeting comes first because that is the product.
+assert.equal(INTRO_STEPS[0].id, 'meeting', 'record a meeting is always the first step');
+assert.equal(new Set(INTRO_STEPS.map(s => s.id)).size, INTRO_STEPS.length, 'ids are unique');
+const none = introProgress({}, []);
+assert.equal(none.remaining, INTRO_STEPS.length, 'a cold account has everything left');
+assert.ok(none.steps.every(s => !s.done));
+const some = introProgress({ meetings: 1, links: 3 }, ['jarvis']);
+assert.equal(some.steps.find(s => s.id === 'meeting').done, true);
+assert.equal(some.steps.find(s => s.id === 'link').done, true);
+assert.equal(some.steps.find(s => s.id === 'jarvis').done, true, 'a manual step is done by its mark');
+assert.equal(some.steps.find(s => s.id === 'note').done, false);
+assert.equal(some.remaining, INTRO_STEPS.length - 3);
+assert.equal(introProgress({ meetings: 0 }, undefined).steps[0].done, false, 'zero is not done');
+assert.equal(introProgress({}, ['sample']).remaining, INTRO_STEPS.length, 'an unknown mark ticks nothing');
+assert.equal(isIntroStep('jarvis'), true);
+assert.equal(isIntroStep('drop table'), false, 'markIntro refuses anything that is not a step');
+assert.equal(isIntroStep(null), false);
 
 console.log('self-check: all assertions passed');

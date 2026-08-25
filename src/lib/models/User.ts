@@ -18,6 +18,8 @@ export interface IUser extends Document {
   image?: string;
   contactsSeeded?: string[];
   shareNoticeSeen?: string[];
+  introDone?: string[];
+  introDismissed?: boolean;
 }
 
 const UserSchema: Schema<IUser> = new Schema({
@@ -42,6 +44,9 @@ const UserSchema: Schema<IUser> = new Schema({
   contactsSeeded: [{ type: String, lowercase: true }],
   // Groups the "everyone in X will see this" sheet has already been shown for; '*' = never again
   shareNoticeSeen: [{ type: String }],
+  // Getting-started steps that leave no record of their own (jarvis, android, sample), and Hide
+  introDone: [{ type: String }],
+  introDismissed: { type: Boolean, default: false },
 }, { timestamps: true });
 
 export const User: Model<IUser> = defineModel<IUser>('User', UserSchema);

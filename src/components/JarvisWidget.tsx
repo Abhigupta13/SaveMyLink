@@ -10,6 +10,7 @@ import {
 } from '@/actions/jarvis';
 import { syncTask } from '@/lib/taskNotifications';
 import { getProjects } from '@/actions/project';
+import { markIntro } from '@/actions/intro';
 import { formatTime, formatDay } from '@/lib/time';
 
 type Mode = 'idle' | 'capturing';
@@ -136,6 +137,7 @@ export default function JarvisWidget() {
   }), [hasTTS, stopListening]);
 
   // ---------- asking ----------
+  const introMarkedRef = useRef(false);   // the checklist's "Ask Jarvis" step, ticked once per mount
   const ask = useCallback(async (text: string) => {
     const question = text.trim();
     if (!question) return;
@@ -149,6 +151,7 @@ export default function JarvisWidget() {
     const res = await askJarvis(question, history, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setBusy(false);
     if (res.success) for (const t of res.createdTasks || []) syncTask(t);
+    if (res.success && !introMarkedRef.current) { introMarkedRef.current = true; markIntro('jarvis').catch(() => {}); }
     const reply: Msg = res.success
       ? { role: 'assistant', content: res.answer || '…', items: res.items }
       : { role: 'assistant', content: res.error || 'Something went wrong.' };
@@ -393,8 +396,15 @@ export default function JarvisWidget() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') { e.preventDefault(); toggleOpen(); }
     };
+    // Home's checklist opens the assistant without a keyboard; a ?jarvis=1 link does the same
+    const onOpen = () => { if (!openRef.current) openPanel(); };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('jarvis:open', onOpen);
+    if (new URLSearchParams(window.location.search).get('jarvis') === '1') {
+      window.history.replaceState(null, '', window.location.pathname);
+      onOpen();
+    }
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('jarvis:open', onOpen); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openPanel, closePanel]);
 
