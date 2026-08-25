@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { hintFor } from '@/lib/nav';
 import { getMoms, uploadMomAudio, uploadMomAudioSarvam, pollMomTranscription, extractMomTasks, confirmMomTasks, deleteMom, momImpact, updateMom } from '@/actions/mom';
-import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
+import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check, Loader2 } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useShareNotice } from '@/components/ShareNotice';
 import { isProjectOwner, canWrite } from '@/lib/scope';
@@ -369,35 +369,36 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
           </div>
         )}
 
-        {recording ? (
-          <div className="mom-strip">
-            <i className="mom-dot" aria-hidden="true" />
-            <Wave />
-            <span className="mom-pill live">Recording</span>
-          </div>
-        ) : pipeline ? (
-          <div className="mom-strip waiting">
-            <Wave />
-            <span className="mom-pill">{stageWord}</span>
-          </div>
-        ) : null}
-
-        <div className="mom-stage-foot">
-          {!recording ? (
-            <button onClick={startRecording} disabled={!!pipeline} className="btn-primary mom-stage-btn">
-              <Mic size={20} /> Record meeting
+        {/* One control across all states: the dot IS the record/stop button. Idle = accent mic,
+            recording = red stop, transcribing = disabled spinner. No separate button. */}
+        <div className={`mom-strip${recording ? '' : pipeline ? ' waiting' : ' idle'}`}>
+          {recording ? (
+            <button type="button" onClick={stopRecording} data-tour="record-meeting"
+              className="mom-dot rec" aria-label="Stop recording">
+              <Square size={16} fill="currentColor" />
+            </button>
+          ) : pipeline ? (
+            <button type="button" disabled data-tour="record-meeting"
+              className="mom-dot" aria-label={`${stageWord}…`}>
+              <Loader2 size={18} className="mom-spin" aria-hidden="true" />
             </button>
           ) : (
-            <button onClick={stopRecording} className="mom-stage-btn stop">
-              <Square size={18} fill="currentColor" /> Stop recording
+            <button type="button" onClick={startRecording} data-tour="record-meeting"
+              className="mom-dot idle" aria-label="Start recording">
+              <Mic size={18} />
             </button>
           )}
-          <p className="mom-stage-note" role="status">
-            {pipeline || (recording ? 'Recording… keep the phone near the discussion. Up to 20 minutes for now — longer meetings after the next round.'
-              : project ? `Record → transcribe → action items, filed under ${project.name}.`
-              : 'Record → transcribe → each action item routed to the project it belongs to.')}
-          </p>
+          <Wave />
+          {recording ? <span className="mom-pill live">Recording</span>
+            : pipeline ? <span className="mom-pill">{stageWord}</span>
+            : null}
         </div>
+
+        <p className="mom-stage-note" role="status">
+          {pipeline || (recording ? 'Recording… keep the phone near the discussion. Up to 20 minutes for now — longer meetings after the next round.'
+            : project ? `Tap the dot to record → transcribe → action items, filed under ${project.name}.`
+            : 'Tap the dot to record → transcribe → each action item routed to the project it belongs to.')}
+        </p>
       </div>}
 
       {/* Hindi is free now, so the old "needs the upgraded engine" line would be a lie. What is

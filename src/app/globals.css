@@ -2925,8 +2925,20 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .mom-clock i { font-style: normal; font-weight: 600; color: var(--text-tertiary); }
 
 .mom-strip { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 14px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-.mom-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--danger-color); animation: mom-pulse 1.2s ease-in-out infinite; }
-@keyframes mom-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: 0.5; } }
+
+/* The one control across all three states. A 44px round tap target (thumb + Android webview)
+   even though the coloured disc reads smaller; the icon inside says which state it is. */
+.mom-dot { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: none; border-radius: 50%; cursor: pointer; }
+.mom-dot:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+/* Idle: an accent record button. --accent-strong is the white-on-orange fill token (≥4.5:1). */
+.mom-dot.idle { background: var(--accent-strong); color: #fff; }
+/* Recording: a filled-red stop. White on --danger-color is 2.6:1 in dark, so ink + ring take the
+   token on a soft-red disc — the same contrast-safe treatment the old Stop button used (≥5:1). */
+.mom-dot.rec { background: var(--danger-soft); color: var(--danger-color); box-shadow: inset 0 0 0 2px var(--danger-color); animation: mom-recring 1.6s ease-out infinite; }
+@keyframes mom-recring { from { box-shadow: inset 0 0 0 2px var(--danger-color), 0 0 0 0 var(--danger-soft); } to { box-shadow: inset 0 0 0 2px var(--danger-color), 0 0 0 9px transparent; } }
+/* Transcribing: genuinely unavailable — a still, dimmed disc with a spinner. */
+.mom-dot:disabled { background: var(--bg-secondary); color: var(--text-tertiary); box-shadow: inset 0 0 0 1px var(--border-color); cursor: default; }
+.mom-spin { animation: spin 1s linear infinite; }
 
 /* Fixed-width bars with the overflow clipped, rather than bars that stretch: a level meter's
    ticks are the same width on a phone and a desktop, and only how many you see changes. */
@@ -2941,19 +2953,14 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .mom-strip.waiting .mom-wave i { background: var(--text-tertiary); animation: mom-drift 1.9s ease-in-out infinite; }
 @keyframes mom-drift { 0%, 100% { transform: scaleY(0.35); opacity: 0.45; } 50% { transform: scaleY(0.9); opacity: 1; } }
 
+/* Idle: nothing is being heard yet, so the bars sit flat and muted until the dot is tapped. */
+.mom-strip.idle .mom-wave i { animation: none; height: 30%; background: var(--text-tertiary); opacity: 0.5; }
+
 /* Text, not colour alone, says which state this is — the dot and the accent bars only reinforce it. */
 .mom-pill { flex: none; padding: 4px 10px; border-radius: 999px; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.04em; white-space: nowrap; background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border-color); }
 .mom-pill.live { background: color-mix(in srgb, var(--danger-color) 14%, var(--bg-secondary)); border-color: color-mix(in srgb, var(--danger-color) 35%, transparent); color: var(--danger-color); }
 
-.mom-stage-foot { display: flex; align-items: center; gap: 16px; margin-top: 14px; }
-.mom-stage-btn { display: flex; align-items: center; justify-content: center; gap: 10px; flex: none; min-height: 48px; padding: 12px 24px; border-radius: 16px; font-weight: 800; font-size: 0.95rem; border: none; cursor: pointer; }
-/* Outlined rather than a slab of red: --danger-color is a *light* red in dark mode, so white on it
-   is 2.6:1. Ink and ring both use the token, which reads ≥5:1 on the card ground in either theme. */
-.mom-stage-btn.stop { background: var(--danger-soft); color: var(--danger-color); box-shadow: inset 0 0 0 1.5px var(--danger-color); }
-/* While the pipeline runs the recorder really is unavailable. A full-strength primary button that
-   does nothing is the loudest thing on the card; drop it to a surface so the status line leads. */
-.mom-stage-btn:disabled { opacity: 1; background: var(--bg-tertiary); color: var(--text-tertiary); box-shadow: inset 0 0 0 1px var(--border-color); }
-.mom-stage-note { margin: 0; text-align: left; font-size: 0.85rem; font-weight: 600; line-height: 1.5; color: var(--text-secondary); }
+.mom-stage-note { margin: 12px 0 0; text-align: left; font-size: 0.85rem; font-weight: 600; line-height: 1.5; color: var(--text-secondary); }
 
 /* The hand-off from "a recording" to "your to-do list" — the one moment worth animating here. */
 .mom-found { margin: 0 0 8px; text-align: center; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-tertiary); animation: mom-found 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
@@ -2963,15 +2970,50 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
    marooned beside a pill on the far horizon. Cap it and the whole strip stays in proportion. */
 @media (min-width: 900px) { .mom-stage { max-width: 760px; } }
 
-/* Phone: stack the button over its status line and give it the full thumb width. Must sit after
-   the base rules above — the shared @media block earlier in this file loses to them on tie. */
+/* Phone: tighten the card padding; the strip already spans the full thumb width. */
 @media (max-width: 600px) {
   .mom-stage { padding: 14px; }
-  .mom-stage-foot { flex-direction: column; align-items: stretch; gap: 10px; }
-  .mom-stage-btn { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mom-dot, .mom-wave i, .mom-found { animation: none; }
+  .mom-wave i, .mom-found, .mom-dot.rec, .mom-spin { animation: none; }
   .mom-wave i { height: 55%; }
+  .mom-strip.idle .mom-wave i { height: 30%; }
 }
+
+/* ── Spotlight tour ─────────────────────────────────────────────────────────
+   A dimmed overlay with a bright cut-out around a real element, and a bubble
+   explaining it. Sits above the Jarvis FAB (z 950) and the add FAB (z 900). */
+.tour-root { position: fixed; inset: 0; z-index: 1000; }
+/* Transparent layer that swallows clicks so the app can't be used mid-tour —
+   the dimming itself comes from the hole's huge box-shadow. */
+.tour-catch { position: fixed; inset: 0; z-index: 1000; }
+.tour-scrim-full { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.6); }
+/* The cut-out: a transparent box the real element shows through, with a giant
+   shadow darkening everything around it. */
+.tour-hole {
+  position: fixed; z-index: 1001; border-radius: 14px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6), 0 0 0 2px var(--accent-color);
+  transition: top 0.3s ease, left 0.3s ease, width 0.3s ease, height 0.3s ease;
+}
+.tour-hole[data-reduce] { transition: none; }
+.tour-bubble {
+  position: fixed; z-index: 1002; width: min(340px, calc(100vw - 32px));
+  background: var(--bg-secondary); border: 1px solid var(--border-color);
+  border-radius: 18px; padding: 16px 18px 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35); outline: none;
+}
+.tour-bubble-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.tour-count { font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; color: var(--text-tertiary); }
+.tour-bubble-title { font-size: 1.08rem; font-weight: 800; color: var(--text-primary); margin: 0 0 6px; }
+.tour-bubble-body { font-size: 0.88rem; line-height: 1.55; color: var(--text-secondary); margin: 0 0 14px; }
+.tour-bubble-foot { display: flex; align-items: center; gap: 8px; }
+.tour-btn {
+  min-height: 44px; padding: 0 16px; border-radius: 12px; font: inherit; font-size: 0.85rem;
+  font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  transition: var(--transition);
+}
+.tour-btn.ghost { background: none; border: none; color: var(--text-secondary); padding: 0 8px; }
+.tour-btn.ghost:hover { color: var(--text-primary); }
+.tour-btn.primary { background: var(--accent-strong); color: #fff; border: none; }
+.tour-btn.primary:hover { background: var(--accent-hover); }
