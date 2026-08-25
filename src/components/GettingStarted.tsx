@@ -2,15 +2,28 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { CheckCircle2, Circle, ArrowRight } from 'lucide-react';
-import { dismissIntro, markIntro } from '@/actions/intro';
+import { useState } from 'react';
+import { CheckCircle2, Circle, ArrowRight, Mic } from 'lucide-react';
+import { dismissIntro, markIntro, createSampleMeeting } from '@/actions/intro';
+import { useFeedback } from '@/components/ui/Feedback';
 import type { introProgress } from '@/lib/intro';
 
-type Props = { progress: ReturnType<typeof introProgress>; children?: React.ReactNode };
+type Props = { progress: ReturnType<typeof introProgress> & { offerSample?: boolean } };
 
 /** Home's first ten minutes: the point is record → tasks, and this is where a cold account learns it. */
-export default function GettingStarted({ progress, children }: Props) {
+export default function GettingStarted({ progress }: Props) {
   const router = useRouter();
+  const { toast } = useFeedback();
+  const [sampleBusy, setSampleBusy] = useState(false);
+
+  const trySample = async () => {
+    setSampleBusy(true);
+    const res = await createSampleMeeting(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    setSampleBusy(false);
+    if (!res.success) { toast(res.error || 'Something went wrong', 'error'); return; }
+    if (!res.extracted) toast(res.error || 'The AI could not read it just now — use "Extract again" on the meeting', 'error');
+    router.push(`/mom?project=${res.projectId}`);
+  };
   const total = progress.steps.length;
   const doneCount = total - progress.remaining;
 
@@ -31,7 +44,17 @@ export default function GettingStarted({ progress, children }: Props) {
       </div>
       <p style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', margin: '0 0 12px' }}>{doneCount} of {total} done</p>
 
-      {children}
+      {progress.offerSample && (
+        <button onClick={trySample} disabled={sampleBusy} className="tile"
+          style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%', padding: '12px 14px', marginBottom: '12px', borderStyle: 'dashed' }}>
+          <span className="row-icon"><Mic size={18} strokeWidth={2.2} /></span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontWeight: 800, fontSize: '0.92rem' }}>{sampleBusy ? 'Reading the transcript…' : 'Try it with a sample meeting'}</span>
+            <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>40 seconds, then delete it. Swaraj and Abhishek plan a launch; you confirm the tasks.</span>
+          </span>
+          {sampleBusy ? <div className="loading-spinner" style={{ width: '18px', height: '18px' }} /> : <ArrowRight size={16} style={{ flexShrink: 0, color: 'var(--accent-text)' }} />}
+        </button>
+      )}
 
       <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {progress.steps.map(step => (
