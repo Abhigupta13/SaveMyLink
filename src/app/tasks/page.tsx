@@ -316,7 +316,7 @@ export default function TasksPage() {
         </div>
       )}
 
-      <form onSubmit={handleCreate} className="quick-add">
+      <form onSubmit={handleCreate} className="quick-add" data-tour="task-add">
         <div className="quick-add-main">
           <input type="text" disabled={!canEdit}
             placeholder={canEdit ? (activeProject ? `Add a task to ${activeProject.name}…` : 'Add a task…') : `You have view-only access to ${activeProject?.name}`}

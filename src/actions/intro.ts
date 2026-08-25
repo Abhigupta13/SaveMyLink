@@ -70,6 +70,37 @@ export async function createSampleMeeting(timeZone = '') {
   return { success: true as const, projectId: String(project._id), extracted: ex.success, error: ex.success ? undefined : ex.error };
 }
 
+/**
+ * The spotlight tour's state. `autoStart` is true only for a brand-new account (nothing created
+ * yet) that has not seen the tour — so it runs once on first login, and never re-triggers itself.
+ * Replaying it from the Home or Profile launcher goes through the same component with a manual start.
+ */
+export async function tourStatus() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { done: true, autoStart: false };
+  const userId = session.user.id;
+  await connectToDatabase();
+  const user = await User.findById(userId).select('tourDone').lean<{ tourDone?: boolean } | null>();
+  if (user?.tourDone) return { done: true, autoStart: false };
+  // Only auto-run on a truly empty account; a returning user replays it from a button instead.
+  const [m, l, n, t, p] = await Promise.all([
+    Mom.countDocuments({ userId }, { limit: 1 }),
+    Link.countDocuments({ userId }, { limit: 1 }),
+    Note.countDocuments({ userId }, { limit: 1 }),
+    Task.countDocuments({ userId }, { limit: 1 }),
+    Project.countDocuments({ ownerId: userId }, { limit: 1 }),
+  ]);
+  return { done: false, autoStart: !(m || l || n || t || p) };
+}
+
+export async function markTourDone() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { success: false };
+  await connectToDatabase();
+  await User.updateOne({ _id: session.user.id }, { $set: { tourDone: true } });
+  return { success: true };
+}
+
 export async function markIntro(step: string) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id || !isIntroStep(step)) return { success: false };

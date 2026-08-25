@@ -9,6 +9,7 @@ import AuthProvider from "@/components/AuthProvider";
 import SendIntentListener from "@/components/SendIntentListener";
 import BackButtonListener from "@/components/BackButtonListener";
 import JarvisWidget from "@/components/JarvisWidget";
+import Tour from "@/components/Tour";
 import { FeedbackProvider } from "@/components/ui/Feedback";
 import { cookies } from "next/headers";
 import { getServerSession } from "next-auth/next";
@@ -78,6 +79,7 @@ export default async function RootLayout({
                   {children}
                 </main>
                 <JarvisWidget />
+                <Tour />
               </ViewProvider>
             </PreviewProvider>
             </FeedbackProvider>

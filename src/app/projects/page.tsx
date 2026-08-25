@@ -59,7 +59,7 @@ export default function ProjectsPage() {
         <p className="page-subtitle">{projects.length ? `${projects.length} group${projects.length > 1 ? 's' : ''}` : 'Everything for one piece of work, and everyone on it, in one place'}</p>
       </header>
 
-      <form onSubmit={handleCreate} className="quick-add">
+      <form onSubmit={handleCreate} className="quick-add" data-tour="project-add">
         <div className="quick-add-main">
           <input type="text" placeholder="New project…" value={name} onChange={e => setName(e.target.value)} />
           <button type="submit" className="btn-primary" disabled={!name.trim() || creating}

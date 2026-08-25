@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Eye } from 'lucide-react';
+import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Eye, Compass } from 'lucide-react';
 import { getContacts } from '@/actions/contact';
 import { getMyOpenTasks } from '@/actions/task';
 import { getProjects } from '@/actions/project';
@@ -133,6 +133,19 @@ export default function ProfilePage() {
           <span style={{ display: 'block', fontWeight: 700 }}>Share the app</span>
           <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
             Send someone the download link and install steps
+          </span>
+        </span>
+      </button>
+
+      <button onClick={() => window.dispatchEvent(new Event('tour:start'))} className="card" style={{
+        display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
+        marginTop: '14px', textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit',
+      }}>
+        <span className="row-icon"><Compass size={18} strokeWidth={2.2} /></span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontWeight: 700 }}>Take the tour</span>
+          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            A quick guided walk through the app, any time
           </span>
         </span>
       </button>
