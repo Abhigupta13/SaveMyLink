@@ -195,28 +195,53 @@ main:has(> .landing) { margin-left: 0 !important; padding: 0 !important; }
 .landing .loop-progress i { display: block; height: 100%; width: 100%; background: #e08a6a; transform-origin: left; animation: lp-drain var(--dwell, 4s) linear forwards; }
 @media (max-width: 800px) { .landing .loop { grid-template-columns: 1fr; gap: 24px; } .landing .stg.on { transform: none; } .landing .loop-screen { min-height: 420px; } }
 
-/* ── The pocket: the six things, drawn as one phone's home screen. ── */
+/* ── The pocket: the app's own Home, drawn small inside a phone. Everything in here is a scaled
+   copy of a real surface — .home-greeting, .tiles-bar, .tiles.grid, .bottom-nav in globals.css —
+   on the same tokens, so the picture moves when the app does. ── */
 .landing .pocket { margin-top: 52px; display: flex; flex-direction: column; align-items: center; }
 .landing .phone { --pw: 300px; width: var(--pw); padding: 10px; border-radius: 44px; background: light-dark(#e6e1d7, #34312c); box-shadow: 0 0 0 1px light-dark(rgba(31,30,29,.14), rgba(255,255,255,.10)), 0 40px 70px -34px rgba(0,0,0,.45); }
-.landing .ph-screen { aspect-ratio: 9 / 16; border-radius: 36px; padding: 12px 14px 14px; display: flex; flex-direction: column; overflow: hidden; background: linear-gradient(165deg, var(--bg-secondary), var(--bg-tertiary) 60%, var(--accent-soft)); border: 1px solid light-dark(rgba(31,30,29,.10), rgba(255,255,255,.08)); }
+.landing .ph-screen { position: relative; aspect-ratio: 9 / 16; border-radius: 36px; padding: 12px 12px 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-color); border: 1px solid light-dark(rgba(31,30,29,.10), rgba(255,255,255,.08)); }
 .landing .ph-status { display: flex; align-items: center; gap: 8px; font-size: 10px; font-weight: 700; color: var(--text-secondary); letter-spacing: .02em; }
 .landing .ph-notch { flex: 1; height: 12px; max-width: 74px; margin: 0 auto; border-radius: 999px; background: light-dark(rgba(31,30,29,.16), rgba(0,0,0,.55)); }
 .landing .ph-bars { display: flex; align-items: flex-end; gap: 2px; }
 .landing .ph-bars i { width: 2.5px; border-radius: 1px; background: var(--text-tertiary); }
 .landing .ph-bars i:nth-child(1) { height: 4px; } .landing .ph-bars i:nth-child(2) { height: 7px; } .landing .ph-bars i:nth-child(3) { height: 10px; }
-.landing .ph-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px 6px; margin-top: 24px; }
-.landing .app { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font: inherit; color: var(--text-secondary); cursor: pointer; transition: transform .45s cubic-bezier(.2,.8,.2,1), color .45s; }
-.landing .app .ic { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; color: var(--accent-text); background: light-dark(#fff, rgba(255,255,255,.07)); border: 1px solid light-dark(rgba(31,30,29,.08), rgba(255,255,255,.09)); box-shadow: 0 2px 6px -2px rgba(0,0,0,.18); transition: transform .45s cubic-bezier(.2,.8,.2,1), box-shadow .45s, background .45s, border-color .45s; }
-.landing .app .lb { font-size: 10.5px; font-weight: 600; letter-spacing: .01em; }
-.landing .app.on { color: var(--text-primary); transform: translateY(-4px); }
-.landing .app.on .ic { background: var(--accent-strong); color: #fff; border-color: transparent; transform: scale(1.08); box-shadow: 0 12px 22px -10px var(--accent-color), 0 0 0 6px var(--accent-soft); }
-.landing .app:focus-visible { outline: none; }
-.landing .app:focus-visible .ic { outline: 2px solid var(--accent-color); outline-offset: 4px; }
-.landing .ph-dots { display: flex; justify-content: center; gap: 5px; margin-top: auto; }
-.landing .ph-dots i { width: 5px; height: 5px; border-radius: 50%; background: light-dark(rgba(31,30,29,.18), rgba(255,255,255,.2)); transition: background .45s, transform .45s; }
-.landing .ph-dots i.on { background: var(--accent-strong); transform: scale(1.25); }
-.landing .ph-dock { margin-top: 12px; display: flex; justify-content: center; gap: 10px; padding: 9px; border-radius: 20px; background: light-dark(rgba(255,255,255,.6), rgba(255,255,255,.06)); border: 1px solid light-dark(rgba(31,30,29,.06), rgba(255,255,255,.07)); }
-.landing .ph-dock i { width: 30px; height: 30px; border-radius: 9px; background: light-dark(rgba(31,30,29,.09), rgba(255,255,255,.09)); }
+
+/* .home-greeting: wordmark pinned top-right, name, prompt. */
+.landing .ph-greet { position: relative; margin-top: 10px; padding-right: 38%; }
+.landing .ph-greet b { display: block; font-size: 17px; line-height: 1.2; font-weight: 800; letter-spacing: -.03em; color: var(--text-primary); }
+.landing .ph-greet > span { display: block; font-size: 10px; line-height: 1.3; font-weight: 600; color: var(--text-secondary); }
+.landing .ph-greet .ph-mark { position: absolute; top: 1px; right: 0; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 8px; font-weight: 900; letter-spacing: .05em; color: var(--accent-text); }
+.landing .ph-mark i { font-style: normal; font-weight: 800; color: var(--text-tertiary); margin-left: .3em; }
+
+/* .tiles-bar */
+.landing .ph-vault { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 6px; color: var(--text-tertiary); }
+.landing .ph-vault span { font-size: 7px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+
+/* .tiles.grid — two columns on a phone, exactly as the app lays them out. */
+.landing .ph-tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.landing .ph-tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 7px 6px; border-radius: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); box-shadow: var(--card-shadow); color: var(--text-primary); font: inherit; text-align: center; }
+.landing button.ph-tile { cursor: pointer; transition: transform .45s cubic-bezier(.2,.8,.2,1), border-color .45s, box-shadow .45s; }
+.landing .ph-ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--bg-tertiary); color: var(--accent-text); transition: background .45s, color .45s; }
+.landing .ph-tt { font-size: 10px; font-weight: 800; line-height: 1.2; }
+/* The spotlight is the app's own hover state, turned up so it reads at this size. */
+.landing .ph-tile.on { border-color: transparent; transform: translateY(-3px); box-shadow: 0 10px 20px -10px var(--accent-color), 0 0 0 2px var(--accent-color); }
+.landing .ph-tile.on .ph-ic { background: var(--accent-strong); color: #fff; }
+.landing .ph-tile:focus-visible, .landing .ph-jarvis:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 3px; }
+
+/* .jarvis-fab — floats over the grid, clear of the tab bar, as it does in the app. */
+.landing .ph-jarvis { position: absolute; right: 14px; bottom: 54px; width: 30px; height: 30px; border-radius: 50%; border: 0; display: grid; place-items: center; color: #fff; background: var(--accent-gradient); box-shadow: 0 6px 16px -4px color-mix(in srgb, var(--accent-color) 55%, transparent); cursor: pointer; transition: transform .45s cubic-bezier(.2,.8,.2,1), box-shadow .45s; }
+.landing .ph-jarvis::before { content: ''; position: absolute; inset: -8px; border-radius: 50%; }  /* 46px tap target around a 30px button */
+.landing .ph-jarvis.on { transform: scale(1.14); box-shadow: 0 10px 22px -6px var(--accent-color), 0 0 0 5px var(--accent-soft); }
+
+/* .bottom-nav — full-bleed to the screen edge, glass, five tabs and the avatar. */
+.landing .ph-tabs { margin: auto -12px 0; display: flex; justify-content: space-around; padding: 6px 4px 10px; background: var(--glass-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border-top: 1px solid var(--border-color); }
+.landing .ph-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; color: var(--text-secondary); }
+.landing .ph-tab i { font-style: normal; font-size: 7px; font-weight: 700; }
+.landing .ph-tab.on { color: var(--accent-text); }
+.landing .ph-tab.on svg { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent-color) 50%, transparent)); }
+.landing .ph-av { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-gradient); color: #fff; font-size: 8px; font-weight: 800; }
+
 .landing .pocket-cap { margin: 28px auto 0; max-width: 30rem; min-height: 3.4em; text-align: center; font-family: var(--font-display); font-size: clamp(19px, 2vw, 25px); line-height: 1.45; color: var(--text-secondary); font-variation-settings: 'opsz' 24, 'SOFT' 50; }
 .landing .pocket-cap b { font-weight: 400; font-style: italic; color: var(--text-primary); }
 /* Wide screens: the phone sits left, the line it is saying sits beside it. */
@@ -273,11 +298,26 @@ main:has(> .landing) { margin-left: 0 !important; padding: 0 !important; }
   .landing .pocket-section .lede { margin-top: 18px; }
   .landing .pocket { margin-top: 26px; }
   .landing .phone { --pw: 244px; border-radius: 36px; }
-  .landing .ph-screen { aspect-ratio: 9 / 14; border-radius: 29px; padding: 10px 10px 12px; }
-  .landing .ph-grid { gap: 14px 4px; margin-top: 18px; }
-  .landing .app .ic { width: 44px; height: 44px; border-radius: 13px; }
-  .landing .ph-dock { margin-top: 10px; gap: 8px; padding: 7px; border-radius: 17px; }
-  .landing .ph-dock i { width: 26px; height: 26px; }
+  .landing .ph-screen { aspect-ratio: 9 / 14; border-radius: 29px; padding: 9px 9px 0; }
+  .landing .ph-status { font-size: 8px; gap: 6px; }
+  .landing .ph-notch { height: 9px; max-width: 58px; }
+  .landing .ph-greet { margin-top: 4px; }
+  .landing .ph-greet b { font-size: 13px; }
+  .landing .ph-greet > span { font-size: 8px; }
+  .landing .ph-greet .ph-mark { font-size: 6.5px; gap: 3px; }
+  .landing .ph-vault { margin: 6px 0 3px; }
+  .landing .ph-vault span { font-size: 6px; }
+  .landing .ph-tiles { gap: 4px; }
+  .landing .ph-tile { gap: 3px; padding: 5px 4px; border-radius: 10px; }
+  .landing .ph-ic { width: 21px; height: 21px; border-radius: 7px; }
+  .landing .ph-ic svg { width: 12px; height: 12px; }
+  .landing .ph-tt { font-size: 7.5px; }
+  .landing .ph-jarvis { right: 10px; bottom: 40px; width: 24px; height: 24px; }
+  .landing .ph-jarvis svg { width: 12px; height: 12px; }
+  .landing .ph-tabs { margin: auto -9px 0; padding: 3px 2px 6px; }
+  .landing .ph-tab svg { width: 11px; height: 11px; }
+  .landing .ph-tab i { font-size: 5.5px; }
+  .landing .ph-av { width: 15px; height: 15px; font-size: 6px; }
   .landing .pocket-cap { margin-top: 18px; font-size: 17px; min-height: 3em; }
   .landing .stage { grid-template-columns: 1fr; gap: 22px; padding: 22px; }
   .landing .tab { padding: 8px 12px; font-size: 13px; }
@@ -311,6 +351,6 @@ main:has(> .landing) { margin-left: 0 !important; padding: 0 !important; }
   .landing .tab.on::after, .landing .panel.on .a, .landing .panel.on .notif, .landing .rec .dotr, .landing .wave i, .landing .think i,
   .landing .stg .n::after, .landing .loop-progress i, .landing .ls .transcript, .landing .ls .row, .landing .ls .notif, .landing .ls .pick { animation: none !important; }
   .landing .transcript { width: 100%; border-right-color: transparent; }
-  .landing .stg, .landing .ls, .landing .ln, .landing .app, .landing .app .ic { transition: none; }
+  .landing .stg, .landing .ls, .landing .ln, .landing .ph-tile, .landing .ph-ic, .landing .ph-jarvis { transition: none; }
   .landing .ln { opacity: 1; font-size: clamp(24px, 3vw, 34px); }
 }

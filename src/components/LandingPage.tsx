@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Mic, ListChecks, Sparkles, Share2, Users, BellRing, StickyNote, Lock, Globe } from 'lucide-react';
+import { Mic, ListChecks, Sparkles, Share2, Users, Lock, Globe, Home as HomeIcon, List, Search } from 'lucide-react';
 import Mark from './brand/Mark';
 import Wordmark from './brand/Wordmark';
+import { NAV, MOBILE_NAV } from '@/lib/nav';
 import '@/styles/landing.css';
 
 const reduced = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -204,42 +205,75 @@ function Loop() {
   );
 }
 
-const FEATURES = [
-  { Icon: Sparkles, label: 'Jarvis', title: 'Ask Jarvis', text: 'Answers out loud, from your own stuff.' },
-  { Icon: Share2, label: 'Save', title: 'Save from anywhere', text: 'Share from any app. Filed for you.' },
-  { Icon: BellRing, label: 'Reminders', title: 'Reminders that reach you', text: 'A real notification, until you tick it.' },
-  { Icon: StickyNote, label: 'Notes', title: 'Notes and files together', text: 'Notes, PDFs, docs — one search.' },
-  { Icon: Users, label: 'Groups', title: 'Project groups', text: 'Add people like a WhatsApp group.' },
-  { Icon: Lock, label: 'Safe', title: 'Private Safe', text: 'Sensitive things behind a PIN.' },
-];
+/* The Home grid the signed-in app actually draws (HomeTiles: every NAV destination, plus Search
+   which is a FAB everywhere else). Read from NAV so a new destination shows up here too. */
+const PH_TILES = [...NAV, { href: '/search', Icon: Search, title: 'Search' }];
+const PH_TABS = NAV.filter(n => MOBILE_NAV.includes(n.href));
 
-/* One phone, six things in it. A spotlight walks the home screen; hover/tap holds it.
-   Reduced motion never ticks, so tile one stays lit with its caption. */
+/* Six things the phone is for, each pinned to the real surface it lives on — five Home tiles
+   and Jarvis, which in the app is a floating button, not a tile. Walk order follows the grid. */
+const FEATURES = [
+  { at: '/links', title: 'Save from anywhere', text: 'Share from any app. Filed for you.' },
+  { at: '/notes', title: 'Notes and files together', text: 'Notes, PDFs, docs — one search.' },
+  { at: '/tasks', title: 'Reminders that reach you', text: 'A real notification, until you tick it.' },
+  { at: '/projects', title: 'Project groups', text: 'Add people like a WhatsApp group.' },
+  { at: '/d-locker', title: 'Private Safe', text: 'Sensitive things behind a PIN.' },
+  { at: 'jarvis', title: 'Ask Jarvis', text: 'Answers out loud, from your own stuff.' },
+];
+const JARVIS = FEATURES.length - 1;
+
+/* One phone running the app's own Home screen; a spotlight walks six of its tiles and the Jarvis
+   button, lighting the matching bottom tab as it goes. Hover/tap holds it. Reduced motion never
+   ticks, so the first tile stays lit with its caption. A toolbar, not a tablist: the grid also
+   holds the destinations no feature line points at. */
 function Pocket() {
   const ref = useRef<HTMLDivElement>(null);
   const [i, setI] = useState(0);
   const { setPaused } = useCycle(ref, () => setI(n => (n + 1) % FEATURES.length), 2000, [i]);
   const pick = (n: number) => { setI((n + FEATURES.length) % FEATURES.length); setPaused(true); };
+  const at = FEATURES[i].at;
+  const spot = (k: number) => ({
+    'aria-pressed': k === i, 'aria-label': `${FEATURES[k].title}. ${FEATURES[k].text}`,
+    tabIndex: k === i ? 0 : -1, type: 'button' as const,
+    onClick: () => pick(k), onMouseEnter: () => pick(k), onFocus: () => pick(k),
+  });
   return (
     <div ref={ref} className="pocket" onMouseLeave={() => setPaused(false)}>
       <div className="phone">
         <div className="ph-screen">
           <div className="ph-status" aria-hidden="true"><span>9:41</span><i className="ph-notch" /><span className="ph-bars"><i /><i /><i /></span></div>
-          <div className="ph-grid" role="tablist" aria-label="What lives in the app"
+
+          <header className="ph-greet">
+            <span className="ph-mark" aria-hidden="true"><Mark size={11} />ALL <i>YOU NEED</i></span>
+            <b>Hi, Swaraj</b>
+            <span>What&apos;s on your mind?</span>
+          </header>
+          <div className="ph-vault" aria-hidden="true"><span>Your vault</span><List size={9} strokeWidth={2.4} /></div>
+
+          <div className="ph-tiles" role="toolbar" aria-label="What lives in the app"
             onKeyDown={e => { if (e.key === 'ArrowRight') pick(i + 1); if (e.key === 'ArrowLeft') pick(i - 1); }}>
-            {FEATURES.map(({ Icon, label, title }, k) => (
-              <button key={label} type="button" role="tab" aria-selected={k === i} aria-label={title} tabIndex={k === i ? 0 : -1}
-                className={`app ${k === i ? 'on' : ''}`} onClick={() => pick(k)} onMouseEnter={() => pick(k)} onFocus={() => pick(k)}>
-                <span className="ic"><Icon size={22} strokeWidth={2} aria-hidden="true" /></span>
-                <span className="lb">{label}</span>
-              </button>
-            ))}
+            {PH_TILES.map(({ href, Icon, title }) => {
+              const k = FEATURES.findIndex(f => f.at === href);
+              const face = <><span className="ph-ic"><Icon size={17} strokeWidth={2.2} aria-hidden="true" /></span><span className="ph-tt">{title}</span></>;
+              return k < 0
+                ? <div key={href} className="ph-tile">{face}</div>
+                : <button key={href} className={`ph-tile ${k === i ? 'on' : ''}`} {...spot(k)}>{face}</button>;
+            })}
+            <button className={`ph-jarvis ${at === 'jarvis' ? 'on' : ''}`} {...spot(JARVIS)}>
+              <Sparkles size={15} strokeWidth={2.2} aria-hidden="true" />
+            </button>
           </div>
-          <div className="ph-dots" aria-hidden="true">{FEATURES.map((f, k) => <i key={f.label} className={k === i ? 'on' : ''} />)}</div>
-          <div className="ph-dock" aria-hidden="true"><i /><i /><i /><i /></div>
+
+          <nav className="ph-tabs" aria-hidden="true">
+            <span className={`ph-tab ${MOBILE_NAV.includes(at) ? '' : 'on'}`}><HomeIcon size={14} strokeWidth={2.2} /><i>Home</i></span>
+            {PH_TABS.map(({ href, Icon, title }) => (
+              <span key={href} className={`ph-tab ${at === href ? 'on' : ''}`}><Icon size={14} strokeWidth={2.2} /><i>{title}</i></span>
+            ))}
+            <span className="ph-tab"><i className="ph-av">S</i></span>
+          </nav>
         </div>
       </div>
-      <p className="pocket-cap" role="tabpanel"><b>{FEATURES[i].title}.</b> {FEATURES[i].text}</p>
+      <p className="pocket-cap"><b>{FEATURES[i].title}.</b> {FEATURES[i].text}</p>
     </div>
   );
 }
