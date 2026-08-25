@@ -13,6 +13,23 @@ import { FeedbackProvider } from "@/components/ui/Feedback";
 import { cookies } from "next/headers";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
+import { Inter, Plus_Jakarta_Sans, Fraunces } from "next/font/google";
+
+/* The three faces the design actually uses. They were loaded with an @import at the top of
+   globals.css, which the production build drops — the deployed site has been rendering in
+   system sans and Georgia this whole time. next/font self-hosts them instead, so they are
+   served from our own origin, preloaded, and cannot silently go missing again. */
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
+const jakarta = Plus_Jakarta_Sans({ subsets: ["latin"], variable: "--font-jakarta", display: "swap" });
+// opsz and SOFT are non-default axes; the display rules set them through font-variation-settings,
+// and italic is used by the sign-in side panel. Ask for all of it or those rules do nothing.
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+  axes: ["SOFT", "opsz"],
+  variable: "--font-fraunces",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "ALL you need",
@@ -45,7 +62,7 @@ export default async function RootLayout({
     <html
       lang="en"
       data-theme={theme === 'light' || theme === 'dark' ? theme : undefined}
-      className="h-full antialiased"
+      className={`h-full antialiased ${inter.variable} ${jakarta.variable} ${fraunces.variable}`}
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
