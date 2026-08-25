@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut, Lock, Unlock, Share2, FileText, BarChart3 } from 'lucide-react';
+import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Eye } from 'lucide-react';
 import { getContacts } from '@/actions/contact';
 import { getMyOpenTasks } from '@/actions/task';
 import { getProjects } from '@/actions/project';
@@ -133,6 +133,19 @@ export default function ProfilePage() {
           </span>
         </span>
       </button>
+
+      <Link href="/your-data" className="card" style={{
+        display: 'flex', alignItems: 'center', gap: '12px',
+        marginTop: '10px', textDecoration: 'none', color: 'inherit',
+      }}>
+        <span className="row-icon"><Eye size={18} strokeWidth={2.2} /></span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontWeight: 700 }}>Who can see my data</span>
+          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            Your groups, what you have put in each, and how to stop sharing
+          </span>
+        </span>
+      </Link>
 
       <Link href="/terms" className="card" style={{
         display: 'flex', alignItems: 'center', gap: '12px',

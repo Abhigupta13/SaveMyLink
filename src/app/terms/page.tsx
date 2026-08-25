@@ -70,7 +70,7 @@ export default function TermsPage() {
       ))}
 
       <p className="auth-foot" style={{ marginTop: '20px' }}>
-        <Link href="/">Back to the app</Link> · <Link href="/download">Get the Android app</Link>
+        <Link href="/">Back to the app</Link> · <Link href="/your-data">Who can see my data</Link> · <Link href="/download">Get the Android app</Link>
       </p>
     </div>
   );
