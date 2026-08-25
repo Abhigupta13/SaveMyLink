@@ -9,6 +9,7 @@ import { getProjects, createProject, deleteProject, renameProject } from '@/acti
 import ProjectPicker from '@/components/ProjectPicker';
 import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
 import { useFeedback } from '@/components/ui/Feedback';
+import { useShareNotice } from '@/components/ShareNotice';
 import { formatTime, formatDay } from '@/lib/time';
 import { isProjectOwner, canWrite } from '@/lib/scope';
 
@@ -54,6 +55,7 @@ function groupTasks(tasks: any[]): Group[] {
 
 export default function TasksPage() {
   const { toast, confirm } = useFeedback();
+  const { confirmShare, shareDialog } = useShareNotice();
   const { data: session, status } = useSession();
   const [projects, setProjects] = useState<any[]>([]);
   const [activeProject, setActiveProject] = useState<any | null>(null);
@@ -86,6 +88,7 @@ export default function TasksPage() {
 
   const saveEdit = async () => {
     if (!editing) return;
+    if (!(await confirmShare(projects.find(p => p._id === draft.projectId)))) return;
     const res = await updateTask(editing._id, {
       title: draft.title.trim() || editing.title,
       description: draft.description.trim(),
@@ -147,6 +150,7 @@ export default function TasksPage() {
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
+    if (!(await confirmShare(activeProject))) return;
     const t = title; setTitle('');
     const tempId = `tmp-${Date.now()}`;
     setTasks(prev => [{ _id: tempId, title: t, completed: false, dueAt: due ? new Date(due).toISOString() : null, isTemp: true }, ...prev]);
@@ -218,6 +222,7 @@ export default function TasksPage() {
 
   return (
     <div className="container" style={{ padding: '24px 16px 120px' }}>
+      {shareDialog}
       <header style={{ marginBottom: '18px' }}>
         <h1 className="page-title">{activeProject ? activeProject.name : 'Tasks'}</h1>
         <p className="page-subtitle">{subtitle}</p>

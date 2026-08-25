@@ -23,3 +23,16 @@ export function needsShareNotice(seen: readonly string[] | null | undefined, pro
   const list = seen || [];
   return !list.includes('*') && !list.includes(projectId);
 }
+
+/** How many people can see a group's work: creator + members + viewers, counted once each. */
+export function memberCount(project: {
+  ownerId?: { email?: string | null } | string | null;
+  memberEmails?: (string | null | undefined)[] | null;
+  viewerEmails?: (string | null | undefined)[] | null;
+} | null | undefined): number {
+  if (!project) return 0;
+  const owner = typeof project.ownerId === 'object' ? project.ownerId?.email : null;
+  const all = [owner, ...(project.memberEmails || []), ...(project.viewerEmails || [])]
+    .map(e => String(e || '').trim().toLowerCase()).filter(Boolean);
+  return Math.max(1, new Set(all).size);
+}

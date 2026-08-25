@@ -17,6 +17,7 @@ export interface IUser extends Document {
   privatePin?: string;
   image?: string;
   contactsSeeded?: string[];
+  shareNoticeSeen?: string[];
 }
 
 const UserSchema: Schema<IUser> = new Schema({
@@ -38,7 +39,9 @@ const UserSchema: Schema<IUser> = new Schema({
   // Addresses already turned into a Contact from a project's people. Without this the seeding in
   // getContacts would re-create anyone you deleted on the very next page load, and there would be
   // no way to remove them from the UI at all.
-  contactsSeeded: [{ type: String, lowercase: true }]
+  contactsSeeded: [{ type: String, lowercase: true }],
+  // Groups the "everyone in X will see this" sheet has already been shown for; '*' = never again
+  shareNoticeSeen: [{ type: String }],
 }, { timestamps: true });
 
 export const User: Model<IUser> = defineModel<IUser>('User', UserSchema);

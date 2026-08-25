@@ -8,6 +8,7 @@ import { getNotes, createNote, updateNote, deleteNote, attachToNote, removeAttac
 import { getProjects, createProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
 import { useFeedback } from '@/components/ui/Feedback';
+import { useShareNotice } from '@/components/ShareNotice';
 import { shrinkImage } from '@/lib/shrinkImage';
 import { formatTime, formatDay } from '@/lib/time';
 import { isProjectOwner } from '@/lib/scope';
@@ -24,6 +25,7 @@ const when = (iso: string) => {
 
 export default function NotesPage() {
   const { toast, confirm } = useFeedback();
+  const { confirmShare, shareDialog } = useShareNotice();
   const { data: session, status } = useSession();
   const myEmail = (session?.user?.email || '').toLowerCase();
   const [notes, setNotes] = useState<any[]>([]);
@@ -81,6 +83,7 @@ export default function NotesPage() {
       if (id) await deleteNote(id);   // created by an attach that was then removed again
       setEditing(null); load(); return;
     }
+    if (!(await confirmShare(projects.find(p => String(p._id) === noteProject)))) return;
     const res = id
       ? await updateNote(id, { title: title.trim(), body: body.trim(), projectId: noteProject })
       : await createNote({ title: title.trim(), body: body.trim(), projectId: noteProject });
@@ -214,6 +217,7 @@ export default function NotesPage() {
 
   return (
     <div className="container" style={{ padding: '24px 16px 120px' }}>
+      {shareDialog}
       <header style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '18px', gap: '12px' }}>
         <div>
           <h1 className="page-title">{scope ? scope.name : 'Notes'}</h1>

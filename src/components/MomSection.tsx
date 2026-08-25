@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { getMoms, uploadMomAudio, uploadMomAudioSarvam, pollMomTranscription, extractMomTasks, confirmMomTasks, deleteMom, momImpact, updateMom } from '@/actions/mom';
 import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
+import { useShareNotice } from '@/components/ShareNotice';
 import { isProjectOwner, canWrite } from '@/lib/scope';
 import { formatDay, formatDate } from '@/lib/time';
 
@@ -19,6 +20,7 @@ const MAX_SECONDS = 2 * 60 * 60;   // Sarvam accepts at most 2 hours in one file
 
 export default function MomSection({ project, projects = [], myEmail, memberOptions, onTasksCreated }: MomSectionProps) {
   const { toast, confirm } = useFeedback();
+  const { confirmShare, shareDialog } = useShareNotice();
   const [moms, setMoms] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [recording, setRecording] = useState(false);
@@ -247,6 +249,10 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       dueAt: d.dueAt ? new Date(d.dueAt).toISOString() : undefined,
       projectId: d.projectId,   // '' is a real choice (Personal) — never collapse it to undefined
     }));
+    // Once for the batch, per distinct group the items are going into
+    for (const pid of new Set(items.map(i => i.projectId).filter(Boolean))) {
+      if (!(await confirmShare(allProjects.find(p => String(p?._id) === pid)))) return;
+    }
     const res = await confirmMomTasks(momId, items);
     if (res.success) {
       fetchMoms();
@@ -312,6 +318,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
 
   return (
     <div>
+      {shareDialog}
       {/* Recorder */}
       {canEdit && <div className="mom-recorder" style={{
         display: 'flex', alignItems: 'center', gap: '16px', padding: '20px', marginBottom: hinglish ? '24px' : '8px',

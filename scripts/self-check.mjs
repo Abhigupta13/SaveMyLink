@@ -12,7 +12,7 @@ import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
-import { projectNameMap, sharedLabel, needsShareNotice } from '../src/lib/visibility.ts';
+import { projectNameMap, sharedLabel, needsShareNotice, memberCount } from '../src/lib/visibility.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -443,5 +443,8 @@ assert.equal(needsShareNotice(['*'], 'p2'), false, '"Don\'t show this again" sil
 assert.equal(needsShareNotice([], ''), false, 'personal never asks');
 assert.equal(needsShareNotice(undefined, null), false);
 assert.equal(needsShareNotice(undefined, 'p1'), true, 'no record yet means never seen');
+assert.equal(memberCount({ ownerId: { email: 'a@x.com' }, memberEmails: ['A@x.com', 'b@x.com'], viewerEmails: ['c@x.com'] }), 3, 'owner in memberEmails is not counted twice');
+assert.equal(memberCount({ ownerId: 'rawid' }), 1, 'a raw id still counts the creator');
+assert.equal(memberCount(null), 0);
 
 console.log('self-check: all assertions passed');

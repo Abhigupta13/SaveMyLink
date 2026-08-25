@@ -7,6 +7,7 @@ import { getDocuments, addDocument, deleteDocument, moveDocument, fileDocumentUn
 import { getProjects } from '@/actions/project';
 import { ExternalLink, Download, X } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
+import { useShareNotice } from '@/components/ShareNotice';
 
 interface DocType {
   _id: string;
@@ -25,6 +26,7 @@ const DEFAULT_FOLDER = 'Personal';
 
 export default function DLockerPage() {
   const { toast, confirm } = useFeedback();
+  const { confirmShare, shareDialog } = useShareNotice();
   const { data: session, status } = useSession();
   const router = useRouter();
   
@@ -77,6 +79,7 @@ export default function DLockerPage() {
   };
 
   const handleShareWithProject = async (id: string, projectId: string) => {
+    if (!(await confirmShare(projects.find(p => p._id === projectId)))) return;
     const res = await fileDocumentUnderProject(id, projectId);
     if (res.success) {
       const project = projects.find(p => p._id === projectId) || null;
@@ -88,7 +91,8 @@ export default function DLockerPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!docName) { toast('Please enter a name', 'error'); return; }
-    
+    if (!(await confirmShare(projects.find(p => p._id === docProject)))) return;
+
     setIsUploading(true);
     const formData = new FormData();
     formData.append('name', docName);
@@ -172,6 +176,7 @@ export default function DLockerPage() {
 
   return (
     <main className="container d-locker-container">
+      {shareDialog}
       {/* Shared by the add form and the move-to-folder box in the preview, so it lives out here */}
       <datalist id="folder-options">
         {folderOptions.map(f => <option key={f} value={f} />)}
@@ -316,9 +321,6 @@ export default function DLockerPage() {
                     <option value="">Just me</option>
                     {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
                   </select>
-                  <p style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', fontWeight: 600, margin: '6px 2px 0' }}>
-                    {docProject ? 'Everyone in that project can see and open this file.' : 'Only you can see it.'}
-                  </p>
                 </div>
               )}
 
