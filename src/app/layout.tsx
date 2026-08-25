@@ -11,6 +11,8 @@ import BackButtonListener from "@/components/BackButtonListener";
 import JarvisWidget from "@/components/JarvisWidget";
 import { FeedbackProvider } from "@/components/ui/Feedback";
 import { cookies } from "next/headers";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth";
 
 export const dynamic = 'force-dynamic';
 
@@ -31,13 +33,16 @@ export default async function RootLayout({
   // No attribute ("system") means the CSS follows the OS.
   const theme = cookieStore.get('theme')?.value;
 
+  // Handed to SessionProvider so client pages start with the session already in hand.
+  const session = await getServerSession(authOptions);
+
   let categories = [];
   try {
     categories = await getCategories(privateSafe);
   } catch (error) {
     console.warn("Failed to fetch categories. Database might not be connected yet.");
   }
-  
+
   return (
     <html
       lang="en"
@@ -46,7 +51,7 @@ export default async function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
-        <AuthProvider>
+        <AuthProvider session={session}>
           <UserProvider>
             <FeedbackProvider>
             <PreviewProvider>
