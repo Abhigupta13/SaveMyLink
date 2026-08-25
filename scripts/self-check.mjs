@@ -9,7 +9,7 @@ import { isAdmin, adminEmails } from '../src/lib/isAdmin.ts';
 import { suggestionEmail, inviteEmail, otpEmail } from '../src/lib/mailer.ts';
 import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, formatInZone } from '../src/lib/time.ts';
 import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
-import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite } from '../src/lib/scope.ts';
+import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite, withinProject } from '../src/lib/scope.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
@@ -564,5 +564,29 @@ assert.equal(audioMime('application/octet-stream'), 'audio/webm', 'never sent as
 // has Whisper's exact transliteration bug — it must never leak into this list.
 assert.ok(AUDIO_MODELS.length > 0, 'there is always an audio model to try');
 assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates English into Devanagari');
+
+// ---------------------------------------------------------------------------
+// Narrowing a read to one project. The group workspace hands getNotes/getDocuments a projectId
+// that came from the URL, so the id must only ever subtract from what the scope already allowed.
+{
+  const scope = { $or: [{ userId: 'me' }, { projectId: { $in: ['a', 'b'] } }] };
+
+  // No id: the scope is handed back untouched, so the personal lists are unaffected.
+  assert.deepEqual(withinProject(scope), scope, 'no projectId leaves the read scope alone');
+  assert.deepEqual(withinProject(scope, ''), scope, 'an empty id is not a filter');
+
+  // With one: BOTH conditions have to hold. A forged id lands outside the $in and matches nothing.
+  const narrowed = withinProject(scope, 'c');
+  assert.deepEqual(narrowed, { $and: [scope, { projectId: 'c' }] });
+  assert.ok(narrowed.$and?.[0]?.$or, 'the membership half survives — it is not replaced');
+
+  // The bug this shape exists to prevent: a spread would drop the $or's projectId and read
+  // every group in the database. Guard the actions that call it, not just the helper.
+  for (const file of ['../src/actions/note.ts', '../src/actions/document.ts']) {
+    const src = readFileSync(new URL(file, import.meta.url), 'utf8');
+    assert.ok(src.includes('withinProject('), `${file} narrows through withinProject`);
+    assert.ok(!/\{\s*\.\.\.scope,\s*projectId\s*\}/.test(src), `${file} never spreads the id over the scope`);
+  }
+}
 
 console.log('self-check: all assertions passed');

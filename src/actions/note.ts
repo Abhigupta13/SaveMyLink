@@ -7,6 +7,7 @@ import { Mom } from "@/lib/models/Mom";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 import { projectForWriter, mineOrMyProjects, canDelete } from "@/lib/projectAccess";
+import { withinProject } from "@/lib/scope";
 import { saveUpload, deleteUpload } from "@/lib/storage";
 import { extractText } from "@/lib/docText";
 
@@ -30,13 +31,22 @@ async function noteIWrite(id: string, userId: string, email: string) {
   return String(note.userId) === String(userId) ? note : null;
 }
 
-export async function getNotes() {
+/**
+ * Every note I may see, or — given a projectId — only that project's.
+ *
+ * The filter is ANDed onto my read scope rather than replacing it, so a projectId off the wire
+ * can only ever narrow what I was already allowed to read. It cannot widen it into someone
+ * else's group. The group workspace used to fetch all 500 and throw away everything that was
+ * not its own.
+ */
+export async function getNotes(projectId?: string) {
   try {
-    await connectToDatabase();
     const who = await me();
     if (!who) return { success: false, error: 'Unauthorized' };
+    await connectToDatabase();
+    const filter = withinProject(await mineOrMyProjects(who.userId, who.email), projectId);
     // Attachment text can be 12k a file and the list never renders it — leave it on the server
-    const notes = await Note.find(await mineOrMyProjects(who.userId, who.email)).select('-attachments.text')
+    const notes = await Note.find(filter).select('-attachments.text')
       .populate('projectId', 'name')   // meeting notes carry their project — shown as a chip on the card
       .populate('userId', 'email name')  // a project note may not be mine, so say whose it is
       .sort({ pinned: -1, updatedAt: -1 }).limit(500).lean();

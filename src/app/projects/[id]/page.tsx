@@ -6,10 +6,8 @@ import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText, AlertTriangle, BadgeCheck } from 'lucide-react';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask } from '@/actions/task';
-import { getProjects, addMember, removeMember, setProjectRole, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
-import { getMoms } from '@/actions/mom';
+import { getProjectWorkspace, addMember, removeMember, setProjectRole, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
 import { getNotes, createNote, deleteNote } from '@/actions/note';
-import { getDocuments } from '@/actions/document';
 import PersonPicker from '@/components/PersonPicker';
 import MomSection from '@/components/MomSection';
 import { useFeedback } from '@/components/ui/Feedback';
@@ -126,21 +124,9 @@ export default function ProjectWorkspace() {
     if (res.success) setTasks(res.tasks || []);
   }, [projectId]);
 
-  const fetchMoms = useCallback(async () => {
-    const res = await getMoms(projectId);
-    if (res.success) setMoms(res.moms || []);
-  }, [projectId]);
-
-  // Notes and documents are fetched whole and filtered here — both actions already return
-  // only what I may see, and neither list is big enough to be worth a project-scoped query.
   const fetchNotes = useCallback(async () => {
-    const res = await getNotes();
-    if (res.success) setNotes((res.notes || []).filter((n: any) => n.projectId?._id === projectId));
-  }, [projectId]);
-
-  const fetchFiles = useCallback(async () => {
-    const res = await getDocuments();
-    setFiles((res.docs || []).filter((d: any) => d.projectId?._id === projectId));
+    const res = await getNotes(projectId);
+    if (res.success) setNotes(res.notes || []);
   }, [projectId]);
 
   const fetchEvents = useCallback(async () => {
@@ -148,37 +134,48 @@ export default function ProjectWorkspace() {
     if (res.success) setEvents(res.events || []);
   }, [projectId, days]);
 
+  /**
+   * One call for the whole page. It used to be six in series from the browser, two of which
+   * fetched every note and every document in every group I am in so this page could throw
+   * away the ones that were not its own.
+   */
   const load = useCallback(async () => {
-    const res = await getProjects();
-    const found = res.success ? (res.projects || []).find((p: any) => String(p._id) === projectId) : null;
-    if (!found) { setNotFound(true); setLoading(false); return; }
+    const res = await getProjectWorkspace(projectId, days);
+    if (!res.success || !res.project) { setNotFound(true); setLoading(false); return; }
+    setProject(res.project);
     setProjects(res.projects || []);
-    setProject(found);
-    setNotesDraft(found.notes || '');
-    setRenaming(found.name);
-    await Promise.all([fetchTasks(), fetchMoms(), fetchNotes(), fetchFiles(), fetchEvents()]);
+    setTasks(res.tasks || []);
+    setMoms(res.moms || []);
+    setNotes(res.notes || []);
+    setFiles(res.documents || []);
+    setEvents(res.events || []);
+    setNotesDraft(res.project.notes || '');
+    setRenaming(res.project.name);
     setLoading(false);
-  }, [projectId, fetchTasks, fetchMoms, fetchNotes, fetchFiles, fetchEvents]);
+  }, [projectId, days]);
 
-  // load() depends on fetchEvents, which depends on `days` — so changing the window already
-  // re-runs this. A second effect for it would just fetch the trail twice.
+  // `days` is a dependency, so changing the trail's window re-runs this — the same as before,
+  // when load() depended on a fetchEvents that depended on days. A second effect for it would
+  // fetch the trail twice on mount.
+  // ponytail: the whole page reloads to move one dropdown. One call now instead of six, so it is
+  // cheap enough to leave; split it out if the trail's window turns into something people play with.
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
 
   /**
    * A shared project changes under you — someone ticks off a task, adds a meeting, joins.
-   * Re-fetch whenever you come back to the tab. Catches nearly everything a poll would, with
+   * Re-fetch when the tab becomes visible again. Catches nearly everything a poll would, with
    * no timer hitting the database while the page sits open in the background.
-   * ponytail: focus-only; add polling or sockets if people are ever in here simultaneously.
+   *
+   * visibilitychange only. `focus` fires on top of it for the same return-to-tab, and also every
+   * time the window regains focus from a dialog or a devtools pane, so the two together reloaded
+   * the whole page repeatedly while nothing had changed.
+   * ponytail: still not live; add polling or sockets if people are ever in here simultaneously.
    */
   useEffect(() => {
     if (status !== 'authenticated') return;
     const refresh = () => { if (document.visibilityState === 'visible') load(); };
     document.addEventListener('visibilitychange', refresh);
-    window.addEventListener('focus', refresh);
-    return () => {
-      document.removeEventListener('visibilitychange', refresh);
-      window.removeEventListener('focus', refresh);
-    };
+    return () => document.removeEventListener('visibilitychange', refresh);
   }, [status, load]);
 
   // ---------- tasks ----------
@@ -482,7 +479,7 @@ export default function ProjectWorkspace() {
           {sectionHead('meetings', 'Meetings', moms.length)}
           {openSections.meetings && (
             <MomSection project={project} projects={projects} myEmail={myEmail} memberOptions={memberOptions}
-              onTasksCreated={() => { fetchTasks(); fetchMoms(); fetchNotes(); load(); }} />
+              onTasksCreated={load} />
           )}
         </section>
 

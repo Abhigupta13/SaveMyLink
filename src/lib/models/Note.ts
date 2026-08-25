@@ -42,5 +42,8 @@ const NoteSchema = new Schema<INote>({
 }, { timestamps: true });
 
 NoteSchema.index({ userId: 1, pinned: -1, updatedAt: -1 });
+// The group workspace reads one project's notes in the list's own sort order. Without this the
+// project branch of the read scope — which has always been there, inside the $or — is a scan.
+NoteSchema.index({ projectId: 1, pinned: -1, updatedAt: -1 });
 
 export const Note: Model<INote> = defineModel<INote>('Note', NoteSchema);

@@ -10,6 +10,7 @@ import path from 'path';
 import { readFile } from 'fs/promises';
 import { extractText } from '@/lib/docText';
 import { projectForWriter, mineOrMyProjects } from '@/lib/projectAccess';
+import { withinProject } from '@/lib/scope';
 import { saveUpload, deleteUpload, readBytes } from '@/lib/storage';
 
 // Not exported: a 'use server' module may only export async functions, and a stray const
@@ -36,7 +37,11 @@ async function backfillText(userId: string) {
   }
 }
 
-export async function getDocuments() {
+/**
+ * My documents, or — given a projectId — only that project's. The id is ANDed onto my read
+ * scope, never substituted for it, so it can only narrow what I could already read.
+ */
+export async function getDocuments(projectId?: string) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { docs: [], folders: [] };
   const userId = (session.user as any).id;
@@ -50,7 +55,7 @@ export async function getDocuments() {
     // Mine, plus anything filed under a project I am in — a shared contract belongs to
     // everyone working on it, not only whoever happened to upload it.
     const scope = await mineOrMyProjects(userId, session.user.email, 'user');
-    const docs = await Document.find(scope).select('-text')
+    const docs = await Document.find(withinProject(scope, projectId)).select('-text')
       .populate('projectId', 'name').sort({ createdAt: -1 }).lean();
     return { docs: JSON.parse(JSON.stringify(docs)) };
   } catch (error: any) {

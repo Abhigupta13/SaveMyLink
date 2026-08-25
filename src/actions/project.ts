@@ -16,6 +16,10 @@ import { Event, recordEvent } from "@/lib/models/Event";
 import { sinceDays } from "@/lib/activity";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
+import { getTasks } from "@/actions/task";
+import { getMoms } from "@/actions/mom";
+import { getNotes } from "@/actions/note";
+import { getDocuments } from "@/actions/document";
 
 /**
  * A readable name for each email, so a project shows people rather than a wall of addresses.
@@ -40,6 +44,32 @@ async function displayNames(emails: string[], userId: string) {
     out.set(email, { name: u.name || byContact.get(email), hasAccount: true });
   }
   return out;
+}
+
+/**
+ * Just enough of every group to draw a row: the name, and the addresses the member count and the
+ * share notice are derived from. No About text, no per-member name resolution — the projects grid
+ * was pulling whole documents plus two extra collection reads for names it never rendered.
+ *
+ * getProjects stays for the callers that genuinely need `people`; this is for lists and pickers.
+ */
+export async function listProjects() {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+    await connectToDatabase();
+    const projects = await Project.find(await myProjectFilter(session.user.id, session.user.email))
+      .select('name ownerId ownerEmails memberEmails viewerEmails')
+      .populate('ownerId', 'email')
+      .sort({ createdAt: 1 })
+      .lean();
+
+    return { success: true, projects: JSON.parse(JSON.stringify(projects)) };
+  } catch (error) {
+    console.error('Failed to list projects:', error);
+    return { success: false, error: 'Failed to fetch projects' };
+  }
 }
 
 export async function getProjects() {
@@ -350,5 +380,66 @@ export async function getProjectEvents(projectId: string, days?: number) {
   } catch (error) {
     console.error('Failed to get project events:', error);
     return { success: false, error: 'Could not load what changed' };
+  }
+}
+
+/**
+ * Everything the group workspace draws, in one call.
+ *
+ * It used to make six from the browser — getProjects, then tasks, meetings, notes, documents and
+ * the trail — each one a serial round trip to a function that then went to Mongo. Worse, notes and
+ * documents came back whole (every note in every group I am in, up to 500) and the page threw away
+ * everything that was not this project's. Here they are asked for by project, on the server, next
+ * to the database.
+ *
+ * The gate is projectForMember, once, before anything is read — the same read gate every other
+ * project-scoped action uses, so a projectId off the wire is never trusted. The reads underneath
+ * are the existing actions rather than copies of them: each re-checks scope on its own, which is
+ * what keeps this from becoming a second place where access rules have to be right.
+ */
+export async function getProjectWorkspace(projectId: string, days?: number) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+    await connectToDatabase();
+    const project = await projectForMember(projectId, session.user.id, session.user.email);
+    if (!project) return { success: false, error: 'Not found' };
+    await project.populate('ownerId', 'email name');
+
+    const emails = [...new Set([
+      (project.ownerId as any)?.email,
+      ...(project.memberEmails || []),
+      ...(project.viewerEmails || []),
+    ].filter(Boolean))] as string[];
+
+    const [names, projects, tasks, moms, notes, docs, events] = await Promise.all([
+      // Only this group's people, not every person in every group I am in
+      displayNames(emails, session.user.id),
+      // MomSection routes confirmed items into any group, so it needs the names of all of them
+      listProjects(),
+      getTasks(projectId),
+      getMoms(projectId),
+      getNotes(projectId),
+      getDocuments(projectId),
+      getProjectEvents(projectId, days),
+    ]);
+
+    return {
+      success: true,
+      project: JSON.parse(JSON.stringify({
+        ...project.toObject(),
+        people: emails.map(email => ({ email, ...(names.get(email) || { hasAccount: false }) })),
+      })),
+      projects: projects.success ? projects.projects : [],
+      tasks: tasks.success ? tasks.tasks : [],
+      moms: moms.success ? moms.moms : [],
+      notes: notes.success ? notes.notes : [],
+      documents: docs.docs || [],
+      events: events.success ? events.events : [],
+    };
+  } catch (error) {
+    console.error('Failed to load project workspace:', error);
+    return { success: false, error: 'Could not load this group' };
   }
 }

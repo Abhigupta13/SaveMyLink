@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { Plus, Users, CheckSquare, Mic, FolderOpen } from 'lucide-react';
-import { getProjects, createProject, getProjectStats } from '@/actions/project';
+import { listProjects, createProject, getProjectStats } from '@/actions/project';
 import { useFeedback } from '@/components/ui/Feedback';
 
 export default function ProjectsPage() {
@@ -20,7 +20,9 @@ export default function ProjectsPage() {
   const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
-    const [p, s] = await Promise.all([getProjects(), getProjectStats()]);
+    // listProjects, not getProjects: this grid draws a name and three counts, and the full
+    // version also resolves a display name for every member of every group to render none of them.
+    const [p, s] = await Promise.all([listProjects(), getProjectStats()]);
     if (p.success) setProjects(p.projects || []);
     if (s.success) setStats(s.stats || {});
     setLoading(false);

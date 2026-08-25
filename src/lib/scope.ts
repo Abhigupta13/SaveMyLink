@@ -36,6 +36,17 @@ export function writerScope(userId: string, email: string | null | undefined, ve
   return { $or: or };
 }
 
+/**
+ * Narrow a read scope to one project. The projectId arrives from the client, so it is ANDed onto
+ * the scope and never substituted for it: the worst a forged id can do is match nothing. Writing
+ * `{ ...scope, projectId }` instead would look identical and work identically right up until the
+ * scope grew a `projectId` key of its own — mineOrMyProjects already has one — at which point the
+ * spread silently drops the membership half and the filter reads any group in the database.
+ */
+export function withinProject<T extends object>(scope: T, projectId?: string | null) {
+  return projectId ? { $and: [scope, { projectId }] } : scope;
+}
+
 /** What the client gets back: getProjects populates ownerId as {email, name}, elsewhere it is a raw id. */
 export interface OwnableProject {
   ownerId?: { email?: string | null } | string | null;
