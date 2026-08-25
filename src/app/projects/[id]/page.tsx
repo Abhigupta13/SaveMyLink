@@ -554,6 +554,10 @@ export default function ProjectWorkspace() {
                 const role = roleOf(email);
                 const owner = creator || role === 'owner';
                 const load = open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length;
+                /* One control for all three roles instead of a promote button, a demote
+                   button and a third for viewers. The creator is permanent, so their row
+                   offers nothing, and you cannot change your own — the server refuses both. */
+                const canSetRole = isOwner && !creator && email !== myEmail;
                 return (
                   <div key={email} className="task-row">
                     <span className="avatar-xs" style={{ width: '28px', height: '28px', fontSize: '0.75rem' }}>{nameOf(email)[0].toUpperCase()}</span>
@@ -561,33 +565,38 @@ export default function ProjectWorkspace() {
                       <div className="task-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {email === myEmail ? `${nameOf(email)} (you)` : nameOf(email)}
                       </div>
-                      <div className="task-meta">
+                      {/* One fact per line, in the order you ask them: where, what they may
+                          do, how much they are holding. */}
+                      <div className="task-meta stacked">
                         {/* The address still matters — it is what an invite was sent to */}
                         {people.get(email)?.name && <span className="chip" title={email}>{email}</span>}
-                        {/* One word for one power. "creator" read as a second, higher rank
-                            when it is only a fact about the past — who made the group, which
-                            the "Created by" note under the title already says. */}
-                        {owner && <span className="chip" title="Can add members, rename, and delete shared work">owner</span>}
-                        {/* Named on the row, because "why can't I type here" is the question a
-                            client asks, and the answer should be visible before they ask it. */}
-                        {role === 'viewer' && <span className="chip viewer" title="Sees everything in this group and changes nothing">view only</span>}
+                        {/* The role line: the select where it can be changed, the chip where
+                            it cannot. Both in the same slot, so the eye finds a member's role
+                            in the same place on every row. */}
+                        {canSetRole ? (
+                          <select className="ws-days ws-role" value={role} disabled={busyOwner === email}
+                            onChange={e => handleRole(email, e.target.value as 'owner' | 'member' | 'viewer')} aria-label={`Role for ${nameOf(email)}`}>
+                            <option value="owner">Owner</option>
+                            <option value="member">Member</option>
+                            <option value="viewer">View only</option>
+                          </select>
+                        ) : (
+                          <>
+                            {/* One word for one power. "creator" read as a second, higher rank
+                                when it is only a fact about the past — who made the group, which
+                                the "Created by" note under the title already says. */}
+                            {owner && <span className="chip" title="Can add members, rename, and delete shared work">owner</span>}
+                            {/* Named on the row, because "why can't I type here" is the question a
+                                client asks, and the answer should be visible before they ask it. */}
+                            {role === 'viewer' && <span className="chip viewer" title="Sees everything in this group and changes nothing">view only</span>}
+                          </>
+                        )}
                         <span className="chip">{load} open</span>
                         {/* "pending", not "invite sent" — members added before invite emails
                             existed never got one, and the chip should not claim otherwise */}
                         {!people.get(email)?.hasAccount && <span className="chip" title="No account yet — they see the project once they sign up with this address">pending</span>}
                       </div>
                     </div>
-                    {/* One control for all three roles instead of a promote button, a demote
-                        button and a third for viewers. The creator is permanent, so their row
-                        offers nothing, and you cannot change your own — the server refuses both. */}
-                    {isOwner && !creator && email !== myEmail && (
-                      <select className="ws-days" value={role} disabled={busyOwner === email}
-                        onChange={e => handleRole(email, e.target.value as 'owner' | 'member' | 'viewer')} aria-label={`Role for ${nameOf(email)}`}>
-                        <option value="owner">Owner</option>
-                        <option value="member">Member</option>
-                        <option value="viewer">View only</option>
-                      </select>
-                    )}
                     {isOwner && !owner && <button className="task-del" onClick={() => handleRemove(email)} title="Remove">×</button>}
                   </div>
                 );

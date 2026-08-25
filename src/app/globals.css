@@ -2657,6 +2657,21 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .chip.viewer { background: color-mix(in srgb, var(--text-tertiary) 16%, transparent); color: var(--text-secondary); }
 .chip.signed { display: inline-flex; align-items: center; gap: 4px; background: color-mix(in srgb, var(--success-color) 14%, transparent); color: var(--success-color); }
 
+/* ---------- People rows ----------
+   One fact per line instead of a wrap. In a 320px rail the chips wrapped into a ragged
+   block and the role select floated to the far right, which put a member's role as far
+   from their name as the row allowed. Read down the column: who, where, what they can
+   do, how much they hold. Chips are flex items here, so max-width + ellipsis actually
+   bites on a long address. */
+.task-meta.stacked { flex-direction: column; align-items: flex-start; gap: 4px; }
+.task-meta.stacked > * { max-width: 100%; }
+.task-meta.stacked .chip { overflow: hidden; text-overflow: ellipsis; }
+/* Sits in the stack, so it is sized like the chips beside it — but it is a control:
+   36px reaching for a mouse, a full 44px thumb target once the rail folds into the
+   phone column. */
+.ws-days.ws-role { width: 100%; max-width: 156px; min-height: 36px; padding: 4px 8px; }
+@media (max-width: 1023px) { .ws-days.ws-role { min-height: 44px; font-size: 0.8rem; } }
+
 /* ---------- What changed ----------
    Deliberately not a card per row: this is a list you skim, and fifteen bordered boxes in a
    narrow rail is a wall. One quiet line each, the name carrying the only emphasis. */
