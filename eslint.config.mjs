@@ -9,6 +9,9 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // Anywhere NEXT_DIST_DIR sends a build. Without this, linting a checkout that has one
+    // reports fifteen thousand problems in generated code.
+    ".next-*/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
