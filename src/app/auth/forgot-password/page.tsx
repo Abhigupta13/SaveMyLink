@@ -7,6 +7,7 @@ import { AlertCircle, CheckCircle2, Check } from 'lucide-react';
 import { forgotPassword, resetPasswordWithOtp } from '@/actions/auth';
 import AuthField from '@/components/auth/AuthField';
 import OtpInput from '@/components/auth/OtpInput';
+import AuthShell from '@/components/auth/AuthShell';
 import { PASSWORD_RULES, validateEmail, validatePassword } from '@/lib/validation';
 
 export default function ForgotPasswordPage() {
@@ -61,12 +62,12 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="auth-wrap">
-      <div className="auth-box">
+    <AuthShell
+      title={step === 'email' ? 'Forgot password?' : 'Enter the code'}
+      sub={step === 'email' ? 'We’ll email you a 6-digit code.' : <>Sent to <strong style={{ color: 'var(--text-primary)' }}>{email}</strong> · expires in 10 minutes.</>}
+    >
         {step === 'email' ? (
           <>
-            <h1 className="auth-h1">Forgot password?</h1>
-            <p className="auth-sub">We’ll email you a 6-digit code.</p>
             <form onSubmit={e => { e.preventDefault(); sendCode(); }} noValidate>
               <AuthField label="Email" type="email" value={email} onChange={v => { setEmail(v); setErrors({}); }} error={errors.email} placeholder="you@example.com" autoComplete="email" autoFocus />
               <button type="submit" className="btn-primary auth-submit" disabled={loading}>{loading ? 'Sending…' : 'Send code'}</button>
@@ -74,9 +75,6 @@ export default function ForgotPasswordPage() {
           </>
         ) : (
           <>
-            <h1 className="auth-h1">Enter the code</h1>
-            <p className="auth-sub">Sent to <strong style={{ color: 'var(--text-primary)' }}>{email}</strong> · expires in 10 minutes.</p>
-
             {banner && <div className="auth-banner success"><CheckCircle2 size={16} /> {banner}</div>}
             {devCode && <div className="auth-banner success" style={{ letterSpacing: '0.2em', fontWeight: 800 }}>{devCode}</div>}
 
@@ -109,7 +107,6 @@ export default function ForgotPasswordPage() {
         )}
 
         <p className="auth-foot"><Link href="/auth/signin">Back to sign in</Link></p>
-      </div>
-    </div>
+    </AuthShell>
   );
 }

@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import AuthField from '@/components/auth/AuthField';
 import GoogleButton from '@/components/auth/GoogleButton';
+import AuthShell from '@/components/auth/AuthShell';
 import { validateEmail } from '@/lib/validation';
 import { authProviders } from '@/actions/auth';
 
@@ -46,10 +47,7 @@ function SigninInner() {
   };
 
   return (
-    <div className="auth-wrap">
-      <div className="auth-box">
-        <h1 className="auth-h1">Welcome back</h1>
-        <p className="auth-sub">Sign in to your vault.</p>
+    <AuthShell title="Welcome back" sub="Sign in to your vault.">
 
         {message && <div className="auth-banner success"><CheckCircle2 size={16} /> {message}</div>}
         {formError && <div className="auth-banner error"><AlertCircle size={16} /> {formError}</div>}
@@ -64,8 +62,7 @@ function SigninInner() {
         </form>
 
         <p className="auth-foot">New here? <Link href="/auth/signup">Create an account</Link></p>
-      </div>
-    </div>
+    </AuthShell>
   );
 }
 

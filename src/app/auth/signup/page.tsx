@@ -8,6 +8,7 @@ import { registerUser, verifyEmail, resendVerification, authProviders } from '@/
 import AuthField from '@/components/auth/AuthField';
 import GoogleButton from '@/components/auth/GoogleButton';
 import OtpInput from '@/components/auth/OtpInput';
+import AuthShell from '@/components/auth/AuthShell';
 import { PASSWORD_RULES, validateName, validateEmail, validatePassword } from '@/lib/validation';
 
 function SignupForm() {
@@ -94,12 +95,7 @@ function SignupForm() {
   };
 
   if (step === 'code') return (
-    <div className="auth-wrap">
-      <div className="auth-box">
-        <h1 className="auth-h1">Confirm your email</h1>
-        <p className="auth-sub">
-          We sent a 6-digit code to <strong style={{ color: 'var(--text-primary)' }}>{email}</strong> · expires in 10 minutes.
-        </p>
+    <AuthShell title="Confirm your email" sub={<>We sent a 6-digit code to <strong style={{ color: 'var(--text-primary)' }}>{email}</strong> · expires in 10 minutes.</>}>
 
         {banner && <div className="auth-banner success"><CheckCircle2 size={16} /> {banner}</div>}
         {devCode && <div className="auth-banner success" style={{ letterSpacing: '0.2em', fontWeight: 800 }}>{devCode}</div>}
@@ -122,19 +118,13 @@ function SignupForm() {
           {' · '}
           <button className="subtle-link" onClick={() => { setStep('form'); setCode(''); setBanner(''); setErrors({}); }}>Use a different email</button>
         </p>
-      </div>
-    </div>
+    </AuthShell>
   );
 
   return (
-    <div className="auth-wrap">
-      <div className="auth-box">
-        <h1 className="auth-h1">Create your vault</h1>
-        <p className="auth-sub">
-          {invitedEmail
-            ? 'Finish signing up and the project you were invited to will be waiting.'
-            : 'Links, notes, tasks and meetings — for work and for everything else.'}
-        </p>
+    <AuthShell title="Create your vault" sub={invitedEmail
+      ? 'Finish signing up and the project you were invited to will be waiting.'
+      : 'Links, notes, tasks and meetings — for work and for everything else.'}>
 
         {formError && <div className="auth-banner error"><AlertCircle size={16} /> {formError}</div>}
 
@@ -165,15 +155,14 @@ function SignupForm() {
         <p className="auth-foot" style={{ fontSize: '0.72rem' }}>
           By creating an account you agree to our <Link href="/terms">Terms &amp; how your data is handled</Link>.
         </p>
-      </div>
-    </div>
+    </AuthShell>
   );
 }
 
 // useSearchParams needs a Suspense boundary, or the whole route opts out of static rendering
 export default function SignupPage() {
   return (
-    <Suspense fallback={<div className="auth-wrap"><div className="auth-box"><div className="loading-spinner" /></div></div>}>
+    <Suspense fallback={<AuthShell title="Create your vault"><div className="loading-spinner" /></AuthShell>}>
       <SignupForm />
     </Suspense>
   );
