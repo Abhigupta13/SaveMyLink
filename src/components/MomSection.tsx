@@ -17,7 +17,18 @@ interface MomSectionProps {
   onTasksCreated: () => void;
 }
 
-const MAX_SECONDS = 2 * 60 * 60;   // Sarvam accepts at most 2 hours in one file
+// The honest cap. Sarvam accepts 2 hours in one file, but the recording reaches the server inside
+// a server-action body, and a serverless host caps those at ~4.5MB — about 20 minutes at the
+// recorder's 32kbps. The old 2-hour limit was fiction: the upload failed long before it.
+const MAX_SECONDS = 20 * 60;
+
+// What produced the transcript. Said quietly, because the user does not choose it — but "why is
+// my Hindi meeting in English" needs an answer on the card rather than in a support message.
+const ENGINE_NOTE: Record<string, string> = {
+  gemini: 'Hindi + English',
+  whisper: 'English only',
+  sarvam: 'upgraded Hindi',
+};
 
 export default function MomSection({ project, projects = [], myEmail, memberOptions, onTasksCreated }: MomSectionProps) {
   const { toast, confirm } = useFeedback();
@@ -108,9 +119,9 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       setRecording(true);
       setElapsed(0);
       timerRef.current = setInterval(() => setElapsed(s => {
-        // Sarvam's hard per-file limit is 2 hours, and it bills per minute — so a recorder
-        // left running is both a rejected upload and a real bill. Stop it ourselves.
-        if (s + 1 >= MAX_SECONDS) { stopRecording(); toast('Stopped at 2 hours — the limit for one recording.', 'error'); }
+        // Past this the upload is rejected by the host before any engine sees it, and on the paid
+        // path it would also be a real bill. Stop it ourselves rather than lose the recording.
+        if (s + 1 >= MAX_SECONDS) { stopRecording(); toast('Stopped at 20 minutes — longer meetings after the next round.', 'error'); }
         return s + 1;
       }), 1000);
     } catch (err) {
@@ -337,17 +348,18 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
           </button>
         )}
         <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600 }}>
-          {pipeline || (recording ? 'Recording… keep the phone near the discussion.'
+          {pipeline || (recording ? 'Recording… keep the phone near the discussion. Up to 20 minutes for now — longer meetings after the next round.'
             : project ? `Record → transcribe → action items, filed under ${project.name}.`
             : 'Record → transcribe → each action item routed to the project it belongs to.')}
         </span>
       </div>}
 
-      {/* Say why a Hindi meeting comes out badly, rather than letting it look broken */}
+      {/* Hindi is free now, so the old "needs the upgraded engine" line would be a lie. What is
+          still true: the free engine has a daily ceiling, and falling past it drops to English. */}
       {!hinglish && (
         <p style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem', fontWeight: 600, margin: '0 0 24px', padding: '0 4px', lineHeight: 1.5 }}>
-          Meetings are transcribed in English. Hindi and Hinglish need the upgraded transcription,
-          which isn’t enabled on this account.
+          Hindi and Hinglish are transcribed free, and take a little longer than English. On a busy
+          day the free engine runs out and the meeting falls back to English only.
         </p>
       )}
 
@@ -389,6 +401,14 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                 )}
                 {canRemove && <button onClick={() => handleDelete(mom._id)} className="icon-btn danger" title="Delete"><Trash2 size={15} /></button>}
               </div>
+
+              {/* Its own line rather than beside the date: at 390px that row already carries a
+                  wrapping title and five icon buttons. */}
+              {mom.transcript && ENGINE_NOTE[mom.engine] && (
+                <p style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', fontWeight: 600, margin: '0 0 8px' }}>
+                  {ENGINE_NOTE[mom.engine]}
+                </p>
+              )}
 
               {showTranscript === mom._id && (
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', lineHeight: 1.55, background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '12px', marginBottom: '10px', whiteSpace: 'pre-wrap' }}>

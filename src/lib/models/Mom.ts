@@ -11,6 +11,9 @@ export interface IMom extends MongooseDocument {
   audioUrl?: string;
   // Sarvam batch job, paid path only. A job id with no transcript means still transcribing.
   sarvamJobId?: string;
+  // Which engine produced the transcript. Absent on everything recorded before r4 — those are
+  // all Whisper, but they are not claimed as anything, so the card says nothing about them.
+  engine?: 'gemini' | 'whisper' | 'sarvam';
   transcriptionError?: string;
   transcript?: string;
   summary?: string;
@@ -34,6 +37,7 @@ const MomSchema = new Schema<IMom>({
   title: { type: String, required: true },
   audioUrl: { type: String },   // legacy: audio is transcribed on upload and never stored now
   sarvamJobId: { type: String },
+  engine: { type: String, enum: ['gemini', 'whisper', 'sarvam'] },
   transcriptionError: { type: String },
   transcript: { type: String },
   summary: { type: String },

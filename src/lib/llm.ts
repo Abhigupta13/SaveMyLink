@@ -3,12 +3,14 @@
  * here, so switching provider or model is a single edit rather than two files drifting apart.
  *
  * Chat runs on Gemini: Groq's free tier allows 8k tokens per MINUTE and 200k per day, and a
- * full-vault prompt is ~3-9k tokens, so a couple of dozen questions exhausted the day. Gemini's
- * free tier is 250k tokens/minute and 1500 requests/day — bounded by requests rather than
- * tokens, so a growing vault costs nothing extra.
+ * full-vault prompt is ~3-9k tokens, so a couple of dozen questions exhausted the day. Gemini is
+ * bounded by REQUESTS rather than tokens, so a growing vault costs nothing extra — but the free
+ * allowance is 20 requests/day/model (measured in the r4 gate test, not the 1,500 this comment
+ * used to claim). The fallback chain below is what turns that into 60: the quota is per model.
  *
- * Audio stays on Groq Whisper. Gemini is not wired for it here, and Groq bills audio against a
- * separate quota that was never the thing running out.
+ * Audio does NOT belong here. It runs through `lib/geminiAudio`, which pins its own list of
+ * auditioned models — this chain is ordered by chat reliability, and gemini-3.5-flash in it
+ * transliterates English into Devanagari, which would silently ruin a Hindi transcript.
  */
 
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/openai';

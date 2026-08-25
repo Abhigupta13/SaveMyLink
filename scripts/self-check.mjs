@@ -14,6 +14,7 @@ import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/t
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
 import { projectNameMap, sharedLabel, needsShareNotice, memberCount } from '../src/lib/visibility.ts';
 import { INTRO_STEPS, introProgress, isIntroStep } from '../src/lib/intro.ts';
+import { AUDIO_MODELS, audioMime } from '../src/lib/geminiAudio.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -467,5 +468,21 @@ assert.equal(introProgress({}, ['sample']).remaining, INTRO_STEPS.length, 'an un
 assert.equal(isIntroStep('jarvis'), true);
 assert.equal(isIntroStep('drop table'), false, 'markIntro refuses anything that is not a step');
 assert.equal(isIntroStep(null), false);
+
+// ---------------------------------------------------------------------------
+// Free Hindi transcription. MediaRecorder reports `audio/webm;codecs=opus` and Gemini rejects the
+// parameterised type — a silent 400 there means every Hindi meeting quietly falls back to English,
+// which looks exactly like the bug this round was built to fix.
+assert.equal(audioMime('audio/webm;codecs=opus'), 'audio/webm', 'codec parameters are stripped');
+assert.equal(audioMime('audio/webm'), 'audio/webm');
+assert.equal(audioMime('AUDIO/OGG'), 'audio/ogg', 'lowercased');
+assert.equal(audioMime(''), 'audio/webm', 'a stripped Content-Type is still a recording');
+assert.equal(audioMime(undefined), 'audio/webm');
+assert.equal(audioMime('application/octet-stream'), 'audio/webm', 'never sent as a non-audio type');
+
+// Only auditioned models may serve audio. gemini-3.5-flash is in llm.ts's chat fallback chain and
+// has Whisper's exact transliteration bug — it must never leak into this list.
+assert.ok(AUDIO_MODELS.length > 0, 'there is always an audio model to try');
+assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates English into Devanagari');
 
 console.log('self-check: all assertions passed');

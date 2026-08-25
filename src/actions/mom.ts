@@ -10,6 +10,7 @@ import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
 import { projectForMember, projectForWriter, canDelete, myProjectFilter } from "@/lib/projectAccess";
 import { chatJSON } from "@/lib/llm";
+import { transcribeAudio } from "@/lib/geminiAudio";
 import {
   hinglishEnabled, createTranscriptionJob, getUploadUrl, uploadAudio,
   startTranscriptionJob, jobStatus, jobTranscript,
@@ -21,9 +22,16 @@ import { revalidatePath } from "next/cache";
 import path from 'path';
 import { unlink } from 'fs/promises';
 
-// Transcription only — chat extraction moved to Gemini via @/lib/llm, but Whisper stays here
-// because Groq bills audio against a separate quota from the chat tokens that kept running out.
+// Groq Whisper is now the FALLBACK for the free path — Gemini (lib/geminiAudio) goes first because
+// it is the only free engine that gets Hindi/Hinglish right. Whisper stays because it is what
+// worked yesterday: Gemini's free audio quota is 20 requests/day/model, so it runs out, and a
+// meeting that transcribes badly beats a meeting that does not transcribe at all. Groq also bills
+// audio against a separate quota from the chat tokens that kept running out.
 const GROQ_BASE = 'https://api.groq.com/openai/v1';
+
+// Inline base64 is what bounds this: the request carries the audio as text, so a bigger file is a
+// rejected request rather than a slow one. Past this, go straight to Whisper (which streams it).
+const GEMINI_MAX_BYTES = 15 * 1024 * 1024;
 
 // Transcripts mis-spell project names; match on letters only, then by containment
 const norm = (v: string) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -80,6 +88,10 @@ export async function getMoms(projectId?: string | null) {
  * back, the only thing that ever read it was transcription, and on a serverless host the
  * filesystem is read-only (and per-instance), so storing it failed in production and left
  * the meeting stuck with no transcript.
+ *
+ * Two engines, tried in order, and the user picks neither: Gemini (Hindi + English, free, slow,
+ * 20/day/model) then Whisper (English only, free, instant). The fallback is the point — Gemini's
+ * daily quota WILL run out, and the recording is already gone by then.
  */
 export async function uploadMomAudio(formData: FormData) {
   try {
@@ -90,33 +102,53 @@ export async function uploadMomAudio(formData: FormData) {
 
     const ctx = await memberSession(projectId);
     if (!ctx) return { success: false, error: 'Not a member' };
-    if (!process.env.GROQ_API_KEY) return { success: false, error: 'GROQ_API_KEY not configured' };
 
-    const form = new FormData();
-    form.append('file', audio, 'meeting.webm');
-    // English-only in practice. Whisper cannot emit romanized Hinglish and mis-detects spoken
-    // Hindi as Urdu; its `prompt` field is context conditioning, not an instruction, and only
-    // covers the first 30 seconds — so there is nothing to tune here. Accounts that need
-    // Hindi go through Sarvam instead (uploadMomAudioSarvam).
-    form.append('model', 'whisper-large-v3');
+    let transcript: string | null = null;
+    let engine: 'gemini' | 'whisper' = 'whisper';
 
-    const res = await fetch(`${GROQ_BASE}/audio/transcriptions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-      body: form,
-    });
-    if (!res.ok) {
-      const err = await res.text();
-      console.error('Groq transcription failed:', err);
-      return { success: false, error: `Transcription failed (${res.status})` };
+    if (audio.size <= GEMINI_MAX_BYTES) {
+      const gem = await transcribeAudio(audio);
+      if (gem.ok) {
+        transcript = gem.data.text;
+        engine = 'gemini';
+      } else {
+        // Quota, contention or a rejected file — all of them mean "use the other engine", and
+        // none of them are worth showing a user who just wants their meeting written down.
+        console.warn('Gemini transcription unavailable, falling back to Whisper:', gem.error);
+      }
     }
-    const { text } = await res.json();
+
+    if (transcript === null) {
+      if (!process.env.GROQ_API_KEY) return { success: false, error: 'GROQ_API_KEY not configured' };
+
+      const form = new FormData();
+      form.append('file', audio, 'meeting.webm');
+      // English-only in practice. Whisper cannot emit romanized Hinglish and mis-detects spoken
+      // Hindi as Urdu; its `prompt` field is context conditioning, not an instruction, and only
+      // covers the first 30 seconds — so there is nothing to tune here. This is the floor, not
+      // the plan: Gemini above is what a Hindi meeting is meant to land on.
+      form.append('model', 'whisper-large-v3');
+
+      const res = await fetch(`${GROQ_BASE}/audio/transcriptions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        console.error('Groq transcription failed:', err);
+        return { success: false, error: `Transcription failed (${res.status})` };
+      }
+      const { text } = await res.json();
+      transcript = String(text || '');
+    }
 
     const mom = await Mom.create({
       projectId: projectId || undefined,
       userId: ctx.session.user.id,
       title,
-      transcript: String(text || ''),
+      transcript,
+      engine,
     });
     await recordEvent({ projectId: mom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: mom.title });
     return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
@@ -131,8 +163,10 @@ export async function uploadMomAudio(formData: FormData) {
  * presigned URLs point at Azure blob storage, which rejects cross-origin browser requests
  * outright (verified — the PUT fails CORS while the identical one from a server succeeds).
  *
- * next.config's serverActions bodySizeLimit is what bounds the meeting length: 30mb covers
- * roughly two hours at the recorder's 32kbps, which is also Sarvam's per-file ceiling.
+ * next.config's serverActions bodySizeLimit claims 30mb, but a serverless host caps request
+ * bodies well below that (~4.5MB on Vercel — see note.ts). At the recorder's 32kbps that is
+ * roughly 20 minutes, which is why MomSection stops the recorder there rather than at Sarvam's
+ * 2-hour per-file ceiling. Longer meetings need an S3 upload instead of a body — its own round.
  *
  * The MOM row is only created once the job is genuinely running, so a failed upload leaves
  * nothing behind that would sit on the page claiming to be transcribing.
@@ -169,6 +203,7 @@ export async function uploadMomAudioSarvam(formData: FormData) {
       userId: ctx.session.user.id,
       title,
       sarvamJobId: job.data.jobId,
+      engine: 'sarvam',
     });
     await recordEvent({ projectId: mom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: mom.title });
     return { success: true, momId: String(mom._id) };
