@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { hintFor } from '@/lib/nav';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { Plus, Trash2, X, Check, ArrowRight, BadgeCheck } from 'lucide-react';
@@ -338,6 +339,7 @@ export default function TasksPage() {
       ) : tasks.length === 0 ? (
         <div className="empty-state">
           <p style={{ fontWeight: 800, marginBottom: '4px' }}>Nothing here yet</p>
+          <p className="empty-hint">{hintFor('/tasks')}</p>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Add a task above. Give it a due time and you'll get reminders.</p>
         </div>
       ) : (

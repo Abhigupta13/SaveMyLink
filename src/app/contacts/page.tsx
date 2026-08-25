@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { hintFor } from '@/lib/nav';
 import { useSession } from 'next-auth/react';
 import { Phone, Mail, MessageCircle, Plus, Pencil, Trash2, X, UserPlus } from 'lucide-react';
 import { getContacts, createContact, updateContact, deleteContact, inviteContact, ContactInput } from '@/actions/contact';
@@ -136,6 +137,7 @@ export default function ContactsPage() {
           {filtered.length === 0 && !form && (
             <div className="empty-state">
               <p style={{ fontWeight: 700 }}>No contacts yet.</p>
+              <p className="empty-hint">{hintFor('/contacts')}</p>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Add people you call, message, or work with.</p>
             </div>
           )}

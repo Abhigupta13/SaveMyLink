@@ -1,4 +1,5 @@
 import { getLinks } from '@/actions/link';
+import { hintFor } from '@/lib/nav';
 import { getCategories } from '@/actions/category';
 import CategoryFilter from '@/components/CategoryFilter';
 import LinksDisplay from '@/components/LinksDisplay';
@@ -59,6 +60,7 @@ export default async function LinksPage({
       ) : (
         <div className="empty-state" style={{ marginTop: '24px' }}>
           <p style={{ fontWeight: 800, marginBottom: '4px' }}>{search ? 'No matches' : categoryId ? 'Nothing in this category yet' : 'Nothing saved yet'}</p>
+          {!search && !categoryId && <p className="empty-hint">{hintFor('/links')}</p>}
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             {search ? 'Try a different search.' : 'Tap the + button (bottom right) to save a link or note.'}
           </p>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { hintFor } from '@/lib/nav';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
@@ -71,6 +72,7 @@ export default function ProjectsPage() {
       ) : projects.length === 0 ? (
         <div className="empty-state">
           <p style={{ fontWeight: 800, marginBottom: '4px' }}>No projects yet</p>
+          <p className="empty-hint">{hintFor('/projects')}</p>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Create one above to group tasks, meetings, notes and people together.</p>
         </div>
       ) : (

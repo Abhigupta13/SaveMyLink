@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { hintFor } from '@/lib/nav';
 import { useSession } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
 import { Plus, Pin, Trash2, X, Paperclip, Camera, FileText, Image as ImageIcon } from 'lucide-react';
@@ -256,6 +257,7 @@ export default function NotesPage() {
       ) : filtered.length === 0 ? (
         <div className="empty-state">
           <p style={{ fontWeight: 800, marginBottom: '4px' }}>{q ? 'No matches' : scope ? `No notes in ${scope.name}` : 'No notes yet'}</p>
+          {!q && <p className="empty-hint">{hintFor('/notes')}</p>}
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{q ? 'Try a different search.' : 'Tap New — or just tell Jarvis to note something down.'}</p>
         </div>
       ) : (

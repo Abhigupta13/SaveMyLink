@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { hintFor } from '@/lib/nav';
 import { getMoms, uploadMomAudio, uploadMomAudioSarvam, pollMomTranscription, extractMomTasks, confirmMomTasks, deleteMom, momImpact, updateMom } from '@/actions/mom';
 import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
@@ -353,9 +354,11 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}><div className="loading-spinner"></div></div>
       ) : moms.length === 0 && !pipeline ? (
-        <p style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '40px', fontWeight: 600 }}>
-          No meeting recordings yet.
-        </p>
+        <div className="empty-state">
+          <p style={{ fontWeight: 800, marginBottom: '4px' }}>No meetings yet</p>
+          <p className="empty-hint">{hintFor('/mom')}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Tap Record above. Hindi and Hinglish work too.</p>
+        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {moms.map(mom => (

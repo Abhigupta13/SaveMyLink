@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react';
+import { hintFor } from '@/lib/nav';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { getDocuments, addDocument, deleteDocument, moveDocument, fileDocumentUnderProject } from '@/actions/document';
@@ -235,6 +236,7 @@ export default function DLockerPage() {
           <div className="empty-locker-state">
             <div className="empty- locker-icon">🗄️</div>
             <h2>{docs.length ? `Nothing in ${activeFolder} yet` : 'Your Digi Locker is empty'}</h2>
+            {!docs.length && <p className="empty-hint">{hintFor('/d-locker')}</p>}
             <p>{docs.length
               ? 'Add a document here, or pick another folder above.'
               : 'Store PDFs, images, or important links and access them from any device.'}</p>
