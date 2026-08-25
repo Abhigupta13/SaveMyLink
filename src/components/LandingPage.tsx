@@ -205,12 +205,12 @@ function Loop() {
 }
 
 const FEATURES = [
-  { Icon: Sparkles, title: 'Ask Jarvis', text: '“What’s urgent today?” “Where’s that flat listing?” It answers from your own stuff, out loud, in English or Hindi.' },
-  { Icon: Share2, title: 'Save from anywhere', text: 'Share a link from any app on your phone. Title, thumbnail and category filled in for you.' },
-  { Icon: BellRing, title: 'Reminders that reach you', text: 'Not a badge. A notification, at the time you set, then every morning until you tick it.' },
-  { Icon: StickyNote, title: 'Notes and files together', text: 'Long notes, quick thoughts, PDFs and documents. One search across all of it.' },
-  { Icon: Users, title: 'Project groups', text: 'Add people like a WhatsApp group. Their tasks, their meetings, their files — shared with exactly them.' },
-  { Icon: Lock, title: 'Private Safe', text: 'Anything sensitive behind a PIN, hidden from the normal view until you unlock it.' },
+  { Icon: Sparkles, title: 'Ask Jarvis', text: 'Answers out loud, from your own stuff.' },
+  { Icon: Share2, title: 'Save from anywhere', text: 'Share from any app. Filed for you.' },
+  { Icon: BellRing, title: 'Reminders that reach you', text: 'A real notification, until you tick it.' },
+  { Icon: StickyNote, title: 'Notes and files together', text: 'Notes, PDFs, docs — one search.' },
+  { Icon: Users, title: 'Project groups', text: 'Add people like a WhatsApp group.' },
+  { Icon: Lock, title: 'Private Safe', text: 'Sensitive things behind a PIN.' },
 ];
 
 export default function LandingPage() {

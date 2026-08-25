@@ -244,10 +244,15 @@ main:has(> .landing) { margin-left: 0 !important; padding: 0 !important; }
   .landing .hero h1 { max-width: none; font-size: clamp(40px, 12.5vw, 56px); }
   .landing .hero-sub { white-space: normal; font-size: 16px; line-height: 1.9; display: block; max-width: 22rem; }
   .landing .hero-sub .chip { font-size: 14px; padding: 1px 9px; }
-  .landing .features { grid-template-columns: 1fr; }
+  /* Six cards, one thumb-height screen: 2 up, icon + title + one line. */
+  .landing .features { grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 28px; }
+  .landing .feature { padding: 14px 12px; border-radius: 14px; }
+  .landing .feature .ic { width: 30px; height: 30px; border-radius: 9px; }
+  .landing .feature h3 { font-size: 14.5px; line-height: 1.25; margin-top: 10px; }
+  .landing .feature p { font-size: 12.5px; line-height: 1.45; margin-top: 4px; }
   .landing .stage { grid-template-columns: 1fr; gap: 22px; padding: 22px; }
   .landing .tab { padding: 8px 12px; font-size: 13px; }
-  .landing .section { padding: 88px 0; }
+  .landing .section { padding: 64px 0; }
   .landing .close h2 { font-size: clamp(36px, 11vw, 48px); }
   .landing .close { padding: 96px 0 80px; }
 }
