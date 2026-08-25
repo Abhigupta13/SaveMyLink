@@ -255,6 +255,7 @@ recognise the problem instantly because they live it.
 | — | One canonical app URL (`NEXT_PUBLIC_APP_URL`) | ✅ built · **needs setting in Vercel** |
 | — | Admin dashboard at `/admin`, both founders | ✅ built, untested |
 | — | `middleware.ts` → `proxy.ts` (Next 16 deprecation) | ✅ built |
+| — | **Route gate actually running** — `proxy.ts` moved to `src/` (it was never loaded at the repo root; pages exposed empty shells, never data) | ✅ built, proven by signed-out curls |
 | 2 | "Who can see my data" — shared badges, first-share confirm, Your data page | next |
 | 3 | In-app introduction — getting-started checklist, per-section explainers | planned |
 | 4 | Free Hindi meetings — Gemini audio + bring-your-own Sarvam key | planned |
