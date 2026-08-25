@@ -205,13 +205,44 @@ function Loop() {
 }
 
 const FEATURES = [
-  { Icon: Sparkles, title: 'Ask Jarvis', text: 'Answers out loud, from your own stuff.' },
-  { Icon: Share2, title: 'Save from anywhere', text: 'Share from any app. Filed for you.' },
-  { Icon: BellRing, title: 'Reminders that reach you', text: 'A real notification, until you tick it.' },
-  { Icon: StickyNote, title: 'Notes and files together', text: 'Notes, PDFs, docs — one search.' },
-  { Icon: Users, title: 'Project groups', text: 'Add people like a WhatsApp group.' },
-  { Icon: Lock, title: 'Private Safe', text: 'Sensitive things behind a PIN.' },
+  { Icon: Sparkles, label: 'Jarvis', title: 'Ask Jarvis', text: 'Answers out loud, from your own stuff.' },
+  { Icon: Share2, label: 'Save', title: 'Save from anywhere', text: 'Share from any app. Filed for you.' },
+  { Icon: BellRing, label: 'Reminders', title: 'Reminders that reach you', text: 'A real notification, until you tick it.' },
+  { Icon: StickyNote, label: 'Notes', title: 'Notes and files together', text: 'Notes, PDFs, docs — one search.' },
+  { Icon: Users, label: 'Groups', title: 'Project groups', text: 'Add people like a WhatsApp group.' },
+  { Icon: Lock, label: 'Safe', title: 'Private Safe', text: 'Sensitive things behind a PIN.' },
 ];
+
+/* One phone, six things in it. A spotlight walks the home screen; hover/tap holds it.
+   Reduced motion never ticks, so tile one stays lit with its caption. */
+function Pocket() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [i, setI] = useState(0);
+  const { setPaused } = useCycle(ref, () => setI(n => (n + 1) % FEATURES.length), 2000, [i]);
+  const pick = (n: number) => { setI((n + FEATURES.length) % FEATURES.length); setPaused(true); };
+  return (
+    <div ref={ref} className="pocket" onMouseLeave={() => setPaused(false)}>
+      <div className="phone">
+        <div className="ph-screen">
+          <div className="ph-status" aria-hidden="true"><span>9:41</span><i className="ph-notch" /><span className="ph-bars"><i /><i /><i /></span></div>
+          <div className="ph-grid" role="tablist" aria-label="What lives in the app"
+            onKeyDown={e => { if (e.key === 'ArrowRight') pick(i + 1); if (e.key === 'ArrowLeft') pick(i - 1); }}>
+            {FEATURES.map(({ Icon, label, title }, k) => (
+              <button key={label} type="button" role="tab" aria-selected={k === i} aria-label={title} tabIndex={k === i ? 0 : -1}
+                className={`app ${k === i ? 'on' : ''}`} onClick={() => pick(k)} onMouseEnter={() => pick(k)} onFocus={() => pick(k)}>
+                <span className="ic"><Icon size={22} strokeWidth={2} aria-hidden="true" /></span>
+                <span className="lb">{label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="ph-dots" aria-hidden="true">{FEATURES.map((f, k) => <i key={f.label} className={k === i ? 'on' : ''} />)}</div>
+          <div className="ph-dock" aria-hidden="true"><i /><i /><i /><i /></div>
+        </div>
+      </div>
+      <p className="pocket-cap" role="tabpanel"><b>{FEATURES[i].title}.</b> {FEATURES[i].text}</p>
+    </div>
+  );
+}
 
 export default function LandingPage() {
   return (
@@ -268,16 +299,12 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section className="section">
+      <section className="section pocket-section">
         <div className="wrap">
           <p className="eyebrow">And the rest of your life</p>
           <h2>Work and not-work,<br />in the same pocket.</h2>
           <p className="lede">You won&apos;t open a work tool on a Sunday. You&apos;ll open the place your recipes already are — and that&apos;s the app that has Monday&apos;s meeting notes in it.</p>
-          <div className="features">
-            {FEATURES.map(({ Icon, title, text }) => (
-              <div className="feature" key={title}><div className="ic"><Icon size={18} strokeWidth={2.2} aria-hidden="true" /></div><h3>{title}</h3><p>{text}</p></div>
-            ))}
-          </div>
+          <Pocket />
         </div>
       </section>
 
