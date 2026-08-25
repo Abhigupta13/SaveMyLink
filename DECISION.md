@@ -171,6 +171,57 @@ last step says exactly this and it was skipped every time. Colour was validated 
 still the layout was wrong, because a validator checks colour, not geometry. Browser screenshots at
 both themes are now part of finishing any UI work, not an optional extra.
 
+### Project groups behave like a WhatsApp group ✅ built (five rounds)
+
+Researched how Slack, Linear, Asana and Jira handle roles, completion, offboarding and history,
+then cut the findings against the thesis. **The rule: take their safety practices, refuse their
+hierarchy.** Every one of those tools trends toward more roles and more approval steps — which is
+exactly how you rebuild the middle manager this product removes.
+
+**One word: owner.** Whoever creates a group is an owner; owners can make more owners; everyone
+with the badge reads the same. Two protections stay but are not advertised: the creator cannot be
+demoted or removed (same as WhatsApp), and only the creator can delete the group — the one action
+with no undo. A "Created by X · date" line says who started it, in case you need to ask.
+
+**The assignee ticks their own work; owners sign off.** RACI, which every tool encodes:
+*Responsible* does the work, *Accountable* approves it. Two people, two acts — not a locked checkbox.
+The earlier instinct was owners-only; the research said that puts the person who did the work back
+in the position of asking someone to tick it, which is the chasing this app exists to remove. Also
+fixed a bug: an owner who neither created nor was assigned a task could not tick it in their own
+group.
+
+**Nothing gets dropped.** `removeMember` used to `$unset` the departing person's assignments,
+silently orphaning their tasks — the worst possible bug for an app whose pitch is "nothing gets
+forgotten". Tasks now keep their assignee and surface in a **Needs an owner** band at the top of
+the group. The same `$unset` had a second caller in `jarvis.ts`; both fixed.
+
+**An activity trail, recording from now on.** History cannot be backfilled, so it started now. Every
+write appends an `Event`; the group page shows **What changed**. This is the screen that most
+directly replaces a manager's "what happened since Friday".
+
+**A view-only role** for clients and stakeholders. Sequenced last, after the trail, because it
+rewrites every permission gate and a bug there is a data leak. Two leaks were found and closed
+during the build that the plan had not anticipated: Jarvis could write to a view-only group (its
+context and its write scope were the same set), and a viewer could edit a note they had authored
+after someone else filed it into the group. **Not yet tested with a real second account** — the
+pure rules are asserted exhaustively, but proving a viewer is refused server-side needs a second
+login before this ships.
+
+**Notes belong to the group.** "Write a note" inside a group used to link to `/notes` with no
+project context and land on Personal. There is now an inline composer. `Note` gained a `momId` to
+match `Task`, so meeting notes are traceable and deletable; deleting a meeting shows what it
+produced and asks, default keep — a meeting becoming real work is the product's whole pitch, and a
+routine cleanup must never undo it.
+
+**Three decisions made in the build, all sound:** one `setProjectRole` action instead of separate
+promote/demote (three roles with pairwise actions was heading back to twenty ways to check
+ownership); `memberSession` defaults to the strict write gate so the safe setting is the one you
+get by forgetting; sign-off requires `completed` and un-ticking clears it, so the admin funnel
+cannot show signed-off unfinished work.
+
+**MOM was tested end to end** with a real LLM call in Round E. This regenerated the Mowgli meeting's
+summary text — transcript and original tasks intact, wording changed.
+
 ### Working agreements
 
 - **Plan mode for every feature and bug** before any code is written.
@@ -255,9 +306,16 @@ recognise the problem instantly because they live it.
 | — | One canonical app URL (`NEXT_PUBLIC_APP_URL`) | ✅ built · **needs setting in Vercel** |
 | — | Admin dashboard at `/admin`, both founders | ✅ built, untested |
 | — | `middleware.ts` → `proxy.ts` (Next 16 deprecation) | ✅ built |
+| — | Contacts merged into one address book, project chips | ✅ built, untested |
+| — | Project groups: owner chip, created-by, "Project groups" heading | ✅ built |
+| — | Assignee ticks / owner signs off; offboarding keeps tasks; Needs-an-owner band | ✅ built, untested |
+| — | Activity trail ("What changed") | ✅ built, untested |
+| — | View-only role | ✅ built · **needs a second-account test before shipping** |
+| — | Notes composer in-group; `Note.momId`; meeting-delete choice | ✅ built, MOM tested end to end |
 | — | **Route gate actually running** — `proxy.ts` moved to `src/` (it was never loaded at the repo root; pages exposed empty shells, never data) | ✅ built, proven by signed-out curls |
-| 2 | "Who can see my data" — shared badges, first-share confirm, Your data page | next |
-| 3 | In-app introduction — getting-started checklist, per-section explainers | planned |
+| — | Landing page, brand mark, auth pages, Android icon (4 commits) | ✅ built, needs visual pass on a deploy |
+| 2 | "Who can see my data" — shared tags in search/digest/Jarvis, first-share confirm, Your data page | ✅ built, needs signed-in visual pass |
+| 3 | In-app introduction — checklist, sample meeting via real extraction, empty-state hints | ✅ built, needs signed-in visual pass |
 | 4 | Free Hindi meetings — Gemini audio + bring-your-own Sarvam key | planned |
 | 5 | Jarvis — retrieval instead of whole-vault dump, plus new powers | planned |
 | 6 | Distribution — Play Store org account, iOS | paperwork can start now |
@@ -277,6 +335,8 @@ recognise the problem instantly because they live it.
   every single turn — the opposite of the point.
 - **Round 5:** confirm-before-write for anything touching a shared project; silent for personal.
   With a toggle to switch confirmation off.
+- **Round 5 — Jarvis voice:** a **male** voice whenever speech comes from the non-Sarvam path
+  (browser / Gemini TTS); a **female** voice whenever Sarvam speaks (Hindi / Hinglish).
 - **Round 7:** server-held key, so a stolen database is useless while PIN reset by email still
   works. True user-only-passphrase encryption stays possible later as a paid tier.
 
@@ -298,6 +358,12 @@ recognise the problem instantly because they live it.
 
 ### Ideas not yet committed to
 
+- **A viewer can be assigned a task they can never complete.** `needsOwner` does not flag it
+  because they are on the group. Arguably that task does need an owner. Decide before a real
+  client is made a viewer.
+- `claimAssignments` writes `assigneeId` onto group tasks for any matching email, viewers
+  included — the one write a viewer can still trigger. It changes nothing a person chose, so it was
+  left; worth knowing.
 - Web push, so reminders reach the browser and not only the Android app.
 - An email when someone is made a project owner.
 - Letting the creator hand over or step down from a project — currently they are permanent, which
