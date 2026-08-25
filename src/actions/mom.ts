@@ -12,9 +12,10 @@ import { projectForMember, projectForWriter, canDelete, myProjectFilter } from "
 import { chatJSON } from "@/lib/llm";
 import { transcribeAudio } from "@/lib/geminiAudio";
 import {
-  hinglishEnabled, createTranscriptionJob, getUploadUrl, uploadAudio,
+  createTranscriptionJob, getUploadUrl, uploadAudio,
   startTranscriptionJob, jobStatus, jobTranscript,
 } from "@/lib/sarvam";
+import { hinglishEnabled, sarvamKeyFor } from "@/lib/sarvamAccess";
 import { DEFAULT_TZ, safeZone, zonedToUtc } from "@/lib/time";
 import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
@@ -71,11 +72,11 @@ export async function getMoms(projectId?: string | null) {
     const moms = await Mom.find(projectId ? { projectId } : { projectId: null, userId: ctx.session.user.id })
       .sort({ createdAt: -1 }).lean();
     // Which recorder the client should use. Display and branching only — uploadMomAudioSarvam
-    // re-checks it, so removing an email actually cuts access rather than hiding a button.
+    // re-resolves the key, so removing access actually cuts it rather than hiding a button.
     return {
       success: true,
       moms: JSON.parse(JSON.stringify(moms)),
-      hinglish: hinglishEnabled(ctx.session.user.email),
+      hinglish: await hinglishEnabled(ctx.session.user.id),
     };
   } catch (error) {
     console.error('Failed to get MOMs:', error);
@@ -180,14 +181,16 @@ export async function uploadMomAudioSarvam(formData: FormData) {
 
     const ctx = await memberSession(projectId || null);
     if (!ctx) return { success: false, error: 'Not a member' };
-    if (!hinglishEnabled(ctx.session.user.email)) {
-      return { success: false, error: 'Hinglish transcription is not enabled for this account' };
+    // The key decides access — there is no separate flag to drift out of sync with it.
+    const sarvam = await sarvamKeyFor(ctx.session.user.id);
+    if (!sarvam) {
+      return { success: false, error: 'Upgraded transcription is not enabled for this account' };
     }
 
-    const job = await createTranscriptionJob();
+    const job = await createTranscriptionJob(sarvam.key);
     if (!job.ok) return { success: false, error: job.error };
 
-    const upload = await getUploadUrl(job.data.jobId, 'meeting.webm');
+    const upload = await getUploadUrl(sarvam.key, job.data.jobId, 'meeting.webm');
     if (!upload.ok) return { success: false, error: upload.error };
 
     const put = await uploadAudio(upload.data.uploadUrl, audio);
@@ -195,7 +198,7 @@ export async function uploadMomAudioSarvam(formData: FormData) {
 
     // Sarvam answers "No files found" if this runs before the blob lands, so it stays here —
     // after an awaited upload — rather than on the first poll.
-    const started = await startTranscriptionJob(job.data.jobId);
+    const started = await startTranscriptionJob(sarvam.key, job.data.jobId);
     if (!started.ok) return { success: false, error: started.error };
 
     const mom = await Mom.create({
@@ -230,7 +233,12 @@ export async function pollMomTranscription(momId: string) {
 
     if (mom.transcript) return { success: true, done: true, transcript: mom.transcript };
 
-    const status = await jobStatus(mom.sarvamJobId);
+    // The RECORDER's key, not the reader's: the job lives on the key that created it, and a
+    // teammate opening the page has no way to read it with their own.
+    const sarvam = await sarvamKeyFor(String(mom.userId));
+    if (!sarvam) return { success: false, error: 'The account that recorded this no longer has upgraded transcription' };
+
+    const status = await jobStatus(sarvam.key, mom.sarvamJobId);
     if (!status.ok) return { success: false, error: status.error };
 
     if (status.data.state === 'Failed') {
@@ -242,7 +250,7 @@ export async function pollMomTranscription(momId: string) {
       return { success: true, done: false, state: status.data.state };
     }
 
-    const result = await jobTranscript(mom.sarvamJobId);
+    const result = await jobTranscript(sarvam.key, mom.sarvamJobId);
     if (!result.ok) {
       mom.transcriptionError = result.error;
       await mom.save();

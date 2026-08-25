@@ -3,7 +3,8 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { extractUrl, hostnameOf, normalizeUrl, youtubeId, appUrl } from '../src/lib/url.ts';
 import { escapeRegex } from '../src/lib/regex.ts';
-import { hinglishEnabled } from '../src/lib/sarvam.ts';
+import { envAllowlisted } from '../src/lib/sarvam.ts';
+import { seal, open as unseal } from '../src/lib/secretBox.ts';
 import { isAdmin, adminEmails } from '../src/lib/isAdmin.ts';
 import { suggestionEmail, inviteEmail, otpEmail } from '../src/lib/mailer.ts';
 import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, formatInZone } from '../src/lib/time.ts';
@@ -42,24 +43,71 @@ assert.doesNotThrow(() => new RegExp(escapeRegex('c++ (test) [1.2]')));
 assert.ok(new RegExp(escapeRegex('a.b')).test('a.b'));
 assert.ok(!new RegExp(escapeRegex('a.b')).test('axb'));
 
-// hinglishEnabled gates a PAID API, so every ambiguous input must fail closed
+// The env allowlist gates a PAID API, so every ambiguous input must fail closed
 const allowlist = (v) => { if (v === undefined) delete process.env.SARVAM_ENABLED_EMAILS; else process.env.SARVAM_ENABLED_EMAILS = v; };
 
 allowlist(undefined);
-assert.equal(hinglishEnabled('a@x.com'), false, 'unset allowlist denies');
+assert.equal(envAllowlisted('a@x.com'), false, 'unset allowlist denies');
 allowlist('');
-assert.equal(hinglishEnabled('a@x.com'), false, 'empty allowlist denies');
+assert.equal(envAllowlisted('a@x.com'), false, 'empty allowlist denies');
 allowlist('a@x.com,b@y.com');
-assert.equal(hinglishEnabled('a@x.com'), true);
-assert.equal(hinglishEnabled('B@Y.COM'), true, 'match is case-insensitive');
-assert.equal(hinglishEnabled('c@z.com'), false, 'unlisted address denied');
-assert.equal(hinglishEnabled(null), false, 'no session email denies');
-assert.equal(hinglishEnabled(''), false, 'blank email denies');
+assert.equal(envAllowlisted('a@x.com'), true);
+assert.equal(envAllowlisted('B@Y.COM'), true, 'match is case-insensitive');
+assert.equal(envAllowlisted('c@z.com'), false, 'unlisted address denied');
+assert.equal(envAllowlisted(null), false, 'no session email denies');
+assert.equal(envAllowlisted(''), false, 'blank email denies');
 allowlist(' a@x.com , b@y.com ');
-assert.equal(hinglishEnabled('a@x.com'), true, 'whitespace around entries tolerated');
+assert.equal(envAllowlisted('a@x.com'), true, 'whitespace around entries tolerated');
 allowlist(',,');
-assert.equal(hinglishEnabled(''), false, 'blank list entries never match a blank email');
+assert.equal(envAllowlisted(''), false, 'blank list entries never match a blank email');
 allowlist(undefined);
+
+// ---------------------------------------------------------------------------
+// secretBox holds a THIRD PARTY's paid credential — a user's own Sarvam key. The failure that
+// matters is not "it did not decrypt", it is "it decrypted to something else and we sent that
+// somewhere as a credential". GCM is what makes tampering an error instead of garbage.
+{
+  const savedSecret = process.env.NEXTAUTH_SECRET;
+  process.env.NEXTAUTH_SECRET = 'test-secret-for-self-check';
+
+  const KEY = 'sk_live_abcdef0123456789';
+  const box = seal(KEY);
+  assert.equal(unseal(box), KEY, 'a sealed key comes back exactly');
+  assert.ok(!box.includes(KEY), 'the plaintext never appears in the stored value');
+  assert.ok(box.startsWith('v1.'), 'versioned, so the derivation can be rotated later');
+
+  // Same input, different box every time — a reused IV in GCM leaks the plaintext outright,
+  // and identical ciphertexts would also tell an attacker which two users share a key.
+  assert.notEqual(seal(KEY), seal(KEY), 'a fresh IV per seal');
+
+  // Tampering, in each position a byte could be flipped
+  const [v, iv, enc, tag] = box.split('.');
+  assert.equal(unseal([v, iv, enc, 'AAAAAAAAAAAAAAAAAAAAAA'].join('.')), null, 'a forged auth tag is refused');
+  assert.equal(unseal([v, iv, enc.slice(0, -2) + 'AA', tag].join('.')), null, 'edited ciphertext is refused');
+  assert.equal(unseal([v, 'AAAAAAAAAAAAAAAA', enc, tag].join('.')), null, 'a swapped IV is refused');
+  assert.equal(unseal(['v2', iv, enc, tag].join('.')), null, 'an unknown version is refused, never guessed at');
+
+  // Junk and absence read the same way: no key. Callers branch on null, so a throw here would
+  // turn "this user has no key" into a 500 on the meetings page.
+  assert.equal(unseal(''), null);
+  assert.equal(unseal(null), null);
+  assert.equal(unseal(undefined), null);
+  assert.equal(unseal('not-a-box'), null);
+  assert.equal(unseal(box.slice(0, 10)), null, 'a truncated box is refused');
+
+  // A different NEXTAUTH_SECRET must NOT open an old box — that is what makes a stolen database
+  // useless on its own, and what makes rotating the secret a real (visible) migration.
+  process.env.NEXTAUTH_SECRET = 'a-completely-different-secret';
+  assert.equal(unseal(box), null, 'the box does not open under another secret');
+
+  // No secret at all is a broken deploy: refuse to seal rather than encrypting under sha256('')
+  delete process.env.NEXTAUTH_SECRET;
+  assert.throws(() => seal(KEY), /NEXTAUTH_SECRET/, 'never seals under an empty secret');
+  assert.equal(unseal(box), null, 'and nothing opens without it');
+
+  if (savedSecret === undefined) delete process.env.NEXTAUTH_SECRET;
+  else process.env.NEXTAUTH_SECRET = savedSecret;
+}
 
 // Both founders reach /admin with nothing configured. This is the regression test for Abhishek
 // silently losing access the next time someone deploys without setting ADMIN_EMAILS.

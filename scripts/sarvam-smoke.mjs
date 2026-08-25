@@ -41,17 +41,20 @@ function silentWav() {
 }
 
 if (!process.env.SARVAM_API_KEY) die('config', 'SARVAM_API_KEY is not set (pass --env-file=.env.local)', false);
+// The lib takes the key per call now (users can bring their own), so the smoke test hands it
+// the founder's env key explicitly — the same one the allowlist path would resolve to.
+const KEY = process.env.SARVAM_API_KEY;
 
 const path = process.argv[2];
 const audio = path ? await readFile(path) : silentWav();
 const name = path ? path.split('/').pop() : 'smoke.wav';
 console.log(`audio: ${name} (${(audio.length / 1024).toFixed(1)} KB)${path ? '' : ' — silence; pass a real clip to test translation'}`);
 
-const job = await createTranscriptionJob();
+const job = await createTranscriptionJob(KEY);
 if (!job.ok) die('initiate — guess 1: model/mode/language_code placement', job.error);
 console.log(`✓ job created: ${job.data.jobId}`);
 
-const upload = await getUploadUrl(job.data.jobId, name);
+const upload = await getUploadUrl(KEY, job.data.jobId, name);
 if (!upload.ok) die('upload-files — guess 3: upload_urls shape', upload.error);
 console.log('✓ presigned upload URL received');
 
@@ -63,19 +66,19 @@ const put = await uploadAudio(upload.data.uploadUrl,
 if (!put.ok) die('PUT to storage', put.error);
 console.log('✓ audio uploaded to storage (server-side; a browser PUT fails CORS)');
 
-const started = await startTranscriptionJob(job.data.jobId);
+const started = await startTranscriptionJob(KEY, job.data.jobId);
 if (!started.ok) die('start — guess 2: the job start path in src/lib/sarvam.ts', started.error);
 console.log('✓ job started');
 
 for (let i = 1; i <= 60; i++) {
   await new Promise(r => setTimeout(r, 5000));
-  const status = await jobStatus(job.data.jobId);
+  const status = await jobStatus(KEY, job.data.jobId);
   if (!status.ok) die('status', status.error);
   console.log(`  [${i}] ${status.data.state}`);
   if (status.data.state === 'Failed') die('transcription', 'job reported Failed');
   if (status.data.state !== 'Completed') continue;
 
-  const result = await jobTranscript(job.data.jobId);
+  const result = await jobTranscript(KEY, job.data.jobId);
   // Silence legitimately produces nothing — that is not a shape failure.
   if (!result.ok && !path) {
     console.log(`\n✓ pipeline works end to end (empty transcript from silence: "${result.error}")`);

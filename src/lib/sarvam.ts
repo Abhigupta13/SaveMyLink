@@ -1,5 +1,5 @@
 /**
- * Sarvam AI speech-to-text — used only by MOM, and only for allowlisted accounts.
+ * Sarvam AI speech-to-text — used only by MOM, and only for accounts that have a key.
  *
  * Whisper is the wrong engine for Hindi/Hinglish and no prompt tuning fixes it: it cannot
  * emit romanized Hinglish at all, it mis-detects spoken Hindi as Urdu (Perso-Arabic script),
@@ -23,22 +23,27 @@ const startPath = (jobId: string) => `${JOB}/${jobId}/start`;
 export type SarvamResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 /**
- * Sarvam bills per minute of audio, so it is opt-in per account rather than on for everyone.
- * The server is the authority — a client may learn this flag for display, never for access.
+ * The pre-r4 bootstrap: a comma-separated env list of addresses that may spend the founder's
+ * key. `lib/sarvamAccess` is what consults it — it lives here because it is pure, and the
+ * self-check runs on plain node with no module aliasing.
  */
-export const hinglishEnabled = (email?: string | null) =>
+export const envAllowlisted = (email?: string | null) =>
   !!email && (process.env.SARVAM_ENABLED_EMAILS || '')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
     .includes(email.toLowerCase());
 
-async function call<T>(path: string, init?: RequestInit): Promise<SarvamResult<T>> {
-  const key = process.env.SARVAM_API_KEY;
-  if (!key) return { ok: false, error: 'SARVAM_API_KEY not configured' };
+/**
+ * WHOSE key. Required, never defaulted to the environment: Sarvam bills per minute, and a
+ * caller that forgets to pass one would quietly bill the founder for somebody else's meeting.
+ * `lib/sarvamAccess` is the single place that decides which key an account gets.
+ */
+async function call<T>(apiKey: string, path: string, init?: RequestInit): Promise<SarvamResult<T>> {
+  if (!apiKey) return { ok: false, error: 'No Sarvam API key for this account' };
   try {
     const res = await fetch(`${BASE}${path}`, {
       ...init,
       headers: {
-        'api-subscription-key': key,
+        'api-subscription-key': apiKey,
         ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
         ...init?.headers,
       },
@@ -55,8 +60,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<SarvamResult<T
   }
 }
 
-const postJSON = <T>(path: string, body: unknown) =>
-  call<T>(path, { method: 'POST', body: JSON.stringify(body) });
+const postJSON = <T>(apiKey: string, path: string, body: unknown) =>
+  call<T>(apiKey, path, { method: 'POST', body: JSON.stringify(body) });
 
 /**
  * Both upload_urls and download_urls are keyed by file name and wrap the link as
@@ -74,8 +79,8 @@ function pickUrl(map: any): string | null {
  * already translated. language_code 'unknown' auto-detects, so a meeting that switches
  * language mid-sentence is handled without anyone choosing a language up front.
  */
-export async function createTranscriptionJob(): Promise<SarvamResult<{ jobId: string }>> {
-  const res = await postJSON<any>(JOB, {
+export async function createTranscriptionJob(apiKey: string): Promise<SarvamResult<{ jobId: string }>> {
+  const res = await postJSON<any>(apiKey, JOB, {
     model: 'saaras:v3',
     mode: 'translate',
     language_code: 'unknown',
@@ -88,8 +93,8 @@ export async function createTranscriptionJob(): Promise<SarvamResult<{ jobId: st
 }
 
 /** A presigned URL the browser PUTs the audio to, so it never passes through our function. */
-export async function getUploadUrl(jobId: string, fileName: string): Promise<SarvamResult<{ uploadUrl: string }>> {
-  const res = await postJSON<any>(`${JOB}/upload-files`, { job_id: jobId, files: [fileName] });
+export async function getUploadUrl(apiKey: string, jobId: string, fileName: string): Promise<SarvamResult<{ uploadUrl: string }>> {
+  const res = await postJSON<any>(apiKey, `${JOB}/upload-files`, { job_id: jobId, files: [fileName] });
   if (!res.ok) return res;
   const uploadUrl = pickUrl(res.data?.upload_urls);
   if (!uploadUrl) {
@@ -132,14 +137,14 @@ export async function uploadAudio(uploadUrl: string, audio: Blob): Promise<Sarva
   }
 }
 
-export const startTranscriptionJob = (jobId: string) => postJSON<any>(startPath(jobId), {});
+export const startTranscriptionJob = (apiKey: string, jobId: string) => postJSON<any>(apiKey, startPath(jobId), {});
 
 export type JobState = 'Accepted' | 'Pending' | 'Running' | 'Completed' | 'Failed';
 
-const status = (jobId: string) => call<any>(`${JOB}/${jobId}/status`);
+const status = (apiKey: string, jobId: string) => call<any>(apiKey, `${JOB}/${jobId}/status`);
 
-export async function jobStatus(jobId: string): Promise<SarvamResult<{ state: JobState }>> {
-  const res = await status(jobId);
+export async function jobStatus(apiKey: string, jobId: string): Promise<SarvamResult<{ state: JobState }>> {
+  const res = await status(apiKey, jobId);
   if (!res.ok) return res;
   return { ok: true, data: { state: (res.data?.job_state || 'Pending') as JobState } };
 }
@@ -149,8 +154,8 @@ export async function jobStatus(jobId: string): Promise<SarvamResult<{ state: Jo
  * ("0.json"), and download-files rejects any other name, so the real name has to come from
  * the job status first. Then swap that for a presigned URL and read the JSON behind it.
  */
-export async function jobTranscript(jobId: string): Promise<SarvamResult<{ transcript: string }>> {
-  const info = await status(jobId);
+export async function jobTranscript(apiKey: string, jobId: string): Promise<SarvamResult<{ transcript: string }>> {
+  const info = await status(apiKey, jobId);
   if (!info.ok) return info;
 
   const outputs: string[] = (info.data?.job_details || [])
@@ -162,7 +167,7 @@ export async function jobTranscript(jobId: string): Promise<SarvamResult<{ trans
     return { ok: false, error: 'Transcription finished but produced no result file' };
   }
 
-  const res = await postJSON<any>(`${JOB}/download-files`, { job_id: jobId, files: outputs });
+  const res = await postJSON<any>(apiKey, `${JOB}/download-files`, { job_id: jobId, files: outputs });
   if (!res.ok) return res;
 
   const url = pickUrl(res.data?.download_urls);

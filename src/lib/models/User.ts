@@ -20,6 +20,9 @@ export interface IUser extends Document {
   shareNoticeSeen?: string[];
   introDone?: string[];
   introDismissed?: boolean;
+  // The user's own Sarvam API key, sealed by lib/secretBox. `last4` is the only part that is
+  // ever allowed back out to a browser — enough to recognise which key is stored, useless alone.
+  sarvamKey?: { box: string; last4: string };
 }
 
 const UserSchema: Schema<IUser> = new Schema({
@@ -47,6 +50,8 @@ const UserSchema: Schema<IUser> = new Schema({
   // Getting-started steps that leave no record of their own (jarvis, android, sample), and Hide
   introDone: [{ type: String }],
   introDismissed: { type: Boolean, default: false },
+  // _id: false — this is one value, not a subdocument anyone needs to address
+  sarvamKey: { type: { box: String, last4: String }, _id: false },
 }, { timestamps: true });
 
 export const User: Model<IUser> = defineModel<IUser>('User', UserSchema);

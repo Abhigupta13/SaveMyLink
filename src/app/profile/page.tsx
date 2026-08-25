@@ -10,6 +10,7 @@ import { useFeedback } from '@/components/ui/Feedback';
 import { useUser } from '@/components/UserContext';
 import ThemeToggle from '@/components/ThemeToggle';
 import SuggestBox from '@/components/SuggestBox';
+import SarvamKeyCard from '@/components/SarvamKeyCard';
 import Link from 'next/link';
 import { appUrl } from '@/lib/url';
 import { amIAdmin } from '@/actions/admin';
@@ -105,6 +106,8 @@ export default function ProfilePage() {
           <span className="slider round"></span>
         </label>
       </div>
+
+      <SarvamKeyCard />
 
       {admin && (
         <Link href="/admin" className="card" style={{
