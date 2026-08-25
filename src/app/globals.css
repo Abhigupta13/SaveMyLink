@@ -2284,8 +2284,8 @@ body {
   /* Contacts: whole row is tappable to edit; hide the pencil */
   .contact-edit { display: none; }
   .icon-btn { width: 32px; height: 32px; }
-  /* MOM recorder: stack button over helper text */
-  .mom-recorder { flex-direction: column; align-items: stretch; text-align: center; }
+  /* MOM recorder: see the phone overrides beside the .mom-stage rules at the end of this file —
+     they have to sit after the base rules to win, and keeping them together keeps them honest. */
   /* D-locker: compact add button */
   .add-doc-btn { padding: 10px 16px; font-size: 0.85rem; white-space: nowrap; }
   /* Jarvis: bottom sheet that stays below the sticky header */
@@ -2622,6 +2622,24 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 @media (min-width: 1024px) { .ws-grid { grid-template-columns: minmax(0, 1fr) 320px; gap: 40px; } }
 @media (min-width: 1500px) { .ws-grid { grid-template-columns: minmax(0, 1fr) 380px; gap: 48px; } }
 
+/* On a phone the two columns become one, and stacking them in source order buries What
+   changed under every meeting and every note. It belongs next to the tasks — those two
+   together are the whole reason to open a group on a phone. `display: contents` drops the
+   column boxes so the sections become siblings and `order` can interleave them; the
+   .ws-main / .ws-rail descendant rules above are unaffected. */
+@media (max-width: 1023px) {
+  .ws-grid { display: flex; flex-direction: column; gap: 0; }
+  .ws-main, .ws-rail { display: contents; }
+  .ws-s-unheld   { order: 1; }
+  .ws-s-tasks    { order: 2; }
+  .ws-s-activity { order: 3; }
+  .ws-s-meetings { order: 4; }
+  .ws-s-notes    { order: 5; }
+  .ws-s-people   { order: 6; }
+  .ws-s-files    { order: 7; }
+  .ws-s-about    { order: 8; }
+}
+
 /* Rows are short labels, not prose, so the extra width buys scannability —
    spend it on bigger type and roomier hit targets rather than longer lines. */
 @media (min-width: 1024px) {
@@ -2642,6 +2660,18 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .ws-section { margin-bottom: 22px; }
 .ws-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .ws-head-btn { flex: 1; display: flex; align-items: center; gap: 6px; background: none; border: none; padding: 0; cursor: pointer; color: var(--text-secondary); font-weight: 800; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; }
+/* The header's one loud thing. Sits with the icon buttons but is not one of them — recording a
+   meeting is the reason this app exists, and it was previously only reachable by scrolling. */
+.ws-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 18px; }
+.ws-record { flex-shrink: 0; gap: 6px; padding: 9px 16px; border-radius: 12px; font-weight: 800; font-size: 0.85rem; text-decoration: none; }
+/* On a phone there is not room for a name, a primary action and two icon buttons on one line —
+   the button landed on top of the title and squeezed the group's name to nothing. Two explicit
+   rows instead of asking flex-wrap to guess: name and icons above, the button full width below,
+   which is also where a thumb expects the one thing worth pressing. */
+@media (max-width: 700px) {
+  .ws-header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: start; }
+  .ws-record { grid-column: 1 / -1; grid-row: 2; padding: 11px 16px; }
+}
 .ws-title { width: 100%; background: none; border: none; outline: none; padding: 0; color: var(--text-primary); font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; }
 .ws-title:focus { border-bottom: 2px solid var(--accent-color); }
 .ws-title:disabled { opacity: 1; }
@@ -2660,19 +2690,23 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .chip.signed { display: inline-flex; align-items: center; gap: 4px; background: color-mix(in srgb, var(--success-color) 14%, transparent); color: var(--success-color); }
 
 /* ---------- People rows ----------
-   One fact per line instead of a wrap. In a 320px rail the chips wrapped into a ragged
-   block and the role select floated to the far right, which put a member's role as far
-   from their name as the row allowed. Read down the column: who, where, what they can
-   do, how much they hold. Chips are flex items here, so max-width + ellipsis actually
-   bites on a long address. */
-.task-meta.stacked { flex-direction: column; align-items: flex-start; gap: 4px; }
-.task-meta.stacked > * { max-width: 100%; }
-.task-meta.stacked .chip { overflow: hidden; text-overflow: ellipsis; }
-/* Sits in the stack, so it is sized like the chips beside it — but it is a control:
-   36px reaching for a mouse, a full 44px thumb target once the rail folds into the
-   phone column. */
-.ws-days.ws-role { width: 100%; max-width: 156px; min-height: 36px; padding: 4px 8px; }
-@media (max-width: 1023px) { .ws-days.ws-role { min-height: 44px; font-size: 0.8rem; } }
+   The role stays directly under the name — a full-width stack put it there and it should
+   stay — but one fact per line made every member four lines tall, and People is reference,
+   not the daily loop. Role, load and pending share one short line; the address, which you
+   look up once, drops below in footnote type. Chips are flex items, so max-width and
+   ellipsis bite on a long name. */
+.task-meta.ws-person { gap: 5px; margin-top: 3px; }
+.task-meta.ws-person > * { max-width: 100%; }
+.task-meta.ws-person .chip { font-size: 0.65rem; padding: 2px 7px; overflow: hidden; text-overflow: ellipsis; }
+.ws-person-email {
+  margin-top: 2px; font-size: 0.68rem; font-weight: 600; color: var(--text-tertiary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Sized like the chips beside it, but it is a control and keeps a control's target:
+   comfortably over the 24px minimum with a mouse, a full 44px thumb target once the
+   rail folds into the phone column. */
+.ws-days.ws-role { max-width: 132px; min-height: 28px; padding: 2px 7px; font-size: 0.68rem; }
+@media (max-width: 1023px) { .ws-days.ws-role { min-height: 44px; font-size: 0.8rem; padding: 4px 8px; } }
 
 /* ---------- What changed ----------
    Deliberately not a card per row: this is a list you skim, and fifteen bordered boxes in a
@@ -2877,3 +2911,61 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .mark-live .b1 { animation-delay: 0s; } .mark-live .b2 { animation-delay: .25s; } .mark-live .b3 { animation-delay: .5s; }
 @keyframes level { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(.45); } }
 @media (prefers-reduced-motion: reduce) { .mark-live .mark-bar { animation: none; } }
+
+/* ---------- MOM: the recording stage ---------- */
+/* The landing page shows a recording card — title, live waveform, "Recording" pill, then
+   "↓ action items found" dropping into the list. This is that card for real, on the app's tokens
+   rather than the mock's fixed dark palette, so the promise and the product look like one thing. */
+.mom-stage { padding: 18px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 24px; }
+.mom-stage-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.mom-stage-bar b { min-width: 0; font-size: 0.95rem; font-weight: 800; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Tabular figures: a ticking clock must not shuffle the row it sits in. The cap is on the clock
+   rather than only in the prose below, because that is where you look when you wonder how long. */
+.mom-clock { flex: none; font-size: 0.85rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.mom-clock i { font-style: normal; font-weight: 600; color: var(--text-tertiary); }
+
+.mom-strip { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 14px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+.mom-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--danger-color); animation: mom-pulse 1.2s ease-in-out infinite; }
+@keyframes mom-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: 0.5; } }
+
+.mom-wave { display: flex; align-items: center; gap: 3px; flex: 1; min-width: 0; height: 20px; overflow: hidden; }
+.mom-wave i { display: block; flex: 1 1 3px; max-width: 3px; height: 40%; border-radius: 2px; background: var(--accent-color); animation: mom-wave 1s ease-in-out infinite; }
+.mom-wave i:nth-child(2n) { animation-delay: 0.15s; }
+.mom-wave i:nth-child(3n) { animation-delay: 0.3s; }
+.mom-wave i:nth-child(5n) { animation-delay: 0.45s; height: 70%; }
+@keyframes mom-wave { 0%, 100% { transform: scaleY(0.4); } 50% { transform: scaleY(1.4); } }
+
+/* Waiting on a machine is not the same as hearing a room: the bars go grey and breathe instead. */
+.mom-strip.waiting .mom-wave i { background: var(--text-tertiary); animation: mom-drift 1.9s ease-in-out infinite; }
+@keyframes mom-drift { 0%, 100% { transform: scaleY(0.35); opacity: 0.45; } 50% { transform: scaleY(0.9); opacity: 1; } }
+
+/* Text, not colour alone, says which state this is — the dot and the accent bars only reinforce it. */
+.mom-pill { flex: none; padding: 4px 10px; border-radius: 999px; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.04em; white-space: nowrap; background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border-color); }
+.mom-pill.live { background: color-mix(in srgb, var(--danger-color) 14%, var(--bg-secondary)); border-color: color-mix(in srgb, var(--danger-color) 35%, transparent); color: var(--danger-color); }
+
+.mom-stage-foot { display: flex; align-items: center; gap: 16px; margin-top: 14px; }
+.mom-stage-btn { display: flex; align-items: center; justify-content: center; gap: 10px; flex: none; min-height: 48px; padding: 12px 24px; border-radius: 16px; font-weight: 800; font-size: 0.95rem; border: none; cursor: pointer; }
+/* Outlined rather than a slab of red: --danger-color is a *light* red in dark mode, so white on it
+   is 2.6:1. Ink and ring both use the token, which reads ≥5:1 on the card ground in either theme. */
+.mom-stage-btn.stop { background: var(--danger-soft); color: var(--danger-color); box-shadow: inset 0 0 0 1.5px var(--danger-color); }
+/* While the pipeline runs the recorder really is unavailable. A full-strength primary button that
+   does nothing is the loudest thing on the card; drop it to a surface so the status line leads. */
+.mom-stage-btn:disabled { opacity: 1; background: var(--bg-tertiary); color: var(--text-tertiary); box-shadow: inset 0 0 0 1px var(--border-color); }
+.mom-stage-note { margin: 0; text-align: left; font-size: 0.85rem; font-weight: 600; line-height: 1.5; color: var(--text-secondary); }
+
+/* The hand-off from "a recording" to "your to-do list" — the one moment worth animating here. */
+.mom-found { margin: 0 0 8px; text-align: center; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-tertiary); animation: mom-found 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes mom-found { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+/* Phone: stack the button over its status line and give it the full thumb width. Must sit after
+   the base rules above — the shared @media block earlier in this file loses to them on tie. */
+@media (max-width: 600px) {
+  .mom-stage { padding: 14px; }
+  .mom-stage-foot { flex-direction: column; align-items: stretch; gap: 10px; }
+  .mom-stage-btn { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mom-dot, .mom-wave i, .mom-found { animation: none; }
+  .mom-wave i { height: 55%; }
+}

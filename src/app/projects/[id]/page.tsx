@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText, AlertTriangle, BadgeCheck } from 'lucide-react';
+import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText, AlertTriangle, BadgeCheck, Mic } from 'lucide-react';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask } from '@/actions/task';
 import { getProjectWorkspace, addMember, removeMember, setProjectRole, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
 import { getNotes, createNote, deleteNote } from '@/actions/note';
@@ -59,7 +59,9 @@ export default function ProjectWorkspace() {
   const [days, setDays] = useState(DEFAULT_DAYS);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [openSections, setOpenSections] = useState<Record<Section, boolean>>({ tasks: true, meetings: true, notes: true, files: true, about: false, people: true, activity: true });
+  // Open by default: the daily loop — what is owed, what was said, what changed. Closed: the
+  // things you set up once and then read past every single day.
+  const [openSections, setOpenSections] = useState<Record<Section, boolean>>({ tasks: true, meetings: true, notes: true, files: false, about: false, people: false, activity: true });
 
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
@@ -347,7 +349,7 @@ export default function ProjectWorkspace() {
           <ArrowLeft size={15} /> Projects
         </Link>
 
-        <header style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '18px' }}>
+        <header className="ws-header">
           <div style={{ flex: 1, minWidth: 0 }}>
             <input className="ws-title" value={renaming} onChange={e => setRenaming(e.target.value)} onBlur={handleRename}
               onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
@@ -363,6 +365,19 @@ export default function ProjectWorkspace() {
               </p>
             )}
           </div>
+          {/* The one thing this app is for, offered where a first-time member looks. An anchor,
+              not a control: MomSection owns recording, and this only has to get you to it —
+              opening the section first, because scrolling to a collapsed heading shows nothing. */}
+          {canEdit && (
+            <a href="#meetings" className="btn-primary ws-record"
+              onClick={e => {
+                e.preventDefault();
+                setOpenSections(o => ({ ...o, meetings: true }));
+                document.getElementById('meetings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}>
+              <Mic size={15} /> Record meeting
+            </a>
+          )}
           <button className="icon-btn" onClick={() => window.print()} title="Download as PDF"><Download size={16} /></button>
           {isCreator && <button className="icon-btn danger" onClick={handleDeleteProject} title="Delete project"><Trash2 size={16} /></button>}
         </header>
@@ -374,7 +389,7 @@ export default function ProjectWorkspace() {
             Rendered only when there is something to say. An always-present empty band is
             furniture; this one has to read as an exception, because that is what it is. */}
         {unheld.length > 0 && (
-          <section className="ws-section ws-unheld">
+          <section className="ws-section ws-unheld ws-s-unheld">
             <div className="ws-head">
               <span className="ws-unheld-label">
                 <AlertTriangle size={14} /> Needs an owner <span className="count">{unheld.length}</span>
@@ -406,27 +421,10 @@ export default function ProjectWorkspace() {
         )}
 
         {/* ---------- Tasks ---------- */}
-        <section className="ws-section">
+        <section className="ws-section ws-s-tasks">
           {sectionHead('tasks', 'Tasks', open.length)}
           {openSections.tasks && (
             <>
-              {/* Hidden rather than shown-and-refused. createTask re-checks with projectForWriter,
-                  so this is presentation; leaving it visible would just be a form that fails. */}
-              {canEdit && <form onSubmit={handleCreate} className="quick-add">
-                <div className="quick-add-main">
-                  <input type="text" placeholder={`Add a task to ${project.name}…`} value={title} onChange={e => setTitle(e.target.value)} />
-                  <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
-                </div>
-                <div className="quick-add-meta">
-                  <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic"
-                    style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
-                  <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)}>
-                    <option value="">Assign to me</option>
-                    {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{nameOf(email)}</option>)}
-                  </select>
-                </div>
-              </form>}
-
               {tasks.length === 0 ? (
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '4px 2px 12px' }}>No tasks yet.</p>
               ) : (
@@ -470,12 +468,32 @@ export default function ProjectWorkspace() {
                   {showDone ? 'Hide' : 'Show'} {done.length} done
                 </button>
               )}
+
+              {/* Under the list, not over it. What is owed is what you opened the group to read;
+                  the form is what you reach for after reading it, and above the list it pushed
+                  the first task off the fold on a phone.
+                  Hidden rather than shown-and-refused — createTask re-checks with
+                  projectForWriter, so leaving it visible would just be a form that fails. */}
+              {canEdit && <form onSubmit={handleCreate} className="quick-add" style={{ marginTop: '12px' }}>
+                <div className="quick-add-main">
+                  <input type="text" placeholder={`Add a task to ${project.name}…`} value={title} onChange={e => setTitle(e.target.value)} />
+                  <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
+                </div>
+                <div className="quick-add-meta">
+                  <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic"
+                    style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+                  <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)}>
+                    <option value="">Assign to me</option>
+                    {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{nameOf(email)}</option>)}
+                  </select>
+                </div>
+              </form>}
             </>
           )}
         </section>
 
         {/* ---------- Meetings ---------- */}
-        <section className="ws-section">
+        <section className="ws-section ws-s-meetings" id="meetings">
           {sectionHead('meetings', 'Meetings', moms.length)}
           {openSections.meetings && (
             <MomSection project={project} projects={projects} myEmail={myEmail} memberOptions={memberOptions}
@@ -484,29 +502,10 @@ export default function ProjectWorkspace() {
         </section>
 
         {/* ---------- Notes ---------- */}
-        <section className="ws-section">
+        <section className="ws-section ws-s-notes">
           {sectionHead('notes', 'Notes', notes.length)}
           {openSections.notes && (
             <>
-              {/* The composer, not a link out. Writing a note here used to mean following a
-                  link with no project in it, landing in Personal, and filing the note away from
-                  the work it was about. */}
-              {canEdit && (
-                <form onSubmit={handleAddNote} className="quick-add" style={{ display: 'block' }}>
-                  <div className="quick-add-main">
-                    <input type="text" placeholder={`Note title — ${project.name}`} value={noteDraft.title}
-                      onChange={e => setNoteDraft(d => ({ ...d, title: e.target.value }))} />
-                    <button type="submit" className="btn-primary" disabled={savingNote || (!noteDraft.title.trim() && !noteDraft.body.trim())}
-                      style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: (noteDraft.title.trim() || noteDraft.body.trim()) ? 1 : 0.5 }}>
-                      {savingNote ? 'Saving…' : 'Save'}
-                    </button>
-                  </div>
-                  <textarea className="field" rows={3} placeholder="What happened, what was decided…" value={noteDraft.body}
-                    onChange={e => setNoteDraft(d => ({ ...d, body: e.target.value }))}
-                    style={{ marginTop: '8px', resize: 'vertical', lineHeight: 1.55 }} />
-                </form>
-              )}
-
               {notes.length === 0 ? (
                 <p style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.85rem', padding: '8px 0' }}>
                   No notes yet — meetings file them here automatically.
@@ -531,6 +530,26 @@ export default function ProjectWorkspace() {
                   </div>
                 );
               })}
+              {/* The composer, under the notes rather than over them — a three-row form ahead of
+                  the list buried what the meeting already filed here. Still a composer and not a
+                  link out: writing a note here used to mean following a link with no project in
+                  it, landing in Personal, and filing the note away from the work it was about. */}
+              {canEdit && (
+                <form onSubmit={handleAddNote} className="quick-add" style={{ display: 'block', marginTop: '12px' }}>
+                  <div className="quick-add-main">
+                    <input type="text" placeholder={`Note title — ${project.name}`} value={noteDraft.title}
+                      onChange={e => setNoteDraft(d => ({ ...d, title: e.target.value }))} />
+                    <button type="submit" className="btn-primary" disabled={savingNote || (!noteDraft.title.trim() && !noteDraft.body.trim())}
+                      style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: (noteDraft.title.trim() || noteDraft.body.trim()) ? 1 : 0.5 }}>
+                      {savingNote ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                  <textarea className="field" rows={3} placeholder="What happened, what was decided…" value={noteDraft.body}
+                    onChange={e => setNoteDraft(d => ({ ...d, body: e.target.value }))}
+                    style={{ marginTop: '8px', resize: 'vertical', lineHeight: 1.55 }} />
+                </form>
+              )}
+
               <Link href={`/notes?project=${projectId}`} className="subtle-link" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem' }}>
                 Open the full editor — attachments, pinning →
               </Link>
@@ -541,77 +560,13 @@ export default function ProjectWorkspace() {
           </div>{/* /ws-main */}
 
           <aside className="ws-rail">
-        {/* ---------- People ---------- */}
-        <section className="ws-section">
-          {sectionHead('people', 'People', memberOptions.length)}
-          {openSections.people && (
-            <>
-              {memberOptions.map(email => {
-                const creator = isProjectCreator(project, email);
-                const role = roleOf(email);
-                const owner = creator || role === 'owner';
-                const load = open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length;
-                /* One control for all three roles instead of a promote button, a demote
-                   button and a third for viewers. The creator is permanent, so their row
-                   offers nothing, and you cannot change your own — the server refuses both. */
-                const canSetRole = isOwner && !creator && email !== myEmail;
-                return (
-                  <div key={email} className="task-row">
-                    <span className="avatar-xs" style={{ width: '28px', height: '28px', fontSize: '0.75rem' }}>{nameOf(email)[0].toUpperCase()}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="task-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {email === myEmail ? `${nameOf(email)} (you)` : nameOf(email)}
-                      </div>
-                      {/* One fact per line, in the order you ask them: where, what they may
-                          do, how much they are holding. */}
-                      <div className="task-meta stacked">
-                        {/* The address still matters — it is what an invite was sent to */}
-                        {people.get(email)?.name && <span className="chip" title={email}>{email}</span>}
-                        {/* The role line: the select where it can be changed, the chip where
-                            it cannot. Both in the same slot, so the eye finds a member's role
-                            in the same place on every row. */}
-                        {canSetRole ? (
-                          <select className="ws-days ws-role" value={role} disabled={busyOwner === email}
-                            onChange={e => handleRole(email, e.target.value as 'owner' | 'member' | 'viewer')} aria-label={`Role for ${nameOf(email)}`}>
-                            <option value="owner">Owner</option>
-                            <option value="member">Member</option>
-                            <option value="viewer">View only</option>
-                          </select>
-                        ) : (
-                          <>
-                            {/* One word for one power. "creator" read as a second, higher rank
-                                when it is only a fact about the past — who made the group, which
-                                the "Created by" note under the title already says. */}
-                            {owner && <span className="chip" title="Can add members, rename, and delete shared work">owner</span>}
-                            {/* Named on the row, because "why can't I type here" is the question a
-                                client asks, and the answer should be visible before they ask it. */}
-                            {role === 'viewer' && <span className="chip viewer" title="Sees everything in this group and changes nothing">view only</span>}
-                          </>
-                        )}
-                        <span className="chip">{load} open</span>
-                        {/* "pending", not "invite sent" — members added before invite emails
-                            existed never got one, and the chip should not claim otherwise */}
-                        {!people.get(email)?.hasAccount && <span className="chip" title="No account yet — they see the project once they sign up with this address">pending</span>}
-                      </div>
-                    </div>
-                    {isOwner && !owner && <button className="task-del" onClick={() => handleRemove(email)} title="Remove">×</button>}
-                  </div>
-                );
-              })}
-              {/* Owner only — addMember is owner-scoped server-side, so showing this to a
-                  member would just fail. Picking beats typing: a typo'd address silently
-                  emails a stranger, or nobody. */}
-              {isOwner && (
-                <PersonPicker exclude={memberOptions} onPick={handleInvite} busy={inviting} />
-              )}
-            </>
-          )}
-        </section>
-
         {/* ---------- What changed ----------
             The screen that replaces a manager's chasing: who moved what, without asking anyone.
-            History cannot be backfilled, which is why this starts recording before it is pretty. */}
-        <section className="ws-section">
+            History cannot be backfilled, which is why this starts recording before it is pretty.
+
+            Top of the rail, above People: this is the thing you come back to the group to read.
+            People is a list you set up once and then scroll past every day after. */}
+        <section className="ws-section ws-s-activity">
           {sectionHead('activity', 'What changed', events.length,
             <select className="ws-days" value={days} onChange={e => setDays(Number(e.target.value))} aria-label="How far back">
               <option value={7}>7 days</option>
@@ -639,8 +594,79 @@ export default function ProjectWorkspace() {
           )}
         </section>
 
+        {/* ---------- People ---------- */}
+        <section className="ws-section ws-s-people">
+          {sectionHead('people', 'People', memberOptions.length)}
+          {openSections.people && (
+            <>
+              {memberOptions.map(email => {
+                const creator = isProjectCreator(project, email);
+                const role = roleOf(email);
+                const owner = creator || role === 'owner';
+                const load = open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length;
+                /* One control for all three roles instead of a promote button, a demote
+                   button and a third for viewers. The creator is permanent, so their row
+                   offers nothing, and you cannot change your own — the server refuses both. */
+                const canSetRole = isOwner && !creator && email !== myEmail;
+                return (
+                  <div key={email} className="task-row">
+                    <span className="avatar-xs" style={{ width: '28px', height: '28px', fontSize: '0.75rem' }}>{nameOf(email)[0].toUpperCase()}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="task-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {email === myEmail ? `${nameOf(email)} (you)` : nameOf(email)}
+                      </div>
+                      {/* Two lines, not four. The role still sits directly under the name, which
+                          was the whole point of un-wrapping these rows — but the load and the
+                          pending flag are short enough to ride beside it rather than each taking
+                          a line of their own, and the address drops to a quieter line below.
+                          The rail is a reference column; it should not be the tallest thing here. */}
+                      <div className="task-meta ws-person">
+                        {/* The role slot: the select where it can be changed, the chip where
+                            it cannot. Both in the same slot, so the eye finds a member's role
+                            in the same place on every row. */}
+                        {canSetRole ? (
+                          <select className="ws-days ws-role" value={role} disabled={busyOwner === email}
+                            onChange={e => handleRole(email, e.target.value as 'owner' | 'member' | 'viewer')} aria-label={`Role for ${nameOf(email)}`}>
+                            <option value="owner">Owner</option>
+                            <option value="member">Member</option>
+                            <option value="viewer">View only</option>
+                          </select>
+                        ) : (
+                          <>
+                            {/* One word for one power. "creator" read as a second, higher rank
+                                when it is only a fact about the past — who made the group, which
+                                the "Created by" note under the title already says. */}
+                            {owner && <span className="chip" title="Can add members, rename, and delete shared work">owner</span>}
+                            {/* Named on the row, because "why can't I type here" is the question a
+                                client asks, and the answer should be visible before they ask it. */}
+                            {role === 'viewer' && <span className="chip viewer" title="Sees everything in this group and changes nothing">view only</span>}
+                          </>
+                        )}
+                        <span className="chip">{load} open</span>
+                        {/* "pending", not "invite sent" — members added before invite emails
+                            existed never got one, and the chip should not claim otherwise */}
+                        {!people.get(email)?.hasAccount && <span className="chip" title="No account yet — they see the project once they sign up with this address">pending</span>}
+                      </div>
+                      {/* The address still matters — it is what an invite was sent to — but it is
+                          the thing on this row you look up once, so it reads as a footnote. */}
+                      {people.get(email)?.name && <div className="ws-person-email" title={email}>{email}</div>}
+                    </div>
+                    {isOwner && !owner && <button className="task-del" onClick={() => handleRemove(email)} title="Remove">×</button>}
+                  </div>
+                );
+              })}
+              {/* Owner only — addMember is owner-scoped server-side, so showing this to a
+                  member would just fail. Picking beats typing: a typo'd address silently
+                  emails a stranger, or nobody. */}
+              {isOwner && (
+                <PersonPicker exclude={memberOptions} onPick={handleInvite} busy={inviting} />
+              )}
+            </>
+          )}
+        </section>
+
         {/* ---------- Files ---------- */}
-        <section className="ws-section">
+        <section className="ws-section ws-s-files">
           {sectionHead('files', 'Files', files.length)}
           {openSections.files && (
             <>
@@ -661,7 +687,7 @@ export default function ProjectWorkspace() {
         </section>
 
         {/* ---------- About: one shared description of the project, not a note per thought ---------- */}
-        <section className="ws-section">
+        <section className="ws-section ws-s-about">
           {sectionHead('about', 'About', notesDraft ? 1 : 0)}
           {openSections.about && (
             <>
