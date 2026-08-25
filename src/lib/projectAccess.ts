@@ -51,14 +51,22 @@ export async function ownerFilter(userId: string, email?: string | null) {
 }
 
 /**
+ * Am I an owner of this one project? Delete, sign-off and the widened completion gate all need
+ * the same answer, and ownership was already being checked about twenty different ways across
+ * this codebase before co-owners forced it into one place. It stays in one place.
+ */
+export async function amProjectOwner(projectId: unknown, userId: string, email?: string | null) {
+  if (!projectId) return false;
+  return !!(await Project.exists({ _id: projectId, ...(await ownerFilter(userId, email)) }));
+}
+
+/**
  * Deleting shared work is an owner's call — the creator or anyone they promoted. Members can
  * create and edit inside a project but not remove: losing a teammate's task to someone else's
  * tidy-up is not recoverable. Personal records (no projectId) stay with whoever created them.
  */
 export async function canDelete(doc: { projectId?: any; userId?: any }, userId: string, email?: string | null) {
-  if (doc.projectId) {
-    return !!(await Project.exists({ _id: doc.projectId, ...(await ownerFilter(userId, email)) }));
-  }
+  if (doc.projectId) return amProjectOwner(doc.projectId, userId, email);
   return String(doc.userId) === String(userId);
 }
 

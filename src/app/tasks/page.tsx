@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
-import { Plus, Trash2, X, Check, ArrowRight } from 'lucide-react';
+import { Plus, Trash2, X, Check, ArrowRight, BadgeCheck } from 'lucide-react';
 import { getTasks, getMyOpenTasks, createTask, toggleTask, deleteTask, updateTask } from '@/actions/task';
 import { getProjects, createProject, deleteProject, renameProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
@@ -348,10 +348,17 @@ export default function TasksPage() {
                   <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => !t.isTemp && openEdit(t)}>
                     <div className="task-title">{t.title}</div>
                     {t.description && <div className="task-desc">{t.description}</div>}
-                    {(t.dueAt || activeProject) && (
+                    {(t.dueAt || activeProject || t.signedOffAt) && (
                       <div className="task-meta">
                         {t.dueAt && <span className={`chip ${overdue ? 'overdue' : isToday ? 'today' : ''}`}>{fmtDue(t.dueAt)}</span>}
                         {activeProject && assigneeLabel(t)}
+                        {/* Read-only here. Signing off is an owner's act and this list has no
+                            owner context per row — the group page is where the control lives. */}
+                        {t.signedOffAt && (
+                          <span className="chip signed" title={`Signed off by ${t.signedOffBy?.name || t.signedOffBy?.email || 'an owner'}`}>
+                            <BadgeCheck size={11} /> signed off
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>

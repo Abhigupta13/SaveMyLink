@@ -158,8 +158,11 @@ export async function removeMember(projectId: string, email: string) {
     // ownerEmails would keep rename and delete powers that no screen shows any more.
     await Project.updateOne(filter, { $pull: { memberEmails: normalized, ownerEmails: normalized } });
 
-    // Their assignments stay, but nobody is holding them any more
-    await Task.updateMany({ projectId, assigneeEmail: normalized }, { $unset: { assigneeId: '', assigneeEmail: '' } });
+    // Their assignments STAY, name and all. Blanking the assignee used to make the work
+    // indistinguishable from a task nobody had ever been given — the due date survived but the
+    // history of who owed it did not, and it silently sank into the list. The group page now
+    // surfaces every one of these under "Needs an owner" instead, where it takes one tap to
+    // hand over. Nothing is dropped just because somebody left.
 
     revalidatePath('/tasks'); revalidatePath('/projects');
     return { success: true };

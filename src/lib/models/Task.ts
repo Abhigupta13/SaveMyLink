@@ -12,6 +12,8 @@ export interface ITask extends MongooseDocument {
   assigneeEmail?: string;
   momId?: mongoose.Types.ObjectId;
   linkId?: mongoose.Types.ObjectId;
+  signedOffBy?: mongoose.Types.ObjectId;
+  signedOffAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -27,6 +29,13 @@ const TaskSchema = new Schema<ITask>({
   assigneeEmail: { type: String, lowercase: true }, // kept so assignments to not-yet-registered emails survive; claimed on their first read
   momId: { type: Schema.Types.ObjectId, ref: 'Mom' },
   linkId: { type: Schema.Types.ObjectId, ref: 'Link' },
+  // Completion and sign-off are two states, not one: the assignee ticks their own work, an owner
+  // answers for the outcome. Absent on every task that predates this, which reads as "not signed
+  // off" — the honest answer for work nobody has approved.
+  // ponytail: no index. Only queried by _id and by one countDocuments on the admin funnel; add a
+  // sparse index on signedOffAt if that ever shows up in profiling.
+  signedOffBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  signedOffAt: { type: Date },
 }, {
   timestamps: true
 });

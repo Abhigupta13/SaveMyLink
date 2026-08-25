@@ -48,7 +48,7 @@ export async function getAdminStats() {
     const [
       users, verified, newThisWeek, signupsByDay,
       links, notes, tasks, moms, docs, projects, contacts,
-      extracted, fromMoms, fromMomsDone,
+      extracted, fromMoms, fromMomsDone, fromMomsSigned,
       suggestions, suggestionsThisWeek, byKind,
       recentLinkUsers, recentNoteUsers, recentTaskUsers, recentMomUsers,
     ] = await Promise.all([
@@ -67,6 +67,9 @@ export async function getAdminStats() {
       Mom.aggregate([{ $group: { _id: null, n: { $sum: { $size: { $ifNull: ['$candidates', []] } } } } }]),
       Task.countDocuments({ momId: { $exists: true, $ne: null } }),
       Task.countDocuments({ momId: { $exists: true, $ne: null }, completed: true }),
+      // Completed and signed off are two different facts and the number stops meaning anything
+      // if they are one column: the assignee saying "done" is not the owner agreeing it is.
+      Task.countDocuments({ momId: { $exists: true, $ne: null }, signedOffAt: { $ne: null } }),
 
       Suggestion.countDocuments(),
       Suggestion.countDocuments({ createdAt: { $gte: weekAgo } }),
@@ -111,6 +114,7 @@ export async function getAdminStats() {
         extracted: extracted[0]?.n || 0,
         confirmed: fromMoms,
         completed: fromMomsDone,
+        signedOff: fromMomsSigned,
       },
       feedback: {
         total: suggestions,

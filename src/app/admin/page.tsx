@@ -79,6 +79,7 @@ export default function AdminPage() {
     { label: 'Action items found', n: loop.extracted },
     { label: 'Confirmed as tasks', n: loop.confirmed },
     { label: 'Actually completed', n: loop.completed },
+    { label: 'Signed off by an owner', n: loop.signedOff },
   ];
   const perMeeting = loop.meetings ? (loop.extracted / loop.meetings).toFixed(1) : '0';
 
@@ -158,7 +159,10 @@ export default function AdminPage() {
                     <span className="viz-funnel-value">{compact(s.n)}</span>
                   </div>
                   <span
-                    className={`viz-funnel-bar s${i + 2}`}
+                    // s1..s4 are the only ordinal tokens globals.css defines. This was s${i+2},
+                    // which fitted three stages exactly — a fourth would have asked for .s5, a
+                    // class with no rule, and rendered as an invisible bar.
+                    className={`viz-funnel-bar s${i + 1}`}
                     // Clamped both ways: a stage can never render wider than the card, and a
                     // non-zero stage never renders as nothing.
                     style={{ width: `${s.n === 0 ? 0 : Math.min(100, Math.max(1.5, (s.n / Math.max(1, stages[0].n)) * 100))}%` }}

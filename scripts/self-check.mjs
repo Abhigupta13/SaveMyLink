@@ -10,6 +10,7 @@ import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, fo
 import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
 import { projectScope, ownerScope, isProjectOwner, isProjectCreator } from '../src/lib/scope.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
+import { canComplete, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -272,5 +273,55 @@ assert.deepEqual(afterDelete.missing, [], 'nothing is re-created once seeded, wh
 // A fresh account with nothing seeded gets everyone once
 const fresh = mergeContacts({ contacts: [], projects: PROJECTS, seeded: null, myEmail: 'me@x.com' });
 assert.deepEqual(fresh.missing.sort(), ['boss@x.com', 'new@x.com'], 'first load seeds every teammate');
+
+// ---------------------------------------------------------------------------
+// Who may close a task, who may sign it off, and what counts as unheld.
+// The completion gate is what stops a stranger closing your work; needsOwner is the whole
+// reason the "Needs an owner" band exists. Both are worth holding to account without a database.
+
+const ME = 'u1', OTHER = 'u2';
+const projTask = (over = {}) => ({ projectId: 'p1', userId: OTHER, ...over });
+
+// The assignee ticks their own work; nobody else wanders in.
+assert.equal(canComplete(projTask({ assigneeId: ME }), ME, 'me@x.com', false), true, 'assignee ticks their own');
+assert.equal(canComplete(projTask({ assigneeId: OTHER }), ME, 'me@x.com', false), false, 'a stranger cannot');
+assert.equal(canComplete(projTask({ userId: ME, assigneeId: OTHER }), ME, 'me@x.com', false), true, 'the person who wrote it down can');
+
+// Assigned by email and never claimed: no assigneeId exists yet, and without this branch the
+// assignee cannot tick their own task until an unrelated read happens to claim it.
+assert.equal(canComplete(projTask({ assigneeEmail: 'Me@X.com' }), ME, 'me@x.com', false), true, 'unclaimed email assignment still ticks');
+assert.equal(canComplete(projTask({ assigneeEmail: 'them@x.com' }), ME, 'me@x.com', false), false, 'someone else\'s email does not');
+assert.equal(canComplete(projTask({ assigneeEmail: '' }), ME, '', false), false, 'blank never matches blank');
+
+// The bug this round fixes: an owner who is neither creator nor assignee was locked out of a
+// task in their own group. And an owner of some OTHER group is still nobody here.
+assert.equal(canComplete(projTask({ assigneeId: OTHER }), ME, 'me@x.com', true), true, 'an owner can tick');
+assert.equal(canComplete({ userId: OTHER, assigneeId: OTHER }, ME, 'me@x.com', true), false, 'no project, no owner branch');
+
+// idOf: a populated {_id,email,name} and a raw id are the same person; two different populated
+// objects are not. Naive String() on the populated shape gives '[object Object]' for BOTH, which
+// would open the gate for the wrong person — the one genuinely dangerous line in taskAccess.
+assert.equal(canComplete(projTask({ assigneeId: { _id: ME, email: 'me@x.com' } }), ME, 'me@x.com', false), true, 'populated assignee matches its raw id');
+assert.equal(canComplete(projTask({ assigneeId: { _id: OTHER, email: 'them@x.com' } }), ME, 'zz@x.com', false), false, 'two populated objects are not automatically equal');
+
+// Sign-off: owner only, group only, finished work only. Approving unfinished work is what would
+// make "signed off" stop being a subset of "completed" on the funnel.
+assert.equal(canSignOff({ projectId: 'p1', completed: true }, true), true);
+assert.equal(canSignOff({ projectId: 'p1', completed: true }, false), false, 'a member cannot sign off');
+assert.equal(canSignOff({ projectId: 'p1', completed: false }, true), false, 'unfinished work cannot be signed off');
+assert.equal(canSignOff({ completed: true }, true), false, 'a personal task has nobody to sign it off');
+
+// assigneeEmailOf: the populated email wins, the raw string is the fallback, both lowercased.
+assert.equal(assigneeEmailOf({ assigneeId: { email: 'A@X.com' }, assigneeEmail: 'b@x.com' }), 'a@x.com');
+assert.equal(assigneeEmailOf({ assigneeEmail: 'B@X.com' }), 'b@x.com');
+assert.equal(assigneeEmailOf({}), '');
+
+// needsOwner: open work nobody in the group is holding.
+const MEMBERS = ['Boss@X.com', 'me@x.com'];
+assert.equal(needsOwner({ assigneeEmail: 'gone@x.com' }, MEMBERS), true, "an ex-member's task needs an owner");
+assert.equal(needsOwner({ assigneeEmail: 'boss@x.com' }, MEMBERS), false, 'a current member holds theirs, matched case-insensitively');
+assert.equal(needsOwner({ assigneeId: { email: 'BOSS@x.com' } }, MEMBERS), false, 'the populated shape counts too');
+assert.equal(needsOwner({}, MEMBERS), true, 'never assigned is exactly the same failure');
+assert.equal(needsOwner({ assigneeEmail: 'gone@x.com', completed: true }, MEMBERS), false, 'finished work needs nobody');
 
 console.log('self-check: all assertions passed');

@@ -294,7 +294,9 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
           const drop = str(a.removeMember).toLowerCase();
           if (drop && isOwner && drop !== email && project.memberEmails.includes(drop)) {
             project.memberEmails = project.memberEmails.filter(e => e !== drop);
-            await Task.updateMany({ projectId: project._id, assigneeEmail: drop }, { $unset: { assigneeId: '', assigneeEmail: '' } });
+            // Their tasks keep their assignee, same as removeMember in actions/project.ts — the
+            // group page surfaces them under "Needs an owner". This path used to blank them, so
+            // "remove X from the project" through Jarvis quietly orphaned their work.
             changes.push(`removed ${drop}`);
           }
 

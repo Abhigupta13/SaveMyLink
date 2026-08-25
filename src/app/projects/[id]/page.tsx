@@ -4,8 +4,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText } from 'lucide-react';
-import { getTasks, createTask, toggleTask, deleteTask, updateTask } from '@/actions/task';
+import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText, AlertTriangle, BadgeCheck } from 'lucide-react';
+import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask } from '@/actions/task';
 import { getProjects, addMember, removeMember, addOwner, removeOwner, deleteProject, updateProjectNotes, renameProject } from '@/actions/project';
 import { getMoms } from '@/actions/mom';
 import { getNotes } from '@/actions/note';
@@ -15,6 +15,7 @@ import MomSection from '@/components/MomSection';
 import { useFeedback } from '@/components/ui/Feedback';
 import { formatTime, formatDay, formatDate } from '@/lib/time';
 import { isProjectOwner, isProjectCreator } from '@/lib/scope';
+import { needsOwner, assigneeEmailOf } from '@/lib/taskAccess';
 
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
@@ -167,6 +168,13 @@ export default function ProjectWorkspace() {
     if (!res.success) fetchTasks();
   };
 
+  /** The owner's half of the two states: the assignee ticked it, an owner answers for it. */
+  const handleSignOff = async (id: string) => {
+    const res = await signOffTask(id);
+    if (!res.success) return toast(res.error || 'Something went wrong', 'error');
+    fetchTasks();
+  };
+
   const handleDelete = async (id: string) => {
     setTasks(prev => prev.filter(x => x._id !== id));
     const res = await deleteTask(id);
@@ -227,7 +235,7 @@ export default function ProjectWorkspace() {
   };
 
   const handleRemove = async (email: string) => {
-    if (!await confirm({ title: `Remove ${nameOf(email)}?`, message: 'Their tasks stay in the project but become unassigned.', danger: true, confirmLabel: 'Remove' })) return;
+    if (!await confirm({ title: `Remove ${nameOf(email)}?`, message: 'Their tasks stay in the project, still in their name, and are listed under "Needs an owner" until someone picks them up.', danger: true, confirmLabel: 'Remove' })) return;
     const res = await removeMember(projectId, email);
     if (res.success) { setProject((p: any) => ({ ...p, memberEmails: (p.memberEmails || []).filter((e: string) => e !== email) })); fetchTasks(); }
     else toast(res.error || 'Something went wrong', 'error');
@@ -243,6 +251,9 @@ export default function ProjectWorkspace() {
   const open = tasks.filter(t => !t.completed);
   const done = tasks.filter(t => t.completed);
   const overdue = open.filter(t => t.dueAt && new Date(t.dueAt).getTime() < Date.now());
+  // Open work nobody in the group is holding: assigned to someone who has left, or never
+  // assigned at all. Both are the same failure — a promise made in a meeting with no name on it.
+  const unheld = open.filter(t => needsOwner(t, memberOptions));
   const toggleSection = (s: Section) => setOpenSections(o => ({ ...o, [s]: !o[s] }));
 
   if (status === 'unauthenticated') {
@@ -304,6 +315,41 @@ export default function ProjectWorkspace() {
         <div className="ws-grid">
           <div className="ws-main">
 
+        {/* ---------- Needs an owner ----------
+            Rendered only when there is something to say. An always-present empty band is
+            furniture; this one has to read as an exception, because that is what it is. */}
+        {unheld.length > 0 && (
+          <section className="ws-section ws-unheld">
+            <div className="ws-head">
+              <span className="ws-unheld-label">
+                <AlertTriangle size={14} /> Needs an owner <span className="count">{unheld.length}</span>
+              </span>
+            </div>
+            <p className="ws-unheld-note">
+              Nobody in this group is holding this work. Tap one to hand it over.
+            </p>
+            {unheld.map(t => {
+              const was = assigneeEmailOf(t);
+              return (
+                <div key={t._id} className="task-row" style={{ cursor: 'pointer' }} onClick={() => openEdit(t)}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="task-title">{t.title}</div>
+                    <div className="task-meta">
+                      {/* Reuses the `overdue` list rather than reading the clock again — the
+                          render must stay pure, and the lists are a handful of rows. */}
+                      {t.dueAt && <span className={`chip ${overdue.includes(t) ? 'overdue' : ''}`}>{fmtDue(t.dueAt)}</span>}
+                      {/* Naming who used to hold it is the point — the old behaviour blanked
+                          this, and the work became indistinguishable from work never given out. */}
+                      <span className="chip" title={was || undefined}>{was ? `was ${shortOf(was)}` : 'never assigned'}</span>
+                    </div>
+                  </div>
+                  <span className="subtle-link" style={{ flexShrink: 0 }}>Reassign</span>
+                </div>
+              );
+            })}
+          </section>
+        )}
+
         {/* ---------- Tasks ---------- */}
         <section className="ws-section">
           {sectionHead('tasks', 'Tasks', open.length)}
@@ -341,8 +387,21 @@ export default function ProjectWorkspace() {
                         <div className="task-meta">
                           {t.dueAt && <span className={`chip ${isOverdue ? 'overdue' : ''}`}>{fmtDue(t.dueAt)}</span>}
                           {who && <span className={`chip ${who === myEmail ? 'me' : ''}`} title={who}>{who === myEmail ? 'me' : shortOf(who)}</span>}
+                          {t.signedOffAt && (
+                            <span className="chip signed" title={`Signed off by ${t.signedOffBy?.name || t.signedOffBy?.email || 'an owner'} · ${fmtDate(t.signedOffAt)}`}>
+                              <BadgeCheck size={11} /> signed off
+                            </span>
+                          )}
                         </div>
                       </div>
+                      {/* Ticking is the assignee's; signing off is the owner's. Offered only once
+                          the work is actually done — approving unfinished work is what would make
+                          the number on /admin stop meaning anything. */}
+                      {isOwner && t.completed && (
+                        <button className="subtle-link" style={{ flexShrink: 0 }} onClick={() => handleSignOff(t._id)}>
+                          {t.signedOffAt ? 'Undo sign-off' : 'Sign off'}
+                        </button>
+                      )}
                       {isOwner && <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>}
                     </div>
                   );
