@@ -4,8 +4,8 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember, canDelete, amProjectOwner } from "@/lib/projectAccess";
-import { canComplete, canSignOff } from "@/lib/taskAccess";
+import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject } from "@/lib/projectAccess";
+import { canWorkOn, canSignOff } from "@/lib/taskAccess";
 import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
@@ -87,8 +87,8 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
 
     let assigneeId;
     if (opts.projectId) {
-      const project = await projectForMember(opts.projectId, session.user.id, session.user.email);
-      if (!project) return { success: false, error: 'Not a member of this project' };
+      const project = await projectForWriter(opts.projectId, session.user.id, session.user.email);
+      if (!project) return { success: false, error: 'You cannot add work to this group' };
       if (opts.assigneeEmail) {
         const assignee = await User.findOne({ email: opts.assigneeEmail.toLowerCase() }).select('_id');
         assigneeId = assignee?._id; // unresolved email → kept as assigneeEmail, claimed when they sign up
@@ -123,11 +123,18 @@ export async function updateTask(id: string, data: { title?: string; description
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
-    const task = await Task.findOne({
-      _id: id,
-      $or: [{ userId: session.user.id }, { assigneeId: session.user.id }],
-    });
+    // Same shape and same rule as toggleTask. The old scoped findOne matched userId or
+    // assigneeId only, so an owner who neither wrote the task nor was given it could not edit
+    // it in their own group — the identical lockout, on the editing path.
+    const task = await Task.findById(id);
     if (!task) return { success: false, error: 'Task not found' };
+    if (!await canWriteProject(task.projectId, session.user.id, session.user.email)) {
+      return { success: false, error: 'View-only access — you cannot change this' };
+    }
+    const isOwner = await amProjectOwner(task.projectId, session.user.id, session.user.email);
+    if (!canWorkOn(task, session.user.id, session.user.email, isOwner)) {
+      return { success: false, error: 'Task not found' };
+    }
     const wasAssigned = lower(task.assigneeEmail);
 
     if (data.title !== undefined) task.title = data.title;
@@ -135,8 +142,8 @@ export async function updateTask(id: string, data: { title?: string; description
     if (data.dueAt !== undefined) task.dueAt = data.dueAt ? new Date(data.dueAt) : undefined;
     if (data.projectId !== undefined) {
       if (data.projectId) {
-        const project = await projectForMember(data.projectId, session.user.id, session.user.email);
-        if (!project) return { success: false, error: 'Not a member of that project' };
+        const project = await projectForWriter(data.projectId, session.user.id, session.user.email);
+        if (!project) return { success: false, error: 'You cannot move work into that group' };
         task.projectId = project._id as any;
       } else {
         task.projectId = undefined;
@@ -190,8 +197,13 @@ export async function toggleTask(id: string) {
     const task = await Task.findById(id);
     if (!task) return { success: false, error: 'Task not found' };
 
+    // A view-only client can be given work and still may not close it — the assigneeEmail
+    // branch below would otherwise open the one gate a viewer can reach.
+    if (!await canWriteProject(task.projectId, session.user.id, session.user.email)) {
+      return { success: false, error: 'View-only access — you cannot change this' };
+    }
     const isOwner = await amProjectOwner(task.projectId, session.user.id, session.user.email);
-    if (!canComplete(task, session.user.id, session.user.email, isOwner)) {
+    if (!canWorkOn(task, session.user.id, session.user.email, isOwner)) {
       return { success: false, error: 'Task not found' };
     }
 

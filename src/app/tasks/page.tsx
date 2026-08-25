@@ -10,7 +10,7 @@ import ProjectPicker from '@/components/ProjectPicker';
 import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
 import { useFeedback } from '@/components/ui/Feedback';
 import { formatTime, formatDay } from '@/lib/time';
-import { isProjectOwner } from '@/lib/scope';
+import { isProjectOwner, canWrite } from '@/lib/scope';
 
 type Group = { key: string; label: string; tasks: any[]; cls?: string };
 
@@ -110,8 +110,11 @@ export default function TasksPage() {
   };
 
   const memberOptions = activeProject
-    ? [...new Set([myEmail, activeProject.ownerId?.email, ...(activeProject.memberEmails || [])])].filter(Boolean)
+    ? [...new Set([myEmail, activeProject.ownerId?.email, ...(activeProject.memberEmails || []), ...(activeProject.viewerEmails || [])])].filter(Boolean)
     : [];
+
+  /** Personal tasks are always yours. Inside a group, view-only means read-only here too. */
+  const canEdit = !activeProject || canWrite(activeProject, myEmail);
 
   const fetchTasks = useCallback(async (projectId?: string) => {
     const res = await getTasks(projectId);
@@ -309,7 +312,9 @@ export default function TasksPage() {
 
       <form onSubmit={handleCreate} className="quick-add">
         <div className="quick-add-main">
-          <input type="text" placeholder={activeProject ? `Add a task to ${activeProject.name}…` : 'Add a task…'} value={title} onChange={e => setTitle(e.target.value)} />
+          <input type="text" disabled={!canEdit}
+            placeholder={canEdit ? (activeProject ? `Add a task to ${activeProject.name}…` : 'Add a task…') : `You have view-only access to ${activeProject?.name}`}
+            value={title} onChange={e => setTitle(e.target.value)} />
           <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
         </div>
         <div className="quick-add-meta">
@@ -342,10 +347,11 @@ export default function TasksPage() {
               const isToday = t.dueAt && !overdue && startOfDay(new Date(t.dueAt)).getTime() === startOfDay(new Date()).getTime();
               return (
                 <div key={t._id} className={`task-row ${t.completed ? 'done' : ''}`} style={{ opacity: t.isTemp ? 0.5 : undefined }}>
-                  <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)} aria-label="toggle">
+                  <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)}
+                    disabled={!canEdit} aria-label="toggle">
                     {t.completed && <svg width="12" height="9" viewBox="0 0 14 10" fill="none"><path d="M1.5 5L5.5 9L12.5 1.5" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                   </button>
-                  <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => !t.isTemp && openEdit(t)}>
+                  <div style={{ flex: 1, minWidth: 0, cursor: canEdit ? 'pointer' : 'default' }} onClick={() => canEdit && !t.isTemp && openEdit(t)}>
                     <div className="task-title">{t.title}</div>
                     {t.description && <div className="task-desc">{t.description}</div>}
                     {(t.dueAt || activeProject || t.signedOffAt) && (

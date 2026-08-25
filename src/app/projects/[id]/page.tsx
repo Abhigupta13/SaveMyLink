@@ -6,7 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText, AlertTriangle, BadgeCheck } from 'lucide-react';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask } from '@/actions/task';
-import { getProjects, addMember, removeMember, addOwner, removeOwner, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
+import { getProjects, addMember, removeMember, setProjectRole, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
 import { getMoms } from '@/actions/mom';
 import { getNotes } from '@/actions/note';
 import { getDocuments } from '@/actions/document';
@@ -14,7 +14,7 @@ import PersonPicker from '@/components/PersonPicker';
 import MomSection from '@/components/MomSection';
 import { useFeedback } from '@/components/ui/Feedback';
 import { formatTime, formatDay, formatDate } from '@/lib/time';
-import { isProjectOwner, isProjectCreator } from '@/lib/scope';
+import { isProjectOwner, isProjectCreator, isProjectViewer, canWrite } from '@/lib/scope';
 import { needsOwner, assigneeEmailOf } from '@/lib/taskAccess';
 import { phrase, DEFAULT_DAYS } from '@/lib/activity';
 
@@ -77,19 +77,27 @@ export default function ProjectWorkspace() {
   const myEmail = (session?.user?.email || '').toLowerCase();
   const isOwner = isProjectOwner(project, myEmail);
   const isCreator = isProjectCreator(project, myEmail);
+  // The single question every control on this page asks. The server answers it again with
+  // writerScope — this only stops offering things that would fail.
+  const canEdit = canWrite(project, myEmail);
   const [busyOwner, setBusyOwner] = useState('');
 
-  const handleOwner = async (email: string, promote: boolean) => {
+  const roleOf = useCallback((email: string): 'owner' | 'member' | 'viewer' => {
+    if (isProjectOwner(project, email)) return 'owner';
+    return isProjectViewer(project, email) ? 'viewer' : 'member';
+  }, [project]);
+
+  const handleRole = async (email: string, role: 'owner' | 'member' | 'viewer') => {
     setBusyOwner(email);
-    const res = promote ? await addOwner(projectId, email) : await removeOwner(projectId, email);
+    const res = await setProjectRole(projectId, email, role);
     setBusyOwner('');
     if (!res.success) return toast(res.error || 'Something went wrong', 'error');
-    toast(promote ? `${email} is now an owner` : `${email} is no longer an owner`, 'success');
+    toast(`${nameOf(email)} is now ${role === 'viewer' ? 'view-only' : `a${role === 'owner' ? 'n' : ''} ${role}`}`, 'success');
     load();
   };
 
   const memberOptions = useMemo(
-    () => (project ? [...new Set([project.ownerId?.email, ...(project.memberEmails || [])])].filter(Boolean) as string[] : []),
+    () => (project ? [...new Set([project.ownerId?.email, ...(project.memberEmails || []), ...(project.viewerEmails || [])])].filter(Boolean) as string[] : []),
     [project]
   );
   // email -> { name, hasAccount }, resolved server-side from User then your own Contacts
@@ -354,7 +362,7 @@ export default function ProjectWorkspace() {
             {unheld.map(t => {
               const was = assigneeEmailOf(t);
               return (
-                <div key={t._id} className="task-row" style={{ cursor: 'pointer' }} onClick={() => openEdit(t)}>
+                <div key={t._id} className="task-row" style={{ cursor: canEdit ? 'pointer' : 'default' }} onClick={() => canEdit && openEdit(t)}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="task-title">{t.title}</div>
                     <div className="task-meta">
@@ -366,7 +374,7 @@ export default function ProjectWorkspace() {
                       <span className="chip" title={was || undefined}>{was ? `was ${shortOf(was)}` : 'never assigned'}</span>
                     </div>
                   </div>
-                  <span className="subtle-link" style={{ flexShrink: 0 }}>Reassign</span>
+                  {canEdit && <span className="subtle-link" style={{ flexShrink: 0 }}>Reassign</span>}
                 </div>
               );
             })}
@@ -378,7 +386,9 @@ export default function ProjectWorkspace() {
           {sectionHead('tasks', 'Tasks', open.length)}
           {openSections.tasks && (
             <>
-              <form onSubmit={handleCreate} className="quick-add">
+              {/* Hidden rather than shown-and-refused. createTask re-checks with projectForWriter,
+                  so this is presentation; leaving it visible would just be a form that fails. */}
+              {canEdit && <form onSubmit={handleCreate} className="quick-add">
                 <div className="quick-add-main">
                   <input type="text" placeholder={`Add a task to ${project.name}…`} value={title} onChange={e => setTitle(e.target.value)} />
                   <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
@@ -391,7 +401,7 @@ export default function ProjectWorkspace() {
                     {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{nameOf(email)}</option>)}
                   </select>
                 </div>
-              </form>
+              </form>}
 
               {tasks.length === 0 ? (
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '4px 2px 12px' }}>No tasks yet.</p>
@@ -401,10 +411,11 @@ export default function ProjectWorkspace() {
                   const who = t.assigneeId?.email || t.assigneeEmail;
                   return (
                     <div key={t._id} className={`task-row ${t.completed ? 'done' : ''}`}>
-                      <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)} aria-label="toggle">
+                      <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)}
+                        disabled={!canEdit} aria-label="toggle">
                         {t.completed && <svg width="12" height="9" viewBox="0 0 14 10" fill="none"><path d="M1.5 5L5.5 9L12.5 1.5" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                       </button>
-                      <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => openEdit(t)}>
+                      <div style={{ flex: 1, minWidth: 0, cursor: canEdit ? 'pointer' : 'default' }} onClick={() => canEdit && openEdit(t)}>
                         <div className="task-title">{t.title}</div>
                         {t.description && <div className="task-desc">{t.description}</div>}
                         <div className="task-meta">
@@ -487,7 +498,8 @@ export default function ProjectWorkspace() {
             <>
               {memberOptions.map(email => {
                 const creator = isProjectCreator(project, email);
-                const owner = creator || isProjectOwner(project, email);
+                const role = roleOf(email);
+                const owner = creator || role === 'owner';
                 const load = open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length;
                 return (
                   <div key={email} className="task-row">
@@ -503,18 +515,25 @@ export default function ProjectWorkspace() {
                             when it is only a fact about the past — who made the group, which
                             the "Created by" note under the title already says. */}
                         {owner && <span className="chip" title="Can add members, rename, and delete shared work">owner</span>}
+                        {/* Named on the row, because "why can't I type here" is the question a
+                            client asks, and the answer should be visible before they ask it. */}
+                        {role === 'viewer' && <span className="chip viewer" title="Sees everything in this group and changes nothing">view only</span>}
                         <span className="chip">{load} open</span>
                         {/* "pending", not "invite sent" — members added before invite emails
                             existed never got one, and the chip should not claim otherwise */}
                         {!people.get(email)?.hasAccount && <span className="chip" title="No account yet — they see the project once they sign up with this address">pending</span>}
                       </div>
                     </div>
-                    {/* Any owner may promote or demote; the creator is permanent, so their row
-                        offers nothing. Removing a co-owner strips their owner rights too. */}
+                    {/* One control for all three roles instead of a promote button, a demote
+                        button and a third for viewers. The creator is permanent, so their row
+                        offers nothing, and you cannot change your own — the server refuses both. */}
                     {isOwner && !creator && email !== myEmail && (
-                      <button className="subtle-link" onClick={() => handleOwner(email, !owner)} disabled={busyOwner === email}>
-                        {owner ? 'Remove owner' : 'Make owner'}
-                      </button>
+                      <select className="ws-days" value={role} disabled={busyOwner === email}
+                        onChange={e => handleRole(email, e.target.value as 'owner' | 'member' | 'viewer')} aria-label={`Role for ${nameOf(email)}`}>
+                        <option value="owner">Owner</option>
+                        <option value="member">Member</option>
+                        <option value="viewer">View only</option>
+                      </select>
                     )}
                     {isOwner && !owner && <button className="task-del" onClick={() => handleRemove(email)} title="Remove">×</button>}
                   </div>
@@ -587,9 +606,10 @@ export default function ProjectWorkspace() {
           {sectionHead('about', 'About', notesDraft ? 1 : 0)}
           {openSections.about && (
             <>
-              <textarea className="field" rows={8} placeholder="What this project is — context, decisions, links…" value={notesDraft}
+              <textarea className="field" rows={8} placeholder={canEdit ? 'What this project is — context, decisions, links…' : 'Nothing written yet.'} value={notesDraft}
+                readOnly={!canEdit}
                 onChange={e => { setNotesDraft(e.target.value); setNotesSaved(false); }} style={{ resize: 'vertical', lineHeight: 1.6 }} />
-              <button onClick={handleSaveNotes} disabled={notesSaved} className="btn-primary"
+              <button onClick={handleSaveNotes} disabled={notesSaved || !canEdit} className="btn-primary"
                 style={{ marginTop: '10px', padding: '10px 24px', borderRadius: '12px', fontWeight: 800, opacity: notesSaved ? 0.5 : 1 }}>
                 {notesSaved ? 'Saved' : 'Save'}
               </button>

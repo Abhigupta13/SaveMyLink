@@ -8,7 +8,7 @@ import { Project } from "@/lib/models/Project";
 import { Contact } from "@/lib/models/Contact";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember, canDelete, myProjectFilter } from "@/lib/projectAccess";
+import { projectForMember, projectForWriter, canDelete, myProjectFilter } from "@/lib/projectAccess";
 import { chatJSON } from "@/lib/llm";
 import {
   hinglishEnabled, createTranscriptionJob, getUploadUrl, uploadAudio,
@@ -38,12 +38,18 @@ function matchProject(name: string, projects: any[]) {
 
 // No projectId = a personal meeting: it belongs to the recorder alone, and every
 // item is routed from the transcript instead of inheriting a project.
-async function memberSession(projectId?: string | null) {
+//
+// `write` defaults to TRUE deliberately. Nearly everything here writes — recording, extracting,
+// confirming, editing the minutes — and a gate whose safe setting is the one you have to
+// remember is a gate that eventually gets forgotten. A new caller is strict until someone opts
+// it out on purpose, and the only opt-out today is getMoms.
+async function memberSession(projectId?: string | null, write = true) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return null;
   await connectToDatabase();
   if (!projectId) return { session, project: null };
-  const project = await projectForMember(projectId, session.user.id, session.user.email);
+  const gate = write ? projectForWriter : projectForMember;
+  const project = await gate(projectId, session.user.id, session.user.email);
   if (!project) return null;
   return { session, project };
 }
@@ -52,7 +58,7 @@ const momScope = (mom: any) => (mom.projectId ? String(mom.projectId) : null);
 
 export async function getMoms(projectId?: string | null) {
   try {
-    const ctx = await memberSession(projectId);
+    const ctx = await memberSession(projectId, false);   // the one read on this page
     if (!ctx) return { success: false, error: 'Not a member' };
     const moms = await Mom.find(projectId ? { projectId } : { projectId: null, userId: ctx.session.user.id })
       .sort({ createdAt: -1 }).lean();
@@ -347,8 +353,8 @@ export async function confirmMomTasks(
       // '' means the user picked Personal; undefined means it was never asked, so inherit the meeting's.
       let projectId: any = item.projectId === undefined ? mom.projectId : undefined;
       if (item.projectId) {
-        const allowed = await projectForMember(item.projectId, session.user.id, myEmail);
-        if (!allowed) continue; // silently skip projects the user isn't in
+        const allowed = await projectForWriter(item.projectId, session.user.id, myEmail);
+        if (!allowed) continue; // silently skip groups the user cannot write to
         projectId = allowed._id as any;
       }
 

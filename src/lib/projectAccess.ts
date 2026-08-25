@@ -1,6 +1,6 @@
 import { Project } from '@/lib/models/Project';
 import { User } from '@/lib/models/User';
-import { projectScope, ownerScope } from '@/lib/scope';
+import { projectScope, ownerScope, writerScope } from '@/lib/scope';
 
 /**
  * Membership is granted by raw email string, and until a signup proves it owns that address the
@@ -20,9 +20,26 @@ async function isVerified(userId: string) {
   return !!user?.emailVerified;
 }
 
-// A project is visible to its owner and to invited member emails
+/**
+ * A READ gate, and only a read gate. Owner, member, or view-only — everyone who may look.
+ *
+ * If you are about to change something, you want projectForWriter. This function used to serve
+ * both, and "can see it" meaning "can edit it" is exactly how a view-only role turns into a
+ * write-access role in a single forgotten call site.
+ */
 export async function projectForMember(projectId: string, userId: string, email?: string | null) {
   return Project.findOne({ _id: projectId, ...projectScope(userId, email, await isVerified(userId)) });
+}
+
+/** The WRITE gate: owner or member. A viewer gets null here and the action refuses. */
+export async function projectForWriter(projectId: string, userId: string, email?: string | null) {
+  return Project.findOne({ _id: projectId, ...writerScope(userId, email, await isVerified(userId)) });
+}
+
+/** writerScope with the verification lookup done — for actions that already hold the project. */
+export async function canWriteProject(projectId: unknown, userId: string, email?: string | null) {
+  if (!projectId) return true;   // a personal record has no group to be a viewer of
+  return !!(await Project.exists({ _id: projectId, ...writerScope(userId, email, await isVerified(userId)) }));
 }
 
 /**

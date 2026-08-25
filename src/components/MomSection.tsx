@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { getMoms, uploadMomAudio, uploadMomAudioSarvam, pollMomTranscription, extractMomTasks, confirmMomTasks, deleteMom, updateMom } from '@/actions/mom';
 import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
-import { isProjectOwner } from '@/lib/scope';
+import { isProjectOwner, canWrite } from '@/lib/scope';
 import { formatDay, formatDate } from '@/lib/time';
 
 interface MomSectionProps {
@@ -44,7 +44,11 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const projectId: string = project?._id || '';
   const allProjects = projects.length ? projects : [project].filter(Boolean);
   // A project meeting belongs to its owners; a personal one to whoever recorded it.
-  const canRemove = !project || isProjectOwner(project, myEmail);
+  const canRemove = !project || isProjectOwner(project, myEmail);   // a viewer is never an owner
+  // A personal meeting is always yours to record. Inside a group, view-only means no recording,
+  // no re-extract, no editing the minutes — every one of those writes to shared data, and the
+  // actions refuse them anyway; this is what stops offering them.
+  const canEdit = !project || canWrite(project, myEmail);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -279,7 +283,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   return (
     <div>
       {/* Recorder */}
-      <div className="mom-recorder" style={{
+      {canEdit && <div className="mom-recorder" style={{
         display: 'flex', alignItems: 'center', gap: '16px', padding: '20px', marginBottom: hinglish ? '24px' : '8px',
         background: 'var(--bg-secondary)', borderRadius: '24px', border: '1px solid var(--border-color)'
       }}>
@@ -299,7 +303,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
             : project ? `Record → transcribe → action items, filed under ${project.name}.`
             : 'Record → transcribe → each action item routed to the project it belongs to.')}
         </span>
-      </div>
+      </div>}
 
       {/* Say why a Hindi meeting comes out badly, rather than letting it look broken */}
       {!hinglish && (
@@ -331,10 +335,10 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                 </span>
                 {editing === mom._id ? (
                   <button onClick={() => saveMomEdits(mom._id)} className="icon-btn" title="Save"><Check size={16} /></button>
-                ) : (
+                ) : canEdit && (
                   <button onClick={() => { setEditing(mom._id); setDraftMom({ title: mom.title, summary: mom.summary || '' }); }} className="icon-btn" title="Edit title & summary"><Pencil size={15} /></button>
                 )}
-                {mom.transcript && (
+                {mom.transcript && canEdit && (
                   <button onClick={() => reExtract(mom)} disabled={!!pipeline} className="icon-btn" title="Re-run AI on this recording"><RefreshCw size={15} /></button>
                 )}
                 {mom.transcript && (

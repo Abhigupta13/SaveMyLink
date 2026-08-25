@@ -63,9 +63,13 @@ export function assigneeEmailOf(task: TaskLike): string {
  *  - you own the group it lives in. Today an owner who is neither creator nor assignee is locked
  *    out of a task in their own project, which is the bug this round exists to fix.
  *
+ * The same set of people may tick it and edit it, so this answers both rather than two rules
+ * drifting apart. Whether they may write in the group at all is a separate, earlier question —
+ * canWriteProject — because a view-only client can be an assignee and still change nothing.
+ *
  * `isOwner` is answered by the caller (amProjectOwner) — this stays pure.
  */
-export function canComplete(task: TaskLike, myUserId: Id, myEmail: string | null | undefined, isOwner: boolean): boolean {
+export function canWorkOn(task: TaskLike, myUserId: Id, myEmail: string | null | undefined, isOwner: boolean): boolean {
   if (same(task.userId, myUserId)) return true;
   if (same(task.assigneeId, myUserId)) return true;
   const assigned = lower(task.assigneeEmail);

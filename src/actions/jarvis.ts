@@ -13,7 +13,7 @@ import { JarvisSession } from "@/lib/models/JarvisSession";
 import { chatJSON } from "@/lib/llm";
 import { formatInZone, safeZone, zonedToUtc } from "@/lib/time";
 import { myProjectFilter } from "@/lib/projectAccess";
-import { isProjectOwner, type OwnableProject } from "@/lib/scope";
+import { isProjectOwner, canWrite, type OwnableProject } from "@/lib/scope";
 import { hasSafe } from "@/lib/safeCookie";
 import { User } from "@/lib/models/User";
 import { getServerSession } from "next-auth";
@@ -210,6 +210,20 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
       }
       return set;
     };
+    /**
+     * Everything in ctx is READABLE. Only some of it is writable.
+     *
+     * gatherContext builds ctx.projects from myProjectFilter, which now includes groups you can
+     * only view — deliberately, so Jarvis can answer questions about them. That makes "it is in
+     * my context" stop meaning "I may change it", and the three write branches below have to ask
+     * separately. Without this a view-only client could say "rename that project" or "mark that
+     * task done" and Jarvis would do it.
+     */
+    const writable = new Set(
+      ctx.projects.filter(p => canWrite(p as unknown as OwnableProject, email, userId)).map(p => String(p._id))
+    );
+    const mayWrite = (projectId: unknown) => !projectId || writable.has(String(projectId));
+
     for (const a of (parsed.actions || []).slice(0, 5)) {
       try {
         if (a?.type === 'update_task' && a.id && ctx.ids.has(String(a.id))) {
@@ -225,6 +239,7 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
           // ownership: ctx.ids only holds ids the user can already see, so this cannot reach someone else's task
           const task = await Task.findOne({ _id: a.id });
           if (!task) continue;
+          if (!mayWrite(task.projectId)) continue;   // visible in a view-only group is not editable
           if (add) set.description = [str(set.description ?? task.description), add].filter(Boolean).join('\n');
           if (!Object.keys(set).length) continue;
           Object.assign(task, set);
@@ -272,12 +287,13 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
             const project = await Project.create({ name, ownerId: userId, memberEmails: [] });
             // So a create_task later in the same reply can file itself under the new project
             ctx.projects.push(project.toObject() as any);
+            writable.add(String(project._id));
             created.push({ id: String(project._id), type: 'project', title: project.name, detail: 'Project created' });
           }
         } else if (a?.type === 'update_project' && a.id && ctx.ids.has(String(a.id))) {
-          // ctx.ids only holds projects the user owns or is a member of
           const project = await Project.findOne({ _id: a.id });
           if (!project) continue;
+          if (!writable.has(String(project._id))) continue;   // view-only: readable, never editable
           const isOwner = isProjectOwner(project as unknown as OwnableProject, email, userId);
           const changes: string[] = [];
 
@@ -304,7 +320,11 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
           await project.save();
           created.push({ id: String(project._id), type: 'project', title: project.name, detail: `Updated · ${[...new Set(changes)].join(', ')}` });
         } else if (a?.type === 'create_task' && a.title) {
-          const project = a.projectName ? ctx.projects.find((p: any) => p.name?.toLowerCase() === String(a.projectName).toLowerCase()) : null;
+          const named = a.projectName ? ctx.projects.find((p: any) => p.name?.toLowerCase() === String(a.projectName).toLowerCase()) : null;
+          // Refuse rather than quietly filing it somewhere else: silently turning "add this to
+          // the client's project" into a personal task is a worse answer than not doing it.
+          if (named && !writable.has(String(named._id))) continue;
+          const project = named;
           let assigneeId;
           if (project && a.assigneeEmail) {
             const u = await User.findOne({ email: String(a.assigneeEmail).toLowerCase() }).select('_id');

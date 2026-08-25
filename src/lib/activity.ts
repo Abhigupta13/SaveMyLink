@@ -15,8 +15,7 @@ export const VERBS = [
   'task_reassigned',
   'member_added',
   'member_removed',
-  'owner_promoted',
-  'owner_stepped_down',
+  'role_changed',
   'project_renamed',
   'meeting_recorded',
 ] as const;
@@ -35,8 +34,7 @@ const PHRASES: Record<Verb, (subject: string) => string> = {
   task_reassigned: s => `reassigned ${s}`,
   member_added: s => `added ${s} to the group`,
   member_removed: s => `removed ${s} from the group`,
-  owner_promoted: s => `made ${s} an owner`,
-  owner_stepped_down: s => `stepped ${s} back to a member`,
+  role_changed: s => `changed the role of ${s}`,
   project_renamed: s => `renamed the group to ${s}`,
   meeting_recorded: s => `recorded ${s}`,
 };

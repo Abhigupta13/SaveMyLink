@@ -6,6 +6,7 @@ export interface IProject extends MongooseDocument {
   ownerId: mongoose.Types.ObjectId;
   ownerEmails: string[];
   memberEmails: string[];
+  viewerEmails: string[];
   notes?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -19,6 +20,11 @@ const ProjectSchema = new Schema<IProject>({
   // project that predates this, which reads as [] — exactly the old single-owner behaviour.
   ownerEmails: [{ type: String, lowercase: true }],
   memberEmails: [{ type: String, lowercase: true }],
+  // Clients and stakeholders: they read the group and change nothing. Kept OUT of memberEmails,
+  // unlike co-owners, because this is the one role that is less than a member rather than more —
+  // and every write gate answers "am I in memberEmails" rather than "am I on the project".
+  // Absent on every project that predates this, which reads as [] — the old two-role behaviour.
+  viewerEmails: [{ type: String, lowercase: true }],
   notes: { type: String, default: '' },
 }, { timestamps: true });
 

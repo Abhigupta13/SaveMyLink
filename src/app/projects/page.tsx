@@ -77,7 +77,7 @@ export default function ProjectsPage() {
         <div className="project-grid">
           {projects.map(p => {
             const s = stats[p._id] || { open: 0, done: 0, moms: 0 };
-            const people = new Set([p.ownerId?.email, ...(p.memberEmails || [])].filter(Boolean)).size;
+            const people = new Set([p.ownerId?.email, ...(p.memberEmails || []), ...(p.viewerEmails || [])].filter(Boolean)).size;
             return (
               <Link key={p._id} href={`/projects/${p._id}`} className="project-card">
                 <div className="project-card-icon"><FolderOpen size={18} /></div>

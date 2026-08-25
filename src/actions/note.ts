@@ -5,7 +5,7 @@ import connectToDatabase from "@/lib/mongodb";
 import { Note } from "@/lib/models/Note";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
-import { projectForMember, mineOrMyProjects, canDelete } from "@/lib/projectAccess";
+import { projectForWriter, mineOrMyProjects, canDelete } from "@/lib/projectAccess";
 import { saveUpload, deleteUpload } from "@/lib/storage";
 import { extractText } from "@/lib/docText";
 
@@ -22,9 +22,11 @@ async function me() {
 async function noteIWrite(id: string, userId: string, email: string) {
   const note = await Note.findById(id);
   if (!note) return null;
-  if (String(note.userId) === String(userId)) return note;
-  if (!note.projectId) return null;
-  return (await projectForMember(String(note.projectId), userId, email)) ? note : null;
+  // Inside a group, view-only means view-only — including over a note you wrote yourself and
+  // somebody later filed here. Authorship is what decides a personal note; the group decides
+  // a group's. Checking authorship first would have let a viewer edit inside a shared project.
+  if (note.projectId) return (await projectForWriter(String(note.projectId), userId, email)) ? note : null;
+  return String(note.userId) === String(userId) ? note : null;
 }
 
 export async function getNotes() {
@@ -50,7 +52,7 @@ export async function createNote(data: { title?: string; body: string; projectId
     const who = await me();
     if (!who) return { success: false, error: 'Unauthorized' };
     if (!data.body?.trim() && !data.title?.trim()) return { success: false, error: 'Note is empty' };
-    if (data.projectId && !(await projectForMember(data.projectId, who.userId, who.email)))
+    if (data.projectId && !(await projectForWriter(data.projectId, who.userId, who.email)))
       return { success: false, error: 'Not a member of that project' };
     const note = await Note.create({
       userId: who.userId, projectId: data.projectId || undefined,
@@ -75,7 +77,7 @@ export async function updateNote(id: string, data: { title?: string; body?: stri
     // Moving a note into a project shares it with that project's members, so verify first.
     // '' is a deliberate choice of Personal; undefined leaves it where it is.
     if (data.projectId !== undefined) {
-      if (data.projectId && !(await projectForMember(data.projectId, who.userId, who.email)))
+      if (data.projectId && !(await projectForWriter(data.projectId, who.userId, who.email)))
         return { success: false, error: 'Not a member of that project' };
       note.projectId = (data.projectId || undefined) as any;
     }

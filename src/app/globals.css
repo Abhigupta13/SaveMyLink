@@ -2752,6 +2752,8 @@ main { padding-bottom: 84px; }
 .ws-unheld { border: 1px solid color-mix(in srgb, var(--warn-color) 35%, transparent); border-radius: 14px; padding: 12px 12px 4px; background: color-mix(in srgb, var(--warn-color) 7%, transparent); }
 .ws-unheld-label { flex: 1; display: flex; align-items: center; gap: 6px; color: var(--warn-color); font-weight: 800; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; }
 .ws-unheld-note { margin: -4px 0 8px; color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; }
+/* A statement of fact about someone's access, not a warning — same weight as the owner chip. */
+.chip.viewer { background: color-mix(in srgb, var(--text-tertiary) 16%, transparent); color: var(--text-secondary); }
 .chip.signed { display: inline-flex; align-items: center; gap: 4px; background: color-mix(in srgb, var(--success-color) 14%, transparent); color: var(--success-color); }
 
 /* ---------- What changed ----------

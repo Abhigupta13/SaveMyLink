@@ -14,6 +14,24 @@
 export function projectScope(userId: string, email: string | null | undefined, verified: boolean) {
   const or: Record<string, unknown>[] = [{ ownerId: userId }];
   const normalized = (email || '').trim().toLowerCase();
+  if (verified && normalized) or.push({ memberEmails: normalized }, { viewerEmails: normalized });
+  return { $or: or };
+}
+
+/**
+ * The same question for anything that CHANGES the project: owner or member, never a viewer.
+ *
+ * It exists as a separate function rather than a flag because projectForMember was doing both
+ * jobs, and "can see it" quietly meaning "can edit it" is how a view-only role becomes a
+ * write-access role. Two names, two answers, and a call site has to pick one on purpose.
+ *
+ * viewerEmails is gated on verification exactly like the others: without that, an unverified
+ * signup claiming an address would inherit read access to a team's shared work, which is the
+ * precise hole the verification gate was built to close.
+ */
+export function writerScope(userId: string, email: string | null | undefined, verified: boolean) {
+  const or: Record<string, unknown>[] = [{ ownerId: userId }];
+  const normalized = (email || '').trim().toLowerCase();
   if (verified && normalized) or.push({ memberEmails: normalized });
   return { $or: or };
 }
@@ -22,6 +40,8 @@ export function projectScope(userId: string, email: string | null | undefined, v
 export interface OwnableProject {
   ownerId?: { email?: string | null } | string | null;
   ownerEmails?: (string | null | undefined)[] | null;
+  memberEmails?: (string | null | undefined)[] | null;
+  viewerEmails?: (string | null | undefined)[] | null;
 }
 
 const lower = (v: unknown) => String(v ?? '').trim().toLowerCase();
@@ -72,4 +92,41 @@ export function isProjectCreator(
     return !!me && lower(owner.email) === me;
   }
   return !!myUserId && String(owner) === String(myUserId);
+}
+
+const has = (list: (string | null | undefined)[] | null | undefined, email: string) =>
+  !!email && (list || []).some(e => lower(e) === email);
+
+/**
+ * A client or a stakeholder: sees everything in the group, changes nothing.
+ *
+ * Deliberately the LOWER power, so being in two lists cannot demote anybody. If an owner adds
+ * someone as a viewer who is already a member, the membership wins and nothing they could do
+ * yesterday stops working today — a role change that silently removes access is worse than one
+ * that fails loudly.
+ */
+export function isProjectViewer(
+  project: OwnableProject | null | undefined,
+  myEmail: string | null | undefined,
+): boolean {
+  if (!project) return false;
+  const me = lower(myEmail);
+  if (!has(project.viewerEmails, me)) return false;
+  return !isProjectOwner(project, myEmail) && !has(project.memberEmails, me);
+}
+
+/**
+ * "May this person change anything in this group" — one question, one answer, so no screen and
+ * no action can disagree about it. The server re-checks with writerScope; this is what the UI
+ * uses to stop offering controls that would only fail.
+ */
+export function canWrite(
+  project: OwnableProject | null | undefined,
+  myEmail: string | null | undefined,
+  myUserId?: string | null,
+): boolean {
+  if (!project) return false;
+  if (isProjectOwner(project, myEmail, myUserId)) return true;
+  if (isProjectViewer(project, myEmail)) return false;
+  return has(project.memberEmails, lower(myEmail));
 }

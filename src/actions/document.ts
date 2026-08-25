@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { readFile } from 'fs/promises';
 import { extractText } from '@/lib/docText';
-import { projectForMember, mineOrMyProjects } from '@/lib/projectAccess';
+import { projectForWriter, mineOrMyProjects } from '@/lib/projectAccess';
 import { saveUpload, deleteUpload, readBytes } from '@/lib/storage';
 
 // Not exported: a 'use server' module may only export async functions, and a stray const
@@ -89,7 +89,7 @@ export async function fileDocumentUnderProject(id: string, projectId: string) {
   const userId = (session.user as any).id;
   try {
     await connectToDatabase();
-    if (projectId && !(await projectForMember(projectId, userId, session.user.email)))
+    if (projectId && !(await projectForWriter(projectId, userId, session.user.email)))
       return { error: 'Not a member of that project' };
     const res = await Document.findOneAndUpdate(
       { _id: id, user: userId },
@@ -119,7 +119,7 @@ export async function addDocument(formData: FormData) {
 
   try {
     await connectToDatabase();
-    if (projectId && !(await projectForMember(projectId, userId, session.user.email)))
+    if (projectId && !(await projectForWriter(projectId, userId, session.user.email)))
       return { error: 'Not a member of that project' };
 
     let url = '';

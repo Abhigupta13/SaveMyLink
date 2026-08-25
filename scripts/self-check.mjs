@@ -8,9 +8,9 @@ import { isAdmin, adminEmails } from '../src/lib/isAdmin.ts';
 import { suggestionEmail, inviteEmail, otpEmail } from '../src/lib/mailer.ts';
 import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, formatInZone } from '../src/lib/time.ts';
 import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
-import { projectScope, ownerScope, isProjectOwner, isProjectCreator } from '../src/lib/scope.ts';
+import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite } from '../src/lib/scope.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
-import { canComplete, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
+import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS } from '../src/lib/activity.ts';
 
 // extractUrl
@@ -284,26 +284,26 @@ const ME = 'u1', OTHER = 'u2';
 const projTask = (over = {}) => ({ projectId: 'p1', userId: OTHER, ...over });
 
 // The assignee ticks their own work; nobody else wanders in.
-assert.equal(canComplete(projTask({ assigneeId: ME }), ME, 'me@x.com', false), true, 'assignee ticks their own');
-assert.equal(canComplete(projTask({ assigneeId: OTHER }), ME, 'me@x.com', false), false, 'a stranger cannot');
-assert.equal(canComplete(projTask({ userId: ME, assigneeId: OTHER }), ME, 'me@x.com', false), true, 'the person who wrote it down can');
+assert.equal(canWorkOn(projTask({ assigneeId: ME }), ME, 'me@x.com', false), true, 'assignee ticks their own');
+assert.equal(canWorkOn(projTask({ assigneeId: OTHER }), ME, 'me@x.com', false), false, 'a stranger cannot');
+assert.equal(canWorkOn(projTask({ userId: ME, assigneeId: OTHER }), ME, 'me@x.com', false), true, 'the person who wrote it down can');
 
 // Assigned by email and never claimed: no assigneeId exists yet, and without this branch the
 // assignee cannot tick their own task until an unrelated read happens to claim it.
-assert.equal(canComplete(projTask({ assigneeEmail: 'Me@X.com' }), ME, 'me@x.com', false), true, 'unclaimed email assignment still ticks');
-assert.equal(canComplete(projTask({ assigneeEmail: 'them@x.com' }), ME, 'me@x.com', false), false, 'someone else\'s email does not');
-assert.equal(canComplete(projTask({ assigneeEmail: '' }), ME, '', false), false, 'blank never matches blank');
+assert.equal(canWorkOn(projTask({ assigneeEmail: 'Me@X.com' }), ME, 'me@x.com', false), true, 'unclaimed email assignment still ticks');
+assert.equal(canWorkOn(projTask({ assigneeEmail: 'them@x.com' }), ME, 'me@x.com', false), false, 'someone else\'s email does not');
+assert.equal(canWorkOn(projTask({ assigneeEmail: '' }), ME, '', false), false, 'blank never matches blank');
 
 // The bug this round fixes: an owner who is neither creator nor assignee was locked out of a
 // task in their own group. And an owner of some OTHER group is still nobody here.
-assert.equal(canComplete(projTask({ assigneeId: OTHER }), ME, 'me@x.com', true), true, 'an owner can tick');
-assert.equal(canComplete({ userId: OTHER, assigneeId: OTHER }, ME, 'me@x.com', true), false, 'no project, no owner branch');
+assert.equal(canWorkOn(projTask({ assigneeId: OTHER }), ME, 'me@x.com', true), true, 'an owner can tick');
+assert.equal(canWorkOn({ userId: OTHER, assigneeId: OTHER }, ME, 'me@x.com', true), false, 'no project, no owner branch');
 
 // idOf: a populated {_id,email,name} and a raw id are the same person; two different populated
 // objects are not. Naive String() on the populated shape gives '[object Object]' for BOTH, which
 // would open the gate for the wrong person — the one genuinely dangerous line in taskAccess.
-assert.equal(canComplete(projTask({ assigneeId: { _id: ME, email: 'me@x.com' } }), ME, 'me@x.com', false), true, 'populated assignee matches its raw id');
-assert.equal(canComplete(projTask({ assigneeId: { _id: OTHER, email: 'them@x.com' } }), ME, 'zz@x.com', false), false, 'two populated objects are not automatically equal');
+assert.equal(canWorkOn(projTask({ assigneeId: { _id: ME, email: 'me@x.com' } }), ME, 'me@x.com', false), true, 'populated assignee matches its raw id');
+assert.equal(canWorkOn(projTask({ assigneeId: { _id: OTHER, email: 'them@x.com' } }), ME, 'zz@x.com', false), false, 'two populated objects are not automatically equal');
 
 // Sign-off: owner only, group only, finished work only. Approving unfinished work is what would
 // make "signed off" stop being a subset of "completed" on the funnel.
@@ -352,5 +352,63 @@ assert.equal(daysBack(0), DEFAULT_DAYS, 'zero would return nothing at all');
 assert.equal(daysBack(-5), DEFAULT_DAYS, 'a negative window would query the future');
 assert.equal(daysBack('drop table'), DEFAULT_DAYS, 'junk falls back rather than throwing');
 assert.equal(daysBack(99999), 365, 'and the ceiling holds');
+
+// ---------------------------------------------------------------------------
+// The view-only role. The one round where a bug is a data leak rather than an annoyance, so
+// these assertions are about what a viewer must NOT reach as much as what they must.
+
+const VIEWER = 'client@x.com';
+const withViewer = { ownerId: { email: 'me@x.com' }, ownerEmails: [], memberEmails: ['dev@x.com'], viewerEmails: [VIEWER] };
+
+// A viewer reads. That is the whole point of the role.
+{
+  const read = projectScope('u1', VIEWER, true);
+  assert.ok(read.$or.some(b => b.viewerEmails === VIEWER), 'a verified viewer can see the group');
+}
+// ...but the same email must NOT appear in the write scope, or the role means nothing.
+{
+  const write = writerScope('u1', VIEWER, true);
+  assert.ok(!write.$or.some(b => b.viewerEmails), 'writerScope has no viewer branch at all');
+  assert.equal(write.$or.length, 2, 'writerScope is owner + member, nothing else');
+}
+// ...and never anywhere near owner rights.
+{
+  const own = ownerScope('u1', VIEWER, true);
+  assert.ok(!own.$or.some(b => b.viewerEmails), 'ownerScope never grows a viewer branch');
+}
+
+// Verification gates the viewer branch exactly as it gates members. Skipping it would reopen the
+// hole the whole email-verification round was built to close, on a new field.
+{
+  const unverified = projectScope('u1', VIEWER, false);
+  assert.equal(unverified.$or.length, 1, 'an unverified viewer sees only what they own');
+  assert.ok(!JSON.stringify(unverified).includes(VIEWER), 'and their claimed address appears nowhere');
+}
+
+// canWrite is the single question every control asks.
+assert.equal(canWrite(withViewer, VIEWER), false, 'a viewer changes nothing');
+assert.equal(canWrite(withViewer, 'dev@x.com'), true, 'a member does');
+assert.equal(canWrite(withViewer, 'me@x.com'), true, 'so does the creator');
+assert.equal(canWrite(withViewer, 'nobody@x.com'), false, 'and a stranger is not a member by default');
+assert.equal(canWrite(null, 'dev@x.com'), false, 'no project, no write');
+
+assert.equal(isProjectViewer(withViewer, VIEWER), true);
+assert.equal(isProjectViewer(withViewer, 'dev@x.com'), false);
+assert.equal(isProjectViewer(withViewer, 'ME@x.com'), false, 'the creator is never a viewer');
+
+// Being in two lists resolves to the HIGHER power. A viewer entry added by mistake must not
+// quietly strip a real member of access they had yesterday.
+const both = { ...withViewer, memberEmails: ['dev@x.com', VIEWER] };
+assert.equal(isProjectViewer(both, VIEWER), false, 'membership outranks a viewer entry');
+assert.equal(canWrite(both, VIEWER), true, 'and they keep writing');
+const ownerAndViewer = { ...withViewer, ownerEmails: [VIEWER], memberEmails: ['dev@x.com', VIEWER] };
+assert.equal(isProjectViewer(ownerAndViewer, VIEWER), false, 'an owner is never demoted by a viewer entry');
+assert.equal(canWrite(ownerAndViewer, VIEWER), true);
+
+// A view-only client can be given work and still may not close it — the assigneeEmail branch
+// of canWorkOn is the one gate a viewer can otherwise reach, which is why the actions ask
+// canWriteProject first and this assertion exists to say so out loud.
+assert.equal(canWorkOn({ projectId: 'p1', assigneeEmail: VIEWER }, 'u9', VIEWER, false), true,
+  'canWorkOn alone would let an assigned viewer tick — the write gate has to run before it');
 
 console.log('self-check: all assertions passed');
