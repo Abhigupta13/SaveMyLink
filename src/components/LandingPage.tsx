@@ -347,7 +347,7 @@ export default function LandingPage() {
           <p className="eyebrow">Your data stays yours</p>
           <div className="vault-card">
             <div className="vault-lock"><Lock size={22} aria-hidden="true" /></div>
-            <h2>Yours alone, unless you say otherwise.</h2>
+            <h2>Yours alone.</h2>
             <p className="lede">Everything you save is private by default. We don&apos;t read your content, we don&apos;t sell it, and we&apos;ll tell you the limits of that promise rather than let you assume a stronger one.</p>
             <div className="vault-rules">
               <div className="vault-rule"><b>Private by default</b><span>Nothing you save is visible to anyone else unless you put it in a project group.</span></div>
