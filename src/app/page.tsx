@@ -2,6 +2,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import LandingPage from '@/components/LandingPage';
 import HomeTiles from '@/components/HomeTiles';
+import Wordmark from '@/components/brand/Wordmark';
 
 export default async function Home() {
   const session = await getServerSession(authOptions);
@@ -11,7 +12,7 @@ export default async function Home() {
   return (
     <main className="page">
       <header className="home-greeting">
-        <span className="home-wordmark">ALL <span>YOU NEED</span></span>
+        <Wordmark className="home-wordmark" size={20} />
         <h1>Hi, {user.name?.split(' ')[0] || 'there'}</h1>
         <p>What&apos;s on your mind?</p>
       </header>

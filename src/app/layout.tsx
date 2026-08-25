@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import TopNav from "@/components/TopNav";
 import { getCategories } from "@/actions/category";
@@ -13,16 +12,6 @@ import { FeedbackProvider } from "@/components/ui/Feedback";
 import { cookies } from "next/headers";
 
 export const dynamic = 'force-dynamic';
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "ALL you need",
@@ -52,7 +41,7 @@ export default async function RootLayout({
     <html
       lang="en"
       data-theme={theme === 'light' || theme === 'dark' ? theme : undefined}
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className="h-full antialiased"
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>

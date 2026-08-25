@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@700;800&family=Fraunces:ital,opsz,wght,SOFT@0,9..144,300..700,50;1,9..144,300..700,50&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -17,6 +17,7 @@
    properties like color update. ThemeToggle reloads the page instead. */
 :root {
   color-scheme: dark;
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
 
   /* warm charcoal, not navy */
   --bg-color: #1f1e1d;
@@ -2531,18 +2532,17 @@ main { padding-bottom: 84px; }
 .pw-rules .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin: 0 3px; opacity: 0.6; }
 @media (max-width: 420px) { .pw-rules { grid-template-columns: 1fr; } }
 
-/* Brand in the rail (replaces the old top bar) */
-.rail-wordmark { display: block; text-align: center; text-decoration: none; font-weight: 900; font-size: 0.66rem; line-height: 1.15; letter-spacing: 0.02em; color: var(--accent-text); padding: 10px 2px 12px; border-bottom: 1px solid var(--border-color); margin-bottom: 8px; }
-.rail-wordmark span { display: block; color: var(--text-secondary); font-weight: 800; font-size: 0.58rem; letter-spacing: 0.04em; }
+/* Brand in the rail (replaces the old top bar): mark above the stacked wordmark */
+.rail-wordmark { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; text-decoration: none; padding: 8px 2px 12px; border-bottom: 1px solid var(--border-color); margin-bottom: 8px; }
+.rail-wordmark .wordmark-text { display: block; font-weight: 900; font-size: 0.62rem; line-height: 1.15; letter-spacing: 0.02em; color: var(--accent-text); }
+.rail-wordmark .logo-light { display: block; color: var(--text-secondary); -webkit-text-fill-color: currentColor; font-weight: 800; font-size: 0.56rem; letter-spacing: 0.04em; }
 .bottom-avatar { width: 35px; height: 35px; border-radius: 50%; background: var(--accent-gradient); color: #fff; font-size: 0.75rem; font-weight: 800; display: flex; align-items: center; justify-content: center; }
 .home-wordmark, .phone-wordmark { display: none; }
 @media (max-width: 767px) {
-  /* no rail on phones, so the brand sits top-right of the greeting on Home */
   .home-greeting { position: relative; padding-right: 34vw; }
-  .home-wordmark { display: block; position: absolute; top: 2px; right: 0; white-space: nowrap; font-weight: 900; font-size: clamp(0.74rem, 3.2vw, 0.95rem); letter-spacing: 0.05em; color: var(--accent-text); }
-  .home-wordmark span { color: var(--text-tertiary); }
-  .phone-wordmark { display: block; text-align: center; text-decoration: none; white-space: nowrap; padding: 14px 14px 0; font-weight: 900; font-size: clamp(0.74rem, 3.2vw, 0.95rem); letter-spacing: 0.05em; color: var(--accent-text); }
-  .phone-wordmark span { color: var(--text-tertiary); }
+  .home-wordmark { display: inline-flex; position: absolute; top: 2px; right: 0; white-space: nowrap; font-weight: 900; font-size: clamp(0.74rem, 3.2vw, 0.95rem); letter-spacing: 0.05em; color: var(--accent-text); }
+  .phone-wordmark { display: inline-flex; margin: 14px auto 0; width: 100%; justify-content: center; text-decoration: none; white-space: nowrap; font-weight: 900; font-size: clamp(0.74rem, 3.2vw, 0.95rem); letter-spacing: 0.05em; color: var(--accent-text); }
+  .home-wordmark .logo-light, .phone-wordmark .logo-light { font-size: inherit; color: var(--text-tertiary); font-weight: 800; letter-spacing: 0.05em; margin-left: 0.3em; }
   main { padding-top: 14px; }
 }
 @media (min-width: 768px) { main { padding-top: 20px; } }
@@ -2949,3 +2949,13 @@ main { padding-bottom: 84px; }
 .contact-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .contact-chips .chip { font-size: 0.68rem; }
 .contact-chips .subtle-link { font-size: 0.72rem; }
+
+/* ---------- Brand mark ---------- */
+/* Each slot sets its own display (the phone/home slots are hidden on desktop) */
+.wordmark { align-items: center; gap: 0.45em; text-decoration: none; }
+.wordmark .mark { flex: none; }
+.logo.wordmark { display: inline-flex; gap: 8px; }
+.mark-live .mark-bar { transform-origin: 50% 50%; transform-box: fill-box; animation: level 1.6s ease-in-out infinite; }
+.mark-live .b1 { animation-delay: 0s; } .mark-live .b2 { animation-delay: .25s; } .mark-live .b3 { animation-delay: .5s; }
+@keyframes level { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(.45); } }
+@media (prefers-reduced-motion: reduce) { .mark-live .mark-bar { animation: none; } }

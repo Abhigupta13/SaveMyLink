@@ -8,6 +8,7 @@ import VerifyBanner from './VerifyBanner';
 import { useSession } from 'next-auth/react';
 import { Search, Plus, Home, X } from 'lucide-react';
 import { NAV, MOBILE_NAV } from '@/lib/nav';
+import Wordmark from './brand/Wordmark';
 
 export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
   const { data: session } = useSession();
@@ -57,7 +58,7 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     return (
       <>
         <header className="topbar">
-          <a href="/" className="logo">ALL <span className="logo-light" style={{ marginLeft: '4px' }}>YOU NEED</span></a>
+          <Wordmark className="logo" />
         </header>
         <PinModal />
       </>
@@ -70,7 +71,7 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
 
       {/* Desktop / tablet: left rail */}
       <aside className="side-rail">
-        <a href="/" className="rail-wordmark">ALL<span>YOU NEED</span></a>
+        <Wordmark className="rail-wordmark" size={20} />
         <button className={`rail-item home ${isActive('/') ? 'active' : ''}`} onClick={() => router.push('/')} title="Home">
           <Home size={20} strokeWidth={2.2} /><span>Home</span>
         </button>
@@ -87,7 +88,7 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
       </aside>
 
       {/* Phone: brand header on every tab except Home (Home has it in the greeting) */}
-      {pathname !== '/' && <a href="/" className="phone-wordmark">ALL <span>YOU NEED</span></a>}
+      {pathname !== '/' && <Wordmark className="phone-wordmark" size={20} />}
 
       {/* Phone: bottom tabs only — no top bar */}
       <nav className="bottom-nav">
