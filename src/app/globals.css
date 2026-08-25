@@ -2928,8 +2928,10 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .mom-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--danger-color); animation: mom-pulse 1.2s ease-in-out infinite; }
 @keyframes mom-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: 0.5; } }
 
-.mom-wave { display: flex; align-items: center; gap: 3px; flex: 1; min-width: 0; height: 20px; overflow: hidden; }
-.mom-wave i { display: block; flex: 1 1 3px; max-width: 3px; height: 40%; border-radius: 2px; background: var(--accent-color); animation: mom-wave 1s ease-in-out infinite; }
+/* Fixed-width bars with the overflow clipped, rather than bars that stretch: a level meter's
+   ticks are the same width on a phone and a desktop, and only how many you see changes. */
+.mom-wave { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; height: 20px; overflow: hidden; }
+.mom-wave i { display: block; flex: none; width: 3px; height: 40%; border-radius: 2px; background: var(--accent-color); animation: mom-wave 1s ease-in-out infinite; }
 .mom-wave i:nth-child(2n) { animation-delay: 0.15s; }
 .mom-wave i:nth-child(3n) { animation-delay: 0.3s; }
 .mom-wave i:nth-child(5n) { animation-delay: 0.45s; height: 70%; }
@@ -2956,6 +2958,10 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 /* The hand-off from "a recording" to "your to-do list" — the one moment worth animating here. */
 .mom-found { margin: 0 0 8px; text-align: center; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-tertiary); animation: mom-found 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 @keyframes mom-found { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+/* Desktop: the recorder is a control, not content — a card stretched to 1700px leaves the waveform
+   marooned beside a pill on the far horizon. Cap it and the whole strip stays in proportion. */
+@media (min-width: 900px) { .mom-stage { max-width: 760px; } }
 
 /* Phone: stack the button over its status line and give it the full thumb width. Must sit after
    the base rules above — the shared @media block earlier in this file loses to them on tie. */

@@ -30,6 +30,13 @@ const ENGINE_NOTE: Record<string, string> = {
   sarvam: 'upgraded Hindi',
 };
 
+// The landing page promises a live waveform while you record; this is that, made real. Bars driven
+// by CSS keyframes rather than an AnalyserNode: a real level meter costs a 60fps rAF loop on a
+// phone that is already encoding audio, and it would say nothing the "Recording" pill does not.
+const Wave = () => (
+  <div className="mom-wave" aria-hidden="true">{Array.from({ length: 40 }, (_, i) => <i key={i} />)}</div>
+);
+
 export default function MomSection({ project, projects = [], myEmail, memberOptions, onTasksCreated }: MomSectionProps) {
   const { toast, confirm } = useFeedback();
   const { confirmShare, shareDialog } = useShareNotice();
@@ -70,6 +77,10 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const [draftMom, setDraftMom] = useState<{ title: string; summary: string }>({ title: '', summary: '' });
   const [showTranscript, setShowTranscript] = useState<string | null>(null);
   const [hinglish, setHinglish] = useState(false);   // account is allowlisted for Sarvam
+  // Which meeting the stage card is about. Set when recording starts, cleared by every pipeline
+  // that belongs to an *older* meeting (re-extract, resumed poll) — those must not borrow today's
+  // title and the last recording's clock.
+  const [stageTitle, setStageTitle] = useState('');
 
   const fetchMoms = useCallback(async () => {
     const res = await getMoms(projectId);
@@ -118,6 +129,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       recorderRef.current = recorder;
       setRecording(true);
       setElapsed(0);
+      setStageTitle(meetingTitle());
       timerRef.current = setInterval(() => setElapsed(s => {
         // Past this the upload is rejected by the host before any engine sees it, and on the paid
         // path it would also be a real bill. Stop it ourselves rather than lose the recording.
@@ -221,7 +233,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       m.sarvamJobId && !m.transcript && !m.transcriptionError && !resumedRef.current.has(m._id));
     if (!stuck) return;
     resumedRef.current.add(stuck._id);
-    (async () => { if (await waitForTranscript(stuck._id, true)) await runExtraction(stuck._id); })();
+    (async () => { if (await waitForTranscript(stuck._id, true)) { setStageTitle(''); await runExtraction(stuck._id); } })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moms, pipeline]);
 
@@ -229,6 +241,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   // so a meeting with no transcript can only be recorded again.
   const handleProcess = async (mom: any) => {
     if (!mom.transcript) { toast('That recording has no transcript — record it again.', 'error'); return; }
+    setStageTitle('');
     setPipeline('Extracting tasks…');
     const ex = await extractMomTasks(mom._id, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setPipeline('');
@@ -243,6 +256,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
 
   // Re-run the AI on an existing recording (also upgrades meetings extracted by older versions)
   const reExtract = async (mom: any) => {
+    setStageTitle('');
     setPipeline('Re-reading the transcript…');
     const ex = await extractMomTasks(mom._id, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setPipeline('');
@@ -338,30 +352,52 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
 
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
+  // The pill says which of the three waits this is, because "please wait" is not an answer to
+  // "how long". Derived from the pipeline text rather than a second piece of state to keep in sync.
+  const stageWord = pipeline.startsWith('Uploading') ? 'Uploading'
+    : pipeline.startsWith('Transcribing') ? 'Transcribing' : 'Extracting';
+
   return (
     <div>
       {shareDialog}
-      {/* Recorder */}
-      {canEdit && <div className="mom-recorder" style={{
-        display: 'flex', alignItems: 'center', gap: '16px', padding: '20px', marginBottom: hinglish ? '24px' : '8px',
-        background: 'var(--bg-secondary)', borderRadius: '24px', border: '1px solid var(--border-color)'
-      }}>
-        {!recording ? (
-          <button onClick={startRecording} disabled={!!pipeline} className="btn-primary"
-            style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 28px', borderRadius: '16px', fontWeight: 800, opacity: pipeline ? 0.6 : 1 }}>
-            <Mic size={20} /> Record meeting
-          </button>
-        ) : (
-          <button onClick={stopRecording}
-            style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 28px', borderRadius: '16px', fontWeight: 800, background: 'var(--danger-color)', color: 'white', border: 'none', cursor: 'pointer' }}>
-            <Square size={18} fill="white" /> Stop · {fmtTime(elapsed)}
-          </button>
+      {/* Recorder — the landing page's stage card, made real: title row, live waveform, state pill. */}
+      {canEdit && <div className="mom-stage" style={{ marginBottom: hinglish ? '24px' : '8px' }}>
+        {(recording || (pipeline && stageTitle)) && (
+          <div className="mom-stage-bar">
+            <b>{stageTitle}</b>
+            <span className="mom-clock">{fmtTime(elapsed)}<i> / 20:00</i></span>
+          </div>
         )}
-        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600 }}>
-          {pipeline || (recording ? 'Recording… keep the phone near the discussion. Up to 20 minutes for now — longer meetings after the next round.'
-            : project ? `Record → transcribe → action items, filed under ${project.name}.`
-            : 'Record → transcribe → each action item routed to the project it belongs to.')}
-        </span>
+
+        {recording ? (
+          <div className="mom-strip">
+            <i className="mom-dot" aria-hidden="true" />
+            <Wave />
+            <span className="mom-pill live">Recording</span>
+          </div>
+        ) : pipeline ? (
+          <div className="mom-strip waiting">
+            <Wave />
+            <span className="mom-pill">{stageWord}</span>
+          </div>
+        ) : null}
+
+        <div className="mom-stage-foot">
+          {!recording ? (
+            <button onClick={startRecording} disabled={!!pipeline} className="btn-primary mom-stage-btn">
+              <Mic size={20} /> Record meeting
+            </button>
+          ) : (
+            <button onClick={stopRecording} className="mom-stage-btn stop">
+              <Square size={18} fill="currentColor" /> Stop recording
+            </button>
+          )}
+          <p className="mom-stage-note" role="status">
+            {pipeline || (recording ? 'Recording… keep the phone near the discussion. Up to 20 minutes for now — longer meetings after the next round.'
+              : project ? `Record → transcribe → action items, filed under ${project.name}.`
+              : 'Record → transcribe → each action item routed to the project it belongs to.')}
+          </p>
+        </div>
       </div>}
 
       {/* Hindi is free now, so the old "needs the upgraded engine" line would be a lie. What is
@@ -429,9 +465,15 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
 
               {/* Still with Sarvam. Survives a reload, so say so rather than offering a dead button. */}
               {mom.sarvamJobId && !mom.transcript && !mom.transcriptionError && (
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 700, margin: '0 0 8px' }}>
-                  Transcribing… this can take a few minutes. Safe to leave the page.
-                </p>
+                <>
+                  <div className="mom-strip waiting" style={{ marginBottom: '8px' }}>
+                    <Wave />
+                    <span className="mom-pill">Transcribing</span>
+                  </div>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 700, margin: '0 0 8px' }}>
+                    This can take a few minutes. Safe to leave the page.
+                  </p>
+                </>
               )}
 
               {mom.transcriptionError && !mom.transcript && (
@@ -464,6 +506,8 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                   (m === 'project' && !d.projectId) || (m === 'assignee' && !d.assigneeEmail) || (m === 'due' && !d.dueAt)).length, 0);
                 return (
                   <div style={{ borderTop: '1px dashed var(--border-color)', paddingTop: '14px' }}>
+                    {/* The reveal the landing page promises, at the moment it actually happens. */}
+                    <p className="mom-found" aria-hidden="true">↓ action items found</p>
                     <p className="task-group-label" style={{ margin: '0 0 10px' }}>
                       Extracted items <span className="count">{list.length}</span>
                       {gaps > 0 && <span className="chip overdue" style={{ marginLeft: 'auto' }}><AlertTriangle size={11} style={{ verticalAlign: '-1px' }} /> {gaps} need your input</span>}
