@@ -11,6 +11,7 @@ import { escapeRegex } from "@/lib/regex";
 import { hasSafe } from "@/lib/safeCookie";
 import { getServerSession } from "next-auth";
 import { myProjectFilter } from "@/lib/projectAccess";
+import { projectNameMap, sharedLabel } from "@/lib/visibility";
 
 // One search across links, tasks, projects (name+notes), and MOM transcripts
 export async function searchAll(q: string) {
@@ -57,14 +58,16 @@ export async function searchAll(q: string) {
   ]);
 
   const projects = myProjects.filter(p => regex.test(p.name) || regex.test(p.notes || ''));
-  const projectNames = new Map(myProjects.map(p => [String(p._id), p.name]));
+  const projectNames = projectNameMap(myProjects);
+  // A shared row says which group can see it — silently mixing personal and shared is the bug
+  const tag = (r: any) => ({ ...r, projectName: sharedLabel(r, projectNames) });
 
   return {
     success: true,
     links: JSON.parse(JSON.stringify(links)),
-    notes: JSON.parse(JSON.stringify(notes)),
-    tasks: JSON.parse(JSON.stringify(tasks)),
+    notes: JSON.parse(JSON.stringify(notes.map(tag))),
+    tasks: JSON.parse(JSON.stringify(tasks.map(tag))),
     projects: JSON.parse(JSON.stringify(projects)),
-    moms: JSON.parse(JSON.stringify(moms.map(m => ({ ...m, projectName: projectNames.get(String(m.projectId)) })))),
+    moms: JSON.parse(JSON.stringify(moms.map(tag))),
   };
 }

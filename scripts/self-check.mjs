@@ -12,6 +12,7 @@ import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
+import { projectNameMap, sharedLabel, needsShareNotice } from '../src/lib/visibility.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -424,5 +425,23 @@ assert.equal(fromMeeting({ momId: 'm1', momTitle: '  ' }), 'from a deleted meeti
 assert.equal(fromMeeting({}), '', 'a note that never came from a meeting claims nothing');
 assert.equal(fromMeeting({ momId: null, momTitle: 'ghost' }), '', 'no momId, no origin, whatever else is lying around');
 assert.ok(!fromMeeting({ momId: 'm1', momTitle: undefined }).includes('undefined'));
+
+// ---------------------------------------------------------------------------
+// Who can see it. The chip must never name a group the user is not in (the map only holds
+// their own projects), and the first-share sheet asks once per group, never for personal work,
+// and never again after "Don't show this again".
+const groups = projectNameMap([{ _id: { toString: () => 'p1' }, name: 'Launch' }, { _id: 'p2', name: 'Site' }]);
+assert.equal(sharedLabel({ projectId: 'p1' }, groups), 'Launch');
+assert.equal(sharedLabel({ projectId: { toString: () => 'p2' } }, groups), 'Site', 'ObjectId or string, same answer');
+assert.equal(sharedLabel({ projectId: 'p9' }, groups), null, 'a group I cannot see gets no name');
+assert.equal(sharedLabel({}, groups), null, 'personal');
+assert.equal(sharedLabel({ projectId: null }, groups), null);
+assert.equal(needsShareNotice([], 'p1'), true, 'first share into a group asks');
+assert.equal(needsShareNotice(['p1'], 'p1'), false, 'second share into the same group does not');
+assert.equal(needsShareNotice(['p1'], 'p2'), true, 'a different group asks again');
+assert.equal(needsShareNotice(['*'], 'p2'), false, '"Don\'t show this again" silences every group');
+assert.equal(needsShareNotice([], ''), false, 'personal never asks');
+assert.equal(needsShareNotice(undefined, null), false);
+assert.equal(needsShareNotice(undefined, 'p1'), true, 'no record yet means never seen');
 
 console.log('self-check: all assertions passed');

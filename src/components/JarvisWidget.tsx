@@ -519,7 +519,12 @@ export default function JarvisWidget() {
                           <span className="jarvis-type">{it.urgent ? 'URGENT' : it.type}</span>
                           <span style={{ flex: 1, minWidth: 0 }}>
                             <span style={{ display: 'block', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
-                            {it.detail && <span style={{ display: 'block', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>{it.detail}</span>}
+                            {(it.detail || it.project) && (
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                                {it.project && <span className="chip">{it.project}</span>}
+                                {it.detail && <span style={{ minWidth: 0 }}>{it.detail}</span>}
+                              </span>
+                            )}
                           </span>
                           <ArrowUpRight size={14} style={{ flexShrink: 0, opacity: 0.6 }} />
                         </a>

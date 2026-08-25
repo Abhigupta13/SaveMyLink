@@ -4,6 +4,8 @@ import { redirect } from 'next/navigation';
 import connectToDatabase from '@/lib/mongodb';
 import { Link } from '@/lib/models/Link';
 import Task from '@/lib/models/Task';
+import { Project } from '@/lib/models/Project';
+import { projectNameMap, sharedLabel } from '@/lib/visibility';
 import { formatInZone } from '@/lib/time';
 
 export default async function DigestPage() {
@@ -25,8 +27,11 @@ export default async function DigestPage() {
     }).sort({ dueAt: 1 }).limit(30).lean(),
   ]);
 
+  // A task assigned to me from a group is visible to that group; the row should say so
+  const projectIds = [...new Set(dueTasks.map(t => t.projectId).filter(Boolean).map(String))];
+  const names = projectNameMap(projectIds.length ? await Project.find({ _id: { $in: projectIds } }).select('name').lean() : []);
   const links = JSON.parse(JSON.stringify(savedLinks));
-  const tasks = JSON.parse(JSON.stringify(dueTasks));
+  const tasks = JSON.parse(JSON.stringify(dueTasks.map(t => ({ ...t, projectName: sharedLabel(t, names) }))));
 
   return (
     <div className="container" style={{ padding: '24px 16px 120px' }}>
@@ -44,7 +49,10 @@ export default async function DigestPage() {
           const overdue = new Date(t.dueAt).getTime() < Date.now();
           return (
             <a key={t._id} href="/tasks" style={{ padding: '14px 18px', borderRadius: '16px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', textDecoration: 'none' }}>
-              <span style={{ display: 'block', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>{t.title}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.title}</span>
+                {t.projectName && <span className="chip">{t.projectName}</span>}
+              </span>
               <span style={{ fontSize: '0.75rem', fontWeight: 700, color: overdue ? 'var(--danger-color)' : 'var(--text-secondary)' }}>
                 {overdue ? 'Overdue — was due ' : 'Due '}{formatInZone(t.dueAt)}
               </span>

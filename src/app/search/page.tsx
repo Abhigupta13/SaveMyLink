@@ -33,12 +33,15 @@ function SearchPageInner() {
       </div>
     );
 
-  const card = (key: string, onClick: () => void, primary: string, secondary?: string) => (
+  const card = (key: string, onClick: () => void, primary: string, secondary?: string, shared?: string | null) => (
     <button key={key} onClick={onClick} style={{
       textAlign: 'left', padding: '14px 18px', borderRadius: '16px', background: 'var(--bg-secondary)',
       border: '1px solid var(--border-color)', cursor: 'pointer', color: 'var(--text-primary)'
     }}>
-      <span style={{ display: 'block', fontWeight: 700, fontSize: '0.95rem' }}>{primary}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '0.95rem' }}>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{primary}</span>
+        {shared && <span className="chip">{shared}</span>}
+      </span>
       {secondary && <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{secondary}</span>}
     </button>
   );
@@ -63,14 +66,14 @@ function SearchPageInner() {
           {section('Links & notes', results.links, (l: any) =>
             card(l._id, () => l.url ? window.open(l.url, '_blank') : router.push('/links'), l.title || l.url, l.url || 'Note'))}
           {section('Notes', results.notes, (n: any) =>
-            card(n._id, () => router.push('/notes'), n.title || (n.body || '').slice(0, 60), (n.body || '').slice(0, 120)))}
+            card(n._id, () => router.push('/notes'), n.title || (n.body || '').slice(0, 60), (n.body || '').slice(0, 120), n.projectName))}
           {section('Tasks', results.tasks, (t: any) =>
-            card(t._id, () => router.push('/tasks'), t.title, t.dueAt ? `Due ${formatDay(t.dueAt)}` : undefined))}
+            card(t._id, () => router.push('/tasks'), t.title, t.dueAt ? `Due ${formatDay(t.dueAt)}` : undefined, t.projectName))}
           {section('Projects', results.projects, (p: any) =>
             card(p._id, () => router.push('/tasks'), p.name, p.notes?.slice(0, 120)))}
           {section('Meetings (MOM)', results.moms, (m: any) =>
-            card(m._id, () => router.push('/tasks'), m.title, `${m.projectName || ''} · ${m.summary?.slice(0, 100) || 'transcript match'}`))}
-          {!results.links?.length && !results.tasks?.length && !results.projects?.length && !results.moms?.length && (
+            card(m._id, () => router.push('/mom'), m.title, m.summary?.slice(0, 100) || 'transcript match', m.projectName))}
+          {!results.links?.length && !results.notes?.length && !results.tasks?.length && !results.projects?.length && !results.moms?.length && (
             <p style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '40px', fontWeight: 600 }}>Nothing found for “{q}”.</p>
           )}
         </>

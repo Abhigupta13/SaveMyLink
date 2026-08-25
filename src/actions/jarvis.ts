@@ -26,6 +26,7 @@ export interface JarvisItem {
   url?: string | null;
   detail?: string;
   urgent?: boolean;
+  project?: string;   // the group that can see it; absent = personal
 }
 export interface JarvisTurn { role: 'user' | 'assistant'; content: string }
 export type Msg = JarvisTurn & { items?: JarvisItem[] };
@@ -41,6 +42,7 @@ const fmtIn = (tz: string): Fmt => v => formatInZone(v, tz);
 // ponytail: full-context dump (fine up to ~1k items); switch to embeddings if the vault outgrows it.
 async function gatherContext(userId: string, email: string, includePrivate: boolean, d: Fmt) {
   const ids = new Set<string>();
+  const groupOf = new Map<string, string>();   // id → group name, for the shared chip on cited items
   const linkQuery: any = { userId };
   if (!includePrivate) linkQuery.isPrivate = { $ne: true };
   const projects = await Project.find(await myProjectFilter(userId, email)).lean();
@@ -60,25 +62,30 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   ]);
 
   const lines: string[] = [];
-  const track = (id: any) => { ids.add(String(id)); return String(id); };
+  const track = (id: any, projectId?: unknown) => {
+    ids.add(String(id));
+    const g = projectId ? pname.get(String(projectId)) : undefined;
+    if (g) groupOf.set(String(id), g);
+    return String(id);
+  };
   for (const l of links as any[]) {
     const kind = l.url ? 'LINK' : 'NOTE';
     lines.push(`${kind} id=${track(l._id)} | ${l.title || l.url} | ${l.url || ''} | cat=${l.category?.name || '-'} | tags=${(l.tags || []).join(',')}${l.isFavorite ? ' | fav' : ''}${l.isDead ? ' | DEAD' : ''} | saved=${d(l.createdAt)}`);
   }
   for (const t of tasks as any[]) {
-    lines.push(`TASK id=${track(t._id)} | ${t.title} | due=${d(t.dueAt) || 'none'} | ${t.completed ? 'done' : 'open'} | project=${pname.get(String(t.projectId)) || 'personal'} | assignee=${t.assigneeId?.email || t.assigneeEmail || '-'} | desc=${(t.description || '').slice(0, 800).replace(/\s+/g, ' ')}`);
+    lines.push(`TASK id=${track(t._id, t.projectId)} | ${t.title} | due=${d(t.dueAt) || 'none'} | ${t.completed ? 'done' : 'open'} | project=${pname.get(String(t.projectId)) || 'personal'} | assignee=${t.assigneeId?.email || t.assigneeEmail || '-'} | desc=${(t.description || '').slice(0, 800).replace(/\s+/g, ' ')}`);
   }
   for (const p of projects as any[]) {
     lines.push(`PROJECT id=${track(p._id)} | ${p.name} | members=${(p.memberEmails || []).join(',')} | notes=${(p.notes || '').slice(0, 600).replace(/\s+/g, ' ')}`);
   }
   for (const m of moms as any[]) {
-    lines.push(`MOM id=${track(m._id)} | ${m.title} | project=${pname.get(String(m.projectId)) || '-'} | date=${d(m.createdAt)} | summary=${(m.summary || '').slice(0, 600).replace(/\s+/g, ' ')} | actions=${(m.candidates || []).map((c: any) => c.title).join('; ')} | projectId=${m.projectId}`);
+    lines.push(`MOM id=${track(m._id, m.projectId)} | ${m.title} | project=${pname.get(String(m.projectId)) || '-'} | date=${d(m.createdAt)} | summary=${(m.summary || '').slice(0, 600).replace(/\s+/g, ' ')} | actions=${(m.candidates || []).map((c: any) => c.title).join('; ')} | projectId=${m.projectId}`);
   }
   for (const n of notes as any[]) {
     // Files attached to a note are part of the note — same treatment as a DOC line
     const att = (n.attachments || []).map((a: any) =>
       `${a.name}${a.text ? `: ${String(a.text).slice(0, 2000)}` : ' (not readable — image or scan)'}`).join(' || ');
-    lines.push(`NOTE id=${track(n._id)} | ${n.title || '(untitled)'} | ${(n.body || '').slice(0, 800).replace(/\s+/g, ' ')} | updated=${d(n.updatedAt)}${att ? ` | attached=${att}` : ''}`);
+    lines.push(`NOTE id=${track(n._id, n.projectId)} | ${n.title || '(untitled)'} | ${(n.body || '').slice(0, 800).replace(/\s+/g, ' ')} | project=${pname.get(String(n.projectId)) || 'personal'} | updated=${d(n.updatedAt)}${att ? ` | attached=${att}` : ''}`);
   }
   for (const c of contacts as any[]) {
     lines.push(`CONTACT id=${track(c._id)} | ${c.name} | ${c.company || ''} | ${c.phone || ''} | ${c.email || ''} | ${c.note || ''}`);
@@ -86,9 +93,9 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   for (const doc of docs as any[]) {
     // Contents where we could read them; a scan or a video still gets a line so it can be cited
     const body = (doc.text || '').slice(0, 4000);
-    lines.push(`DOC id=${track(doc._id)} | ${doc.name} | folder=${doc.folder || 'Personal'} | ${doc.type === 'link' ? doc.url : (doc.mimeType || 'file')} | added=${d(doc.createdAt)} | contents=${body || '(not readable — image, video or scan)'}`);
+    lines.push(`DOC id=${track(doc._id, doc.projectId)} | ${doc.name} | folder=${doc.folder || 'Personal'} | ${doc.type === 'link' ? doc.url : (doc.mimeType || 'file')} | added=${d(doc.createdAt)} | contents=${body || '(not readable — image, video or scan)'}`);
   }
-  return { text: lines.join('\n'), ids, projects };
+  return { text: lines.join('\n'), ids, projects, groupOf };
 }
 
 // Groq rate-limits by tokens per minute (8k on the free tier), and the whole vault goes up on
@@ -148,6 +155,7 @@ Be concise and direct, like a sharp assistant: lead with the answer, then what's
 "answer" IS THE ANSWER — it is read aloud, and the user may never look at the screen. It must stand on its own with the actual facts in it: the titles, who is assigned, when things are due, what the meeting decided. "items" is only a set of tappable shortcuts to things you already said; it is never where the substance lives.
 So never write a pointer sentence and stop. NOT "Here are the items related to the block tray elevator:" — instead say it: "Three things on the block tray elevator. The Aug 23 meeting decided to add it to the Mogli robot home, with actions for Abhishek, Bistu and Sikha. Abhishek has 'Walk on block tray elevator' due 26 Aug at 5pm. Two more from that meeting — 'Work on cartridge' and 'Do mapping', same deadline, both still unassigned."
 Cover every item you cite, grouped sensibly rather than listed one by one, and keep it natural to listen to.
+When an item is shared with a group (its project= is not "personal"), say so by naming the group — the user needs to know who else can see it.
 WHAT YOU CAN DO
 1. Answer questions from DATA.
 2. Create or change things, ONLY by emitting an "actions" entry — you have no other way to touch anything:
@@ -352,7 +360,9 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
     const validIds = new Set([...ctx.ids, ...created.map(c => c.id)]);
     const cited: JarvisItem[] = (parsed.items || [])
       .filter((i: any) => i?.id && i?.title && validIds.has(String(i.id)))
-      .slice(0, 12);
+      .slice(0, 12)
+      // The group chip is stamped from our own context, never from what the model wrote
+      .map((i: any) => ({ ...i, project: ctx.groupOf.get(String(i.id)) }));
     const items = [...created, ...cited.filter(c => !created.some(x => x.id === c.id))];
 
     return { success: true, answer: String(parsed.answer || '').trim(), items, createdTasks };
