@@ -2742,6 +2742,8 @@ main { padding-bottom: 84px; }
 .ws-title { width: 100%; background: none; border: none; outline: none; padding: 0; color: var(--text-primary); font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; }
 .ws-title:focus { border-bottom: 2px solid var(--accent-color); }
 .ws-title:disabled { opacity: 1; }
+/* Provenance, not a stat — a step quieter than .page-subtitle so it never competes with it. */
+.ws-created { margin-top: 2px; color: var(--text-tertiary); font-size: 0.75rem; font-weight: 600; }
 
 /* ---------- Print / "Download as PDF" ---------- */
 .print-only { display: none; }

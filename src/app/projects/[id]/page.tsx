@@ -289,6 +289,13 @@ export default function ProjectWorkspace() {
             <p className="page-subtitle">
               {[overdue.length && `${overdue.length} overdue`, `${open.length} open`, `${moms.length} meeting${moms.length === 1 ? '' : 's'}`, `${memberOptions.length} member${memberOptions.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}
             </p>
+            {/* Who started this group, stated once. It is the only thing the old "creator" chip
+                actually told you, and it belongs with the group, not beside a person's name. */}
+            {project.ownerId?.email && (
+              <p className="ws-created">
+                Created by {project.ownerId.email === myEmail ? 'you' : nameOf(project.ownerId.email)} · {fmtDate(project.createdAt)}
+              </p>
+            )}
           </div>
           <button className="icon-btn" onClick={() => window.print()} title="Download as PDF"><Download size={16} /></button>
           {isCreator && <button className="icon-btn danger" onClick={handleDeleteProject} title="Delete project"><Trash2 size={16} /></button>}
@@ -410,7 +417,10 @@ export default function ProjectWorkspace() {
                       <div className="task-meta">
                         {/* The address still matters — it is what an invite was sent to */}
                         {people.get(email)?.name && <span className="chip" title={email}>{email}</span>}
-                        {owner && <span className="chip" title={creator ? 'Created this project — always an owner' : 'Can add members, rename, and delete shared work'}>{creator ? 'creator' : 'owner'}</span>}
+                        {/* One word for one power. "creator" read as a second, higher rank
+                            when it is only a fact about the past — who made the group, which
+                            the "Created by" note under the title already says. */}
+                        {owner && <span className="chip" title="Can add members, rename, and delete shared work">owner</span>}
                         <span className="chip">{load} open</span>
                         {/* "pending", not "invite sent" — members added before invite emails
                             existed never got one, and the chip should not claim otherwise */}

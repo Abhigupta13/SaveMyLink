@@ -40,8 +40,8 @@ export default function ProjectsPage() {
   if (status === 'unauthenticated') {
     return (
       <div className="container" style={{ padding: '80px 16px', textAlign: 'center' }}>
-        <h2 className="page-title">Projects</h2>
-        <p className="page-subtitle" style={{ marginBottom: '24px' }}>Sign in to see your projects.</p>
+        <h2 className="page-title">Project groups</h2>
+        <p className="page-subtitle" style={{ marginBottom: '24px' }}>Sign in to see your groups.</p>
         <Link href="/auth/signin" className="btn-primary" style={{ display: 'inline-block', padding: '12px 32px', borderRadius: '14px', fontWeight: 800 }}>Sign in</Link>
       </div>
     );
@@ -50,8 +50,10 @@ export default function ProjectsPage() {
   return (
     <div className="container" style={{ padding: '24px 16px 120px' }}>
       <header style={{ marginBottom: '18px' }}>
-        <h1 className="page-title">Projects</h1>
-        <p className="page-subtitle">{projects.length ? `${projects.length} project${projects.length > 1 ? 's' : ''}` : 'Everything for one piece of work in one place'}</p>
+        {/* "Project groups" says what it is — people plus their work, not a list of projects.
+            The nav stays the short "Projects": a rail label has no room to explain itself. */}
+        <h1 className="page-title">Project groups</h1>
+        <p className="page-subtitle">{projects.length ? `${projects.length} group${projects.length > 1 ? 's' : ''}` : 'Everything for one piece of work, and everyone on it, in one place'}</p>
       </header>
 
       <form onSubmit={handleCreate} className="quick-add">
