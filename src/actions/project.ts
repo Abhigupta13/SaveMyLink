@@ -12,6 +12,8 @@ import { sendMail, inviteEmail } from "@/lib/mailer";
 import { ownerFilter, myProjectFilter } from "@/lib/projectAccess";
 import { appUrl } from "@/lib/url";
 import { isProjectCreator, type OwnableProject } from "@/lib/scope";
+import { Event, recordEvent } from "@/lib/models/Event";
+import { sinceDays } from "@/lib/activity";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 
@@ -128,6 +130,8 @@ export async function addMember(projectId: string, email: string) {
     const sent = await sendMail({ to: normalized, ...mail })
       .catch(error => { console.error('Invite email failed:', normalized, error); return { delivered: false as const }; });
 
+    await recordEvent({ projectId, actorId: session.user.id, verb: 'member_added', subject: normalized });
+
     revalidatePath('/tasks');
     revalidatePath('/projects');
     return { success: true, invited: normalized, emailed: sent.delivered };
@@ -163,6 +167,8 @@ export async function removeMember(projectId: string, email: string) {
     // history of who owed it did not, and it silently sank into the list. The group page now
     // surfaces every one of these under "Needs an owner" instead, where it takes one tap to
     // hand over. Nothing is dropped just because somebody left.
+
+    await recordEvent({ projectId, actorId: session.user.id, verb: 'member_removed', subject: normalized });
 
     revalidatePath('/tasks'); revalidatePath('/projects');
     return { success: true };
@@ -248,6 +254,7 @@ export async function renameProject(projectId: string, name: string) {
       { _id: projectId, ...(await ownerFilter(session.user.id, session.user.email)) },
       { name: name.trim() }, { new: true });
     if (!res) return { success: false, error: 'Only a project owner can rename it' };
+    await recordEvent({ projectId, actorId: session.user.id, verb: 'project_renamed', subject: res.name });
     revalidatePath('/tasks');
     return { success: true, project: JSON.parse(JSON.stringify(res)) };
   } catch (error) {
@@ -278,6 +285,7 @@ export async function addOwner(projectId: string, email: string) {
     }
 
     await Project.updateOne(filter, { $addToSet: { ownerEmails: normalized } });
+    await recordEvent({ projectId, actorId: session.user.id, verb: 'owner_promoted', subject: normalized });
     revalidatePath('/projects');
     return { success: true, owner: normalized };
   } catch (error) {
@@ -302,11 +310,42 @@ export async function removeOwner(projectId: string, email: string) {
     }
 
     await Project.updateOne(filter, { $pull: { ownerEmails: normalized } });
+    await recordEvent({ projectId, actorId: session.user.id, verb: 'owner_stepped_down', subject: normalized });
 
     revalidatePath('/projects');
     return { success: true };
   } catch (error) {
     console.error('Failed to remove owner:', error);
     return { success: false, error: 'Could not remove them as an owner' };
+  }
+}
+
+/**
+ * The group's activity trail. A project-scoped read, so it takes the same gate as every other
+ * one — projectForMember, which is the only place the email-verification rule is allowed to live.
+ *
+ * `days` comes from a client control and is clamped in sinceDays rather than trusted.
+ * ponytail: capped at 200 rows so a busy group cannot dump its whole history into one payload.
+ * Paginate if anyone ever scrolls to the bottom of it.
+ */
+export async function getProjectEvents(projectId: string, days?: number) {
+  try {
+    await connectToDatabase();
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+    const project = await projectForMember(projectId, session.user.id, session.user.email);
+    if (!project) return { success: false, error: 'Not a member of this project' };
+
+    const events = await Event.find({ projectId, at: { $gte: sinceDays(days) } })
+      .populate('actorId', 'email name')
+      .sort({ at: -1 })
+      .limit(200)
+      .lean();
+
+    return { success: true, events: JSON.parse(JSON.stringify(events)) };
+  } catch (error) {
+    console.error('Failed to get project events:', error);
+    return { success: false, error: 'Could not load what changed' };
   }
 }

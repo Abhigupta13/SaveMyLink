@@ -15,6 +15,7 @@ import {
   startTranscriptionJob, jobStatus, jobTranscript,
 } from "@/lib/sarvam";
 import { DEFAULT_TZ, safeZone, zonedToUtc } from "@/lib/time";
+import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 import path from 'path';
@@ -111,6 +112,7 @@ export async function uploadMomAudio(formData: FormData) {
       title,
       transcript: String(text || ''),
     });
+    await recordEvent({ projectId: mom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: mom.title });
     return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
   } catch (error) {
     console.error('Failed to record meeting:', error);
@@ -162,6 +164,7 @@ export async function uploadMomAudioSarvam(formData: FormData) {
       title,
       sarvamJobId: job.data.jobId,
     });
+    await recordEvent({ projectId: mom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: mom.title });
     return { success: true, momId: String(mom._id) };
   } catch (error) {
     console.error('Failed to upload meeting audio:', error);
@@ -387,6 +390,7 @@ export async function confirmMomTasks(
         assigneeEmail: item.assigneeEmail?.toLowerCase(),
         momId: mom._id,
       });
+      await recordEvent({ projectId, actorId: session.user.id, verb: 'task_created', subject: item.title.trim() });
       tasks++;
     }
 

@@ -2754,6 +2754,15 @@ main { padding-bottom: 84px; }
 .ws-unheld-note { margin: -4px 0 8px; color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; }
 .chip.signed { display: inline-flex; align-items: center; gap: 4px; background: color-mix(in srgb, var(--success-color) 14%, transparent); color: var(--success-color); }
 
+/* ---------- What changed ----------
+   Deliberately not a card per row: this is a list you skim, and fifteen bordered boxes in a
+   narrow rail is a wall. One quiet line each, the name carrying the only emphasis. */
+.ws-event { padding: 6px 2px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); font-size: 0.82rem; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.ws-event:last-child { border-bottom: none; }
+.ws-event-who { color: var(--text-primary); font-weight: 800; }
+.ws-event-when { display: block; margin-top: 1px; color: var(--text-tertiary); font-size: 0.72rem; font-weight: 600; }
+.ws-days { flex-shrink: 0; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 8px; padding: 3px 6px; color: var(--text-secondary); font-size: 0.72rem; font-weight: 700; cursor: pointer; }
+
 /* ---------- Print / "Download as PDF" ---------- */
 .print-only { display: none; }
 @media print {

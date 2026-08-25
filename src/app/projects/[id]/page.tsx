@@ -6,7 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText, AlertTriangle, BadgeCheck } from 'lucide-react';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask } from '@/actions/task';
-import { getProjects, addMember, removeMember, addOwner, removeOwner, deleteProject, updateProjectNotes, renameProject } from '@/actions/project';
+import { getProjects, addMember, removeMember, addOwner, removeOwner, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
 import { getMoms } from '@/actions/mom';
 import { getNotes } from '@/actions/note';
 import { getDocuments } from '@/actions/document';
@@ -16,6 +16,7 @@ import { useFeedback } from '@/components/ui/Feedback';
 import { formatTime, formatDay, formatDate } from '@/lib/time';
 import { isProjectOwner, isProjectCreator } from '@/lib/scope';
 import { needsOwner, assigneeEmailOf } from '@/lib/taskAccess';
+import { phrase, DEFAULT_DAYS } from '@/lib/activity';
 
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
@@ -30,7 +31,19 @@ function fmtDue(iso: string) {
 }
 const fmtDate = (iso: string) => formatDate(iso);
 
-type Section = 'tasks' | 'meetings' | 'notes' | 'files' | 'about' | 'people';
+/** Same shape as fmtDue but looking backwards — the trail only ever shows things that happened. */
+function fmtWhen(iso: string) {
+  const d = new Date(iso);
+  const diffDays = Math.round((startOfDay(d).getTime() - startOfDay(new Date()).getTime()) / 86400000);
+  if (diffDays === 0) return formatTime(d);
+  if (diffDays === -1) return `Yesterday · ${formatTime(d)}`;
+  return `${formatDay(d)} · ${formatTime(d)}`;
+}
+
+/** The trail is the one list on this page with a stable, known shape — it is written by one helper. */
+type ActivityEvent = { _id: string; verb: string; subject?: string; at: string; actorId?: { email?: string; name?: string } };
+
+type Section = 'tasks' | 'meetings' | 'notes' | 'files' | 'about' | 'people' | 'activity';
 
 export default function ProjectWorkspace() {
   const { toast, confirm } = useFeedback();
@@ -44,9 +57,11 @@ export default function ProjectWorkspace() {
   const [moms, setMoms] = useState<any[]>([]);
   const [notes, setNotes] = useState<any[]>([]);
   const [files, setFiles] = useState<any[]>([]);
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [days, setDays] = useState(DEFAULT_DAYS);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [openSections, setOpenSections] = useState<Record<Section, boolean>>({ tasks: true, meetings: true, notes: true, files: true, about: false, people: true });
+  const [openSections, setOpenSections] = useState<Record<Section, boolean>>({ tasks: true, meetings: true, notes: true, files: true, about: false, people: true, activity: true });
 
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
@@ -118,6 +133,11 @@ export default function ProjectWorkspace() {
     setFiles((res.docs || []).filter((d: any) => d.projectId?._id === projectId));
   }, [projectId]);
 
+  const fetchEvents = useCallback(async () => {
+    const res = await getProjectEvents(projectId, days);
+    if (res.success) setEvents(res.events || []);
+  }, [projectId, days]);
+
   const load = useCallback(async () => {
     const res = await getProjects();
     const found = res.success ? (res.projects || []).find((p: any) => String(p._id) === projectId) : null;
@@ -126,10 +146,12 @@ export default function ProjectWorkspace() {
     setProject(found);
     setNotesDraft(found.notes || '');
     setRenaming(found.name);
-    await Promise.all([fetchTasks(), fetchMoms(), fetchNotes(), fetchFiles()]);
+    await Promise.all([fetchTasks(), fetchMoms(), fetchNotes(), fetchFiles(), fetchEvents()]);
     setLoading(false);
-  }, [projectId, fetchTasks, fetchMoms, fetchNotes, fetchFiles]);
+  }, [projectId, fetchTasks, fetchMoms, fetchNotes, fetchFiles, fetchEvents]);
 
+  // load() depends on fetchEvents, which depends on `days` — so changing the window already
+  // re-runs this. A second effect for it would just fetch the trail twice.
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
 
   /**
@@ -158,7 +180,7 @@ export default function ProjectWorkspace() {
       projectId,
       assigneeEmail: assignee || myEmail,
     });
-    if (res.success) { setTitle(''); setDue(''); fetchTasks(); }
+    if (res.success) { setTitle(''); setDue(''); fetchTasks(); fetchEvents(); }
     else toast(res.error || 'Something went wrong', 'error');
   };
 
@@ -166,13 +188,14 @@ export default function ProjectWorkspace() {
     setTasks(prev => prev.map(x => x._id === id ? { ...x, completed: !x.completed } : x));
     const res = await toggleTask(id);
     if (!res.success) fetchTasks();
+    else fetchEvents();
   };
 
   /** The owner's half of the two states: the assignee ticked it, an owner answers for it. */
   const handleSignOff = async (id: string) => {
     const res = await signOffTask(id);
     if (!res.success) return toast(res.error || 'Something went wrong', 'error');
-    fetchTasks();
+    fetchTasks(); fetchEvents();
   };
 
   const handleDelete = async (id: string) => {
@@ -199,7 +222,7 @@ export default function ProjectWorkspace() {
       dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null,
       assigneeEmail: draft.assigneeEmail || null,
     });
-    if (res.success) { setEditing(null); fetchTasks(); }
+    if (res.success) { setEditing(null); fetchTasks(); fetchEvents(); }
     else toast(res.error || 'Something went wrong', 'error');
   };
 
@@ -208,7 +231,7 @@ export default function ProjectWorkspace() {
     const name = renaming.trim();
     if (!name || name === project.name) return;
     const res = await renameProject(projectId, name);
-    if (res.success) setProject((p: any) => ({ ...p, name }));
+    if (res.success) { setProject((p: any) => ({ ...p, name })); fetchEvents(); }
     else { toast(res.error || 'Something went wrong', 'error'); setRenaming(project.name); }
   };
 
@@ -237,7 +260,7 @@ export default function ProjectWorkspace() {
   const handleRemove = async (email: string) => {
     if (!await confirm({ title: `Remove ${nameOf(email)}?`, message: 'Their tasks stay in the project, still in their name, and are listed under "Needs an owner" until someone picks them up.', danger: true, confirmLabel: 'Remove' })) return;
     const res = await removeMember(projectId, email);
-    if (res.success) { setProject((p: any) => ({ ...p, memberEmails: (p.memberEmails || []).filter((e: string) => e !== email) })); fetchTasks(); }
+    if (res.success) { setProject((p: any) => ({ ...p, memberEmails: (p.memberEmails || []).filter((e: string) => e !== email) })); fetchTasks(); fetchEvents(); }
     else toast(res.error || 'Something went wrong', 'error');
   };
 
@@ -504,6 +527,37 @@ export default function ProjectWorkspace() {
                 <PersonPicker exclude={memberOptions} onPick={handleInvite} busy={inviting} />
               )}
             </>
+          )}
+        </section>
+
+        {/* ---------- What changed ----------
+            The screen that replaces a manager's chasing: who moved what, without asking anyone.
+            History cannot be backfilled, which is why this starts recording before it is pretty. */}
+        <section className="ws-section">
+          {sectionHead('activity', 'What changed', events.length,
+            <select className="ws-days" value={days} onChange={e => setDays(Number(e.target.value))} aria-label="How far back">
+              <option value={7}>7 days</option>
+              <option value={30}>30 days</option>
+              <option value={90}>90 days</option>
+            </select>
+          )}
+          {openSections.activity && (
+            events.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.85rem', padding: '4px 0' }}>
+                Nothing in the last {days} days.
+              </p>
+            ) : events.map(ev => {
+              const said = phrase(ev.verb, ev.subject);
+              if (!said) return null;   // an event from a newer deploy than this page knows about
+              const who = ev.actorId?.name || ev.actorId?.email || 'Someone';
+              return (
+                <div key={ev._id} className="ws-event">
+                  <span className="ws-event-who">{ev.actorId?.email === myEmail ? 'You' : who.split(' ')[0]}</span>{' '}
+                  {said}
+                  <span className="ws-event-when">{fmtWhen(ev.at)}</span>
+                </div>
+              );
+            })
           )}
         </section>
 

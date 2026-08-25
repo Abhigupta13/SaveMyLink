@@ -6,8 +6,11 @@ import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
 import { projectForMember, canDelete, amProjectOwner } from "@/lib/projectAccess";
 import { canComplete, canSignOff } from "@/lib/taskAccess";
+import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
+
+const lower = (v: unknown) => String(v ?? '').trim().toLowerCase();
 
 async function claimAssignments(userId: string, email?: string | null) {
   if (!email) return;
@@ -104,6 +107,8 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
       linkId: opts.linkId || undefined,
     });
 
+    await recordEvent({ projectId: task.projectId, actorId: session.user.id, verb: 'task_created', subject: task.title });
+
     revalidatePath('/tasks');
     return { success: true, task: JSON.parse(JSON.stringify(task)) };
   } catch (error) {
@@ -123,6 +128,7 @@ export async function updateTask(id: string, data: { title?: string; description
       $or: [{ userId: session.user.id }, { assigneeId: session.user.id }],
     });
     if (!task) return { success: false, error: 'Task not found' };
+    const wasAssigned = lower(task.assigneeEmail);
 
     if (data.title !== undefined) task.title = data.title;
     if (data.description !== undefined) task.description = data.description;
@@ -148,7 +154,16 @@ export async function updateTask(id: string, data: { title?: string; description
         task.assigneeEmail = undefined;
       }
     }
+    // Only a change of hands is worth a line in the trail. Retitling and re-dating happen
+    // constantly while someone is thinking, and a trail that logs thinking is not read.
+    const reassigned = data.assigneeEmail !== undefined && lower(data.assigneeEmail) !== wasAssigned;
     await task.save();
+    if (reassigned) {
+      await recordEvent({
+        projectId: task.projectId, actorId: session.user.id, verb: 'task_reassigned',
+        subject: `${task.title} to ${task.assigneeEmail || 'nobody'}`,
+      });
+    }
 
     revalidatePath('/tasks');
     return { success: true, task: JSON.parse(JSON.stringify(task)) };
@@ -185,6 +200,10 @@ export async function toggleTask(id: string) {
     // counted by the admin funnel as signed-off work that does not exist.
     if (!task.completed) task.set({ signedOffBy: undefined, signedOffAt: undefined });
     await task.save();
+    await recordEvent({
+      projectId: task.projectId, actorId: session.user.id,
+      verb: task.completed ? 'task_completed' : 'task_reopened', subject: task.title,
+    });
 
     revalidatePath('/tasks');
     return { success: true, task: JSON.parse(JSON.stringify(task)) };
@@ -220,6 +239,9 @@ export async function signOffTask(id: string) {
     if (task.signedOffAt) task.set({ signedOffBy: undefined, signedOffAt: undefined });
     else task.set({ signedOffBy: session.user.id, signedOffAt: new Date() });
     await task.save();
+    if (task.signedOffAt) {
+      await recordEvent({ projectId: task.projectId, actorId: session.user.id, verb: 'task_signed_off', subject: task.title });
+    }
 
     revalidatePath('/tasks');
     return { success: true, task: JSON.parse(JSON.stringify(task)) };

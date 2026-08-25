@@ -11,6 +11,7 @@ import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src
 import { projectScope, ownerScope, isProjectOwner, isProjectCreator } from '../src/lib/scope.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canComplete, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
+import { VERBS, phrase, sinceDays, DEFAULT_DAYS } from '../src/lib/activity.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -323,5 +324,33 @@ assert.equal(needsOwner({ assigneeEmail: 'boss@x.com' }, MEMBERS), false, 'a cur
 assert.equal(needsOwner({ assigneeId: { email: 'BOSS@x.com' } }, MEMBERS), false, 'the populated shape counts too');
 assert.equal(needsOwner({}, MEMBERS), true, 'never assigned is exactly the same failure');
 assert.equal(needsOwner({ assigneeEmail: 'gone@x.com', completed: true }, MEMBERS), false, 'finished work needs nobody');
+
+// ---------------------------------------------------------------------------
+// The activity trail's vocabulary.
+// The failure worth catching here is a verb an action emits that the renderer cannot phrase.
+// It is invisible until somebody opens the page and reads a raw enum at themselves, and the
+// writer and the reader live in different files, which is exactly how it would ship.
+
+for (const verb of VERBS) {
+  const said = phrase(verb, 'the thing');
+  assert.ok(said, `every verb has a phrasing: ${verb}`);
+  assert.ok(!said.includes(verb), `${verb} reads as English, not as its own enum`);
+}
+assert.equal(phrase('task_completed', 'Do mapping'), 'completed Do mapping');
+assert.equal(phrase('not_a_real_verb', 'x'), '', 'an unknown verb renders as nothing, never as an enum');
+assert.equal(phrase('task_created', '   '), 'added something', 'a blank subject still reads as a sentence');
+assert.equal(phrase('task_created', null), 'added something');
+
+// `days` arrives from a client control, so junk falls back to the week instead of returning
+// the entire history of the group.
+const NOW = Date.UTC(2026, 7, 25);
+const daysBack = (v) => Math.round((NOW - sinceDays(v, NOW).getTime()) / 86400000);
+assert.equal(daysBack(undefined), DEFAULT_DAYS, 'no value means a working week');
+assert.equal(daysBack(30), 30);
+assert.equal(daysBack('30'), 30, 'a form value arrives as a string');
+assert.equal(daysBack(0), DEFAULT_DAYS, 'zero would return nothing at all');
+assert.equal(daysBack(-5), DEFAULT_DAYS, 'a negative window would query the future');
+assert.equal(daysBack('drop table'), DEFAULT_DAYS, 'junk falls back rather than throwing');
+assert.equal(daysBack(99999), 365, 'and the ceiling holds');
 
 console.log('self-check: all assertions passed');
