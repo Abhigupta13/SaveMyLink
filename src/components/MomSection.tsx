@@ -359,7 +359,8 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       {!hinglish && (
         <p style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem', fontWeight: 600, margin: '0 0 24px', padding: '0 4px', lineHeight: 1.5 }}>
           Hindi and Hinglish are transcribed free, and take a little longer than English. On a busy
-          day the free engine runs out and the meeting falls back to English only.
+          day the free engine runs out and the meeting falls back to English only. For the upgraded
+          engine, add your own Sarvam key in Profile.
         </p>
       )}
 

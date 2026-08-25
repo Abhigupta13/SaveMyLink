@@ -57,10 +57,15 @@ GEMINI_API_KEY=...       # Jarvis + MOM task extraction (aistudio.google.com/api
 GEMINI_MODEL=...         # optional, defaults to gemini-3.6-flash; falls back to 3.5/3.7 on 503
 GROQ_API_KEY=...         # Jarvis voice + free-tier MOM transcription (whisper-large-v3)
 
-# Hindi/Hinglish meeting transcription (paid, ~Rs 30/hour of audio). Whisper cannot do this:
-# it never emits romanized Hinglish and mis-hears spoken Hindi as Urdu. Accounts NOT listed
-# here keep the free Whisper path, which is English-only.
-SARVAM_API_KEY=...            # dashboard.sarvam.ai
+# Hindi/Hinglish meeting transcription (paid, ~Rs 30/hour of audio). This is now the UPGRADED
+# path, not the only one: Hindi and Hinglish work free on Gemini audio (see GEMINI_API_KEY),
+# and Whisper is the English-only floor beneath it.
+#
+# Access resolves in this order: the user's own Sarvam key (added in Profile, billed to them) →
+# an admin's grant on /admin → SARVAM_ENABLED_EMAILS → none. The last two spend the key below.
+SARVAM_API_KEY=...            # dashboard.sarvam.ai — the founder's key
+# DEPRECATED, kept so nothing breaks on deploy. Use the toggle on /admin instead: it takes effect
+# immediately, records who granted it, and does not need a redeploy to add one person.
 SARVAM_ENABLED_EMAILS=...     # comma-separated allowlist, e.g. you@x.com,teammate@y.com
 
 # File uploads (note attachments + Digi Locker). Without these, files are written to

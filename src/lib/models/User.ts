@@ -23,6 +23,12 @@ export interface IUser extends Document {
   // The user's own Sarvam API key, sealed by lib/secretBox. `last4` is the only part that is
   // ever allowed back out to a browser — enough to recognise which key is stored, useless alone.
   sarvamKey?: { box: string; last4: string };
+  // Granted by an admin to someone who paid the founder directly — spends the founder's env key.
+  // `By`/`At` are the audit: with two admins, "who let them in" is the half worth keeping, and
+  // the Event trail cannot hold this because every event belongs to a project and this has none.
+  sarvamAccess?: boolean;
+  sarvamAccessBy?: string;
+  sarvamAccessAt?: Date;
 }
 
 const UserSchema: Schema<IUser> = new Schema({
@@ -52,6 +58,9 @@ const UserSchema: Schema<IUser> = new Schema({
   introDismissed: { type: Boolean, default: false },
   // _id: false — this is one value, not a subdocument anyone needs to address
   sarvamKey: { type: { box: String, last4: String }, _id: false },
+  sarvamAccess: { type: Boolean },
+  sarvamAccessBy: { type: String },
+  sarvamAccessAt: { type: Date },
 }, { timestamps: true });
 
 export const User: Model<IUser> = defineModel<IUser>('User', UserSchema);

@@ -4,6 +4,9 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import { getServerSession } from "next-auth";
 import { isAdmin } from "@/lib/isAdmin";
+import { escapeRegex } from "@/lib/regex";
+import { envAllowlisted } from "@/lib/sarvam";
+import { isValidObjectId } from "mongoose";
 import { DEFAULT_TZ } from "@/lib/time";
 import { User } from "@/lib/models/User";
 import { Link } from "@/lib/models/Link";
@@ -32,6 +35,74 @@ const TREND_DAYS = 14;
 export async function amIAdmin() {
   const session = await getServerSession(authOptions);
   return { admin: isAdmin(session?.user?.email) };
+}
+
+/**
+ * Who may spend the founder's Sarvam balance.
+ *
+ * This is the ONE place in /admin that names individual users, and it is a deliberate exception
+ * to the counts-only rule above: you cannot grant a person access without seeing which person.
+ * It returns an address, a name and two booleans — never anything they have written.
+ *
+ * ponytail: a regex scan over users, capped at 50. There is no index for it and there should not
+ * be one yet — this is two founders searching a few hundred rows. Add a text index when the
+ * count makes it hurt.
+ */
+export async function listUsersForSarvam(q?: string) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id || !isAdmin(session.user.email)) return { success: false as const, error: 'Not found' };
+    await connectToDatabase();
+
+    const term = String(q || '').trim();
+    const filter = term
+      ? { $or: [{ email: new RegExp(escapeRegex(term), 'i') }, { name: new RegExp(escapeRegex(term), 'i') }] }
+      : {};
+
+    const users = await User.find(filter)
+      .select('email name sarvamKey.last4 sarvamAccess sarvamAccessBy sarvamAccessAt')
+      // Everyone who already has access first — the list is for checking as much as granting
+      .sort({ sarvamAccess: -1, createdAt: -1 }).limit(50).lean();
+
+    return {
+      success: true as const,
+      users: users.map(u => ({
+        id: String(u._id),
+        email: u.email,
+        name: u.name || '',
+        ownKey: !!u.sarvamKey?.last4,
+        access: !!u.sarvamAccess,
+        envListed: envAllowlisted(u.email),
+        grantedBy: u.sarvamAccessBy || '',
+      })),
+    };
+  } catch (error) {
+    console.error('Failed to list users for Sarvam:', error);
+    return { success: false as const, error: 'Could not load the list' };
+  }
+}
+
+/**
+ * Grant or revoke. Admin-gated server-side — the /admin page not drawing the card for anyone else
+ * is convenience, this is the actual gate.
+ */
+export async function setSarvamAccess(userId: string, on: boolean) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id || !isAdmin(session.user.email)) return { success: false as const, error: 'Not found' };
+    await connectToDatabase();
+    if (!isValidObjectId(userId)) return { success: false as const, error: 'Unknown account' };
+
+    const res = await User.updateOne({ _id: userId }, on
+      ? { $set: { sarvamAccess: true, sarvamAccessBy: session.user.email, sarvamAccessAt: new Date() } }
+      : { $set: { sarvamAccess: false, sarvamAccessBy: session.user.email, sarvamAccessAt: new Date() } });
+    if (!res.matchedCount) return { success: false as const, error: 'Unknown account' };
+
+    return { success: true as const, access: on };
+  } catch (error) {
+    console.error('Failed to set Sarvam access:', error);
+    return { success: false as const, error: 'Could not change that' };
+  }
 }
 
 export async function getAdminStats() {

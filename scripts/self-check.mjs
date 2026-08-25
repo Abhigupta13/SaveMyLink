@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { extractUrl, hostnameOf, normalizeUrl, youtubeId, appUrl } from '../src/lib/url.ts';
 import { escapeRegex } from '../src/lib/regex.ts';
-import { envAllowlisted } from '../src/lib/sarvam.ts';
+import { envAllowlisted, sarvamSource } from '../src/lib/sarvam.ts';
 import { seal, open as unseal } from '../src/lib/secretBox.ts';
 import { isAdmin, adminEmails } from '../src/lib/isAdmin.ts';
 import { suggestionEmail, inviteEmail, otpEmail } from '../src/lib/mailer.ts';
@@ -60,6 +60,38 @@ allowlist(' a@x.com , b@y.com ');
 assert.equal(envAllowlisted('a@x.com'), true, 'whitespace around entries tolerated');
 allowlist(',,');
 assert.equal(envAllowlisted(''), false, 'blank list entries never match a blank email');
+allowlist(undefined);
+
+// ---------------------------------------------------------------------------
+// WHO pays for a Hindi meeting. Getting this order wrong is not a bug report, it is an invoice:
+// resolve to 'env' for someone holding their own key and the founder pays for a customer who
+// already paid Sarvam. Every branch, and every way in must fail closed.
+const ENV_KEY = 'founder-key';
+allowlist('listed@x.com');
+
+// Own key wins over everything — including a grant, the env list, and having no env key at all
+assert.equal(sarvamSource({ ownKey: 'k' }, ENV_KEY), 'own');
+assert.equal(sarvamSource({ ownKey: 'k', sarvamAccess: true, email: 'listed@x.com' }, ENV_KEY), 'own',
+  'their own key is billed to them even when they could have spent ours');
+assert.equal(sarvamSource({ ownKey: 'k' }, null), 'own', 'own key needs no env key at all');
+
+// An admin's grant, then the env list — both spending the founder's key
+assert.equal(sarvamSource({ sarvamAccess: true }, ENV_KEY), 'granted');
+assert.equal(sarvamSource({ email: 'listed@x.com' }, ENV_KEY), 'env');
+assert.equal(sarvamSource({ sarvamAccess: true, email: 'listed@x.com' }, ENV_KEY), 'granted',
+  'the grant is reported over the env list — the list is on its way out');
+
+// Nobody else, however the fields arrive
+assert.equal(sarvamSource({}, ENV_KEY), null, 'a plain account gets nothing');
+assert.equal(sarvamSource({ email: 'stranger@x.com' }, ENV_KEY), null);
+assert.equal(sarvamSource({ sarvamAccess: false, email: 'stranger@x.com' }, ENV_KEY), null, 'a revoked grant denies');
+assert.equal(sarvamSource({ ownKey: '' }, ENV_KEY), null, 'an empty stored key is not a key');
+assert.equal(sarvamSource({ ownKey: null, sarvamAccess: null, email: null }, ENV_KEY), null);
+
+// No env key to spend means the two founder-funded routes are refused rather than promised —
+// an account that reads as enabled and then dies at upload is the worse failure.
+assert.equal(sarvamSource({ sarvamAccess: true }, null), null, 'a grant with no env key is not access');
+assert.equal(sarvamSource({ email: 'listed@x.com' }, ''), null, 'the env list with no env key is not access');
 allowlist(undefined);
 
 // ---------------------------------------------------------------------------

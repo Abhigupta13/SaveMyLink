@@ -4,9 +4,10 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { Bug, Lightbulb, MessageSquare, Link as LinkIcon, StickyNote, CheckSquare, Mic, Library, FolderOpen, Users } from 'lucide-react';
-import { getAdminStats } from '@/actions/admin';
+import { getAdminStats, listUsersForSarvam, setSarvamAccess } from '@/actions/admin';
 import { getSuggestions } from '@/actions/suggestion';
 import { formatInZone } from '@/lib/time';
+import { useFeedback } from '@/components/ui/Feedback';
 
 /**
  * How the app is doing. Admin only — the server actions are the gate, this page just renders what
@@ -40,6 +41,89 @@ type Stats = Extract<Awaited<ReturnType<typeof getAdminStats>>, { success: true 
 interface FeedbackRow {
   _id: string; kind: string; message: string; createdAt: string;
   email?: string; page?: string; shot?: { url?: string };
+}
+
+type SarvamRow = { id: string; email: string; name: string; ownKey: boolean; access: boolean; envListed: boolean; grantedBy: string };
+
+/**
+ * "They paid me, give them the good engine."
+ *
+ * In-app payment does not exist yet, so this is the whole billing system: money changes hands
+ * outside the app and an admin flips a switch. It runs on the FOUNDER'S key, which is why the
+ * card says so out loud — every account switched on here spends his balance, not theirs.
+ *
+ * The one place /admin shows individual people. Address and name only, never their content.
+ */
+function SarvamAccessCard() {
+  const { toast } = useFeedback();
+  const [q, setQ] = useState('');
+  const [rows, setRows] = useState<SarvamRow[] | null>(null);
+  const [busy, setBusy] = useState('');
+
+  const load = async (term: string) => {
+    const res = await listUsersForSarvam(term);
+    if (res.success) setRows(res.users);
+    else toast(res.error || 'Could not load the list', 'error');
+  };
+
+  // Same shape as the page's own effect: the await is what keeps setState out of the effect body
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await listUsersForSarvam('');
+      if (!cancelled) setRows(res.success ? res.users : []);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggle = async (row: SarvamRow) => {
+    setBusy(row.id);
+    const res = await setSarvamAccess(row.id, !row.access);
+    setBusy('');
+    if (!res.success) { toast(res.error || 'Could not change that', 'error'); return; }
+    // Trust the server's answer rather than re-fetching: the row is the only thing that changed
+    setRows(rs => (rs || []).map(r => r.id === row.id ? { ...r, access: res.access } : r));
+    toast(res.access ? `${row.email} now has the upgraded engine` : `${row.email} is back on the free engine`, 'success');
+  };
+
+  return (
+    <section className="card viz-card" id="sarvam-access">
+      <h2 className="viz-title">Upgraded Hindi access</h2>
+      <p className="viz-sub">
+        For people who have paid you outside the app — in-app payments come later. Switching
+        someone on spends <strong>your</strong> Sarvam balance. Anyone who adds their own key in
+        Profile is billed by Sarvam directly and needs nothing here.
+      </p>
+
+      <form onSubmit={e => { e.preventDefault(); load(q); }} style={{ display: 'flex', gap: '8px', margin: '12px 0' }}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by email or name"
+          className="field" style={{ flex: 1 }} />
+        <button type="submit" className="btn-primary" style={{ padding: '8px 18px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem' }}>Search</button>
+      </form>
+
+      {rows === null ? <p className="viz-empty">Loading…</p>
+        : rows.length === 0 ? <p className="viz-empty">Nobody matches that.</p>
+        : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {rows.map(r => (
+              <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 0', borderTop: '1px solid var(--border-color)' }}>
+                <span style={{ flex: '1 1 220px', minWidth: 0 }}>
+                  <span style={{ display: 'block', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.email}</span>
+                  <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>
+                    {[r.name, r.ownKey && 'has their own key', r.envListed && 'on the env list',
+                      r.access && r.grantedBy && `granted by ${r.grantedBy}`].filter(Boolean).join(' · ') || '—'}
+                  </span>
+                </span>
+                <label className="switch" title={r.ownKey ? 'They already pay Sarvam themselves' : r.access ? 'Revoke' : 'Grant'}>
+                  <input type="checkbox" checked={r.access} disabled={busy === r.id} onChange={() => toggle(r)} />
+                  <span className="slider round"></span>
+                </label>
+              </div>
+            ))}
+          </div>
+        )}
+    </section>
+  );
 }
 
 export default function AdminPage() {
@@ -199,6 +283,8 @@ export default function AdminPage() {
           ))}
         </div>
       </section>
+
+      <SarvamAccessCard />
 
       {/* ---------- Feedback ---------- */}
       <section className="card viz-card">

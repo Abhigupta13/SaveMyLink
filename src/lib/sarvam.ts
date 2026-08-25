@@ -32,6 +32,27 @@ export const envAllowlisted = (email?: string | null) =>
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
     .includes(email.toLowerCase());
 
+export type SarvamSource = 'own' | 'granted' | 'env' | null;
+
+/**
+ * WHO pays, in one place. Own key first — someone who has paid Sarvam directly should be billed
+ * by Sarvam, not quietly spending the founder's balance. Then an admin's explicit grant, then
+ * the env list, which is the pre-r4 bootstrap and is on its way out.
+ *
+ * `granted` and `env` both spend the founder's key, so both are refused outright when there is
+ * no env key to spend: an account must never read as enabled and then fail at upload.
+ */
+export const sarvamSource = (
+  user: { ownKey?: string | null; sarvamAccess?: boolean | null; email?: string | null },
+  envKey?: string | null,
+): SarvamSource => {
+  if (user.ownKey) return 'own';
+  if (!envKey) return null;
+  if (user.sarvamAccess) return 'granted';
+  if (envAllowlisted(user.email)) return 'env';
+  return null;
+};
+
 /**
  * WHOSE key. Required, never defaulted to the environment: Sarvam bills per minute, and a
  * caller that forgets to pass one would quietly bill the founder for somebody else's meeting.
