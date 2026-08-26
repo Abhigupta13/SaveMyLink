@@ -18,6 +18,7 @@ import { resolveRange, MAX_SPAN_DAYS } from '../src/lib/adminRange.ts';
 import { INTRO_STEPS, introProgress, isIntroStep } from '../src/lib/intro.ts';
 import { AUDIO_MODELS, audioMime } from '../src/lib/geminiAudio.ts';
 import { chooseHandover, isPurgeDue } from '../src/lib/accountDeletion.ts';
+import { retrieve, terms } from '../src/lib/retrieval.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -723,6 +724,77 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   assert.equal(isPurgeDue(null, now), false, 'a live account (no deletedAt) is never purged');
   assert.equal(isPurgeDue(undefined, now), false, 'missing deletedAt is never purged');
   assert.equal(isPurgeDue('not a date', now), false, 'an unparseable stamp fails closed, it does not throw');
+}
+
+// ----------------------------------------------------------------------------------------------
+// Jarvis retrieval. This decides what the assistant is allowed to see when it answers, so it has
+// two jobs and both are load-bearing: pick the lines that actually answer the question, and never
+// widen what is readable. The second one is a security property — scope comes from myProjectFilter
+// upstream, and retrieval must be provably incapable of adding to it.
+{
+  const DAY = 86_400_000;
+  const NOW = Date.parse('2026-08-26T12:00:00Z');
+  const ago = (d) => NOW - d * DAY;
+  const item = (o) => ({ body: '', line: `${o.type.toUpperCase()} id=${o.id} | ${o.title} | ${o.body || ''}`, ...o });
+
+  const vault = [
+    item({ id: 'l1', type: 'link', title: 'Ray.so — code screenshots', at: ago(300) }),
+    item({ id: 'l2', type: 'link', title: 'Tailwind docs', at: ago(2) }),
+    item({ id: 't1', type: 'task', title: 'Call the stainer vendor', at: ago(3), overdue: true }),
+    item({ id: 't2', type: 'task', title: 'Read the annual report', at: ago(120), overdue: false }),
+    item({ id: 'm1', type: 'mom', title: 'Weekly sync', at: ago(1), body: 'block tray elevator decided' }),
+    item({ id: 'c1', type: 'contact', title: 'Abhishek Kumar', at: ago(40), body: '9876543210' }),
+  ];
+  const ids = (rows) => rows.map(r => r.id);
+
+  // "What is urgent today" shares no words with anything. The overdue task must still come first,
+  // and an old link must not — this is the exact question the old character-budget dump got wrong.
+  const urgent = retrieve(vault, 'what is urgent today?', { now: NOW, limit: 3 });
+  assert.equal(urgent[0].id, 't1', 'an overdue task leads "what is urgent today"');
+  assert.ok(!ids(urgent).includes('l1'), 'a 300-day-old link is not what "urgent" means');
+
+  // Naming a saved item exactly beats every other signal, recency included.
+  assert.equal(retrieve(vault, 'tell me about Ray.so — code screenshots', { now: NOW, limit: 1 })[0].id, 'l1',
+    'an exact title match wins outright');
+
+  // Two items matching identically: the newer one goes in.
+  const tie = [
+    item({ id: 'old', type: 'note', title: 'Vendor pricing', at: ago(200) }),
+    item({ id: 'new', type: 'note', title: 'Vendor pricing', at: ago(1) }),
+  ];
+  assert.equal(retrieve(tie, 'vendor pricing', { now: NOW, limit: 1 })[0].id, 'new', 'recency breaks a tie');
+
+  // A type word in the question pulls that type up without inventing a match.
+  assert.ok(ids(retrieve(vault, 'whose phone number do I have?', { now: NOW, limit: 2 })).includes('c1'),
+    '"phone number" favours a contact');
+
+  // THE SCOPE PROPERTY. Retrieval returns members of the array it was handed and nothing else, so
+  // an item the scoped query never fetched cannot reach the prompt — even when the question quotes
+  // its title word for word.
+  const someoneElses = item({ id: 'x1', type: 'note', title: 'Acme payroll spreadsheet', at: ago(0) });
+  const mine = retrieve(vault, 'show me the Acme payroll spreadsheet', { now: NOW, limit: 40 });
+  assert.ok(!ids(mine).includes('x1'), 'an item outside the caller-supplied set can never be retrieved');
+  assert.ok(mine.every(r => vault.includes(r)), 'every retrieved row is one of the rows passed in');
+  assert.ok(!vault.includes(someoneElses), 'the out-of-scope fixture was never in the corpus, which is the point');
+
+  // The budget holds both ways: a count cap and a character cap.
+  assert.equal(retrieve(vault, 'anything', { now: NOW, limit: 2 }).length, 2, 'the line limit is respected');
+  const fat = [item({ id: 'big', type: 'document', title: 'Contract', line: 'x'.repeat(5000) }), ...vault];
+  assert.ok(!ids(retrieve(fat, 'contract', { now: NOW, maxChars: 1000 })).includes('big'),
+    'one huge document cannot swallow the whole character budget');
+
+  // A pinned id is what makes "add that one to my tasks" work: it stays in the prompt whatever it
+  // scores. It is still only ever an id from the caller's own scoped set.
+  assert.ok(ids(retrieve(vault, 'unrelated words entirely', { now: NOW, limit: 1, pinned: ['t2'] })).includes('t2'),
+    'a pinned item from the previous answer stays resolvable');
+  assert.ok(!ids(retrieve(vault, 'unrelated', { now: NOW, limit: 6, pinned: ['x1'] })).includes('x1'),
+    'pinning an id we never fetched still cannot conjure it');
+
+  assert.deepEqual(retrieve([], 'anything', { now: NOW }), [], 'an empty vault returns nothing, it does not throw');
+
+  // Hindi and Hinglish reach Jarvis constantly; the tokenizer must not drop Devanagari.
+  assert.ok(terms('कल की मीटिंग').length > 0, 'Devanagari survives tokenizing');
+  assert.ok(!terms('what is my task').includes('is'), 'stop words are dropped');
 }
 
 console.log('self-check: all assertions passed');

@@ -13,6 +13,7 @@ import { JarvisSession } from "@/lib/models/JarvisSession";
 import { chatJSON } from "@/lib/llm";
 import { formatInZone, safeZone, zonedToUtc } from "@/lib/time";
 import { myProjectFilter } from "@/lib/projectAccess";
+import { retrieve, type Candidate } from "@/lib/retrieval";
 import { isProjectOwner, canWrite, type OwnableProject } from "@/lib/scope";
 import { hasSafe } from "@/lib/safeCookie";
 import { User } from "@/lib/models/User";
@@ -38,8 +39,8 @@ export interface JarvisSessionMeta { id: string; title: string; updatedAt: strin
 type Fmt = (v?: Date | string | null) => string;
 const fmtIn = (tz: string): Fmt => v => formatInZone(v, tz);
 
-// Serialise everything the user owns into compact lines the model can cite by id.
-// ponytail: full-context dump (fine up to ~1k items); switch to embeddings if the vault outgrows it.
+// Every item the user may read, each as one line the model can cite by id — and as the fields
+// lib/retrieval scores against, so only the few dozen that answer the question are actually sent.
 async function gatherContext(userId: string, email: string, includePrivate: boolean, d: Fmt) {
   const ids = new Set<string>();
   const groupOf = new Map<string, string>();   // id → group name, for the shared chip on cited items
@@ -61,67 +62,82 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
     Doc.find({ $or: [{ user: userId }, { projectId: { $in: projectIds } }] }).sort({ createdAt: -1 }).limit(120).lean(),
   ]);
 
-  const lines: string[] = [];
+  const items: Candidate[] = [];
   const track = (id: any, projectId?: unknown) => {
     ids.add(String(id));
     const g = projectId ? pname.get(String(projectId)) : undefined;
     if (g) groupOf.set(String(id), g);
     return String(id);
   };
+  const ms = (v: unknown) => (v ? new Date(v as string).getTime() : undefined);
+
   for (const l of links as any[]) {
     const kind = l.url ? 'LINK' : 'NOTE';
-    lines.push(`${kind} id=${track(l._id)} | ${l.title || l.url} | ${l.url || ''} | cat=${l.category?.name || '-'} | tags=${(l.tags || []).join(',')}${l.isFavorite ? ' | fav' : ''}${l.isDead ? ' | DEAD' : ''} | saved=${d(l.createdAt)}`);
+    const id = track(l._id);
+    items.push({
+      id, type: 'link', title: l.title || l.url || '', at: ms(l.createdAt),
+      body: `${l.url || ''} ${l.category?.name || ''} ${(l.tags || []).join(' ')}`,
+      line: `${kind} id=${id} | ${l.title || l.url} | ${l.url || ''} | cat=${l.category?.name || '-'} | tags=${(l.tags || []).join(',')}${l.isFavorite ? ' | fav' : ''}${l.isDead ? ' | DEAD' : ''} | saved=${d(l.createdAt)}`,
+    });
   }
   for (const t of tasks as any[]) {
-    lines.push(`TASK id=${track(t._id, t.projectId)} | ${t.title} | due=${d(t.dueAt) || 'none'} | ${t.completed ? 'done' : 'open'} | project=${pname.get(String(t.projectId)) || 'personal'} | assignee=${t.assigneeId?.email || t.assigneeEmail || '-'} | desc=${(t.description || '').slice(0, 800).replace(/\s+/g, ' ')}`);
+    const id = track(t._id, t.projectId);
+    const desc = (t.description || '').slice(0, 800).replace(/\s+/g, ' ');
+    items.push({
+      id, type: 'task', title: t.title || '', at: ms(t.dueAt) || ms(t.updatedAt) || ms(t.createdAt),
+      overdue: !t.completed && !!t.dueAt && new Date(t.dueAt).getTime() < Date.now(),
+      body: `${desc} ${pname.get(String(t.projectId)) || 'personal'} ${t.assigneeId?.email || t.assigneeEmail || ''}`,
+      line: `TASK id=${id} | ${t.title} | due=${d(t.dueAt) || 'none'} | ${t.completed ? 'done' : 'open'} | project=${pname.get(String(t.projectId)) || 'personal'} | assignee=${t.assigneeId?.email || t.assigneeEmail || '-'} | desc=${desc}`,
+    });
   }
   for (const p of projects as any[]) {
-    lines.push(`PROJECT id=${track(p._id)} | ${p.name} | members=${(p.memberEmails || []).join(',')} | notes=${(p.notes || '').slice(0, 600).replace(/\s+/g, ' ')}`);
+    const id = track(p._id);
+    items.push({
+      id, type: 'project', title: p.name || '', at: ms(p.updatedAt) || ms(p.createdAt),
+      body: `${(p.memberEmails || []).join(' ')} ${(p.notes || '').slice(0, 600)}`,
+      line: `PROJECT id=${id} | ${p.name} | members=${(p.memberEmails || []).join(',')} | notes=${(p.notes || '').slice(0, 600).replace(/\s+/g, ' ')}`,
+    });
   }
   for (const m of moms as any[]) {
-    lines.push(`MOM id=${track(m._id, m.projectId)} | ${m.title} | project=${pname.get(String(m.projectId)) || '-'} | date=${d(m.createdAt)} | summary=${(m.summary || '').slice(0, 600).replace(/\s+/g, ' ')} | actions=${(m.candidates || []).map((c: any) => c.title).join('; ')} | projectId=${m.projectId}`);
+    const id = track(m._id, m.projectId);
+    const actions = (m.candidates || []).map((c: any) => c.title).join('; ');
+    items.push({
+      id, type: 'mom', title: m.title || '', at: ms(m.createdAt),
+      body: `${(m.summary || '').slice(0, 600)} ${actions} ${pname.get(String(m.projectId)) || ''}`,
+      line: `MOM id=${id} | ${m.title} | project=${pname.get(String(m.projectId)) || '-'} | date=${d(m.createdAt)} | summary=${(m.summary || '').slice(0, 600).replace(/\s+/g, ' ')} | actions=${actions} | projectId=${m.projectId}`,
+    });
   }
   for (const n of notes as any[]) {
     // Files attached to a note are part of the note — same treatment as a DOC line
     const att = (n.attachments || []).map((a: any) =>
       `${a.name}${a.text ? `: ${String(a.text).slice(0, 2000)}` : ' (not readable — image or scan)'}`).join(' || ');
-    lines.push(`NOTE id=${track(n._id, n.projectId)} | ${n.title || '(untitled)'} | ${(n.body || '').slice(0, 800).replace(/\s+/g, ' ')} | project=${pname.get(String(n.projectId)) || 'personal'} | updated=${d(n.updatedAt)}${att ? ` | attached=${att}` : ''}`);
+    const id = track(n._id, n.projectId);
+    const body = (n.body || '').slice(0, 800).replace(/\s+/g, ' ');
+    items.push({
+      id, type: 'note', title: n.title || '', at: ms(n.updatedAt) || ms(n.createdAt),
+      body: `${body} ${att} ${pname.get(String(n.projectId)) || 'personal'}`,
+      line: `NOTE id=${id} | ${n.title || '(untitled)'} | ${body} | project=${pname.get(String(n.projectId)) || 'personal'} | updated=${d(n.updatedAt)}${att ? ` | attached=${att}` : ''}`,
+    });
   }
   for (const c of contacts as any[]) {
-    lines.push(`CONTACT id=${track(c._id)} | ${c.name} | ${c.company || ''} | ${c.phone || ''} | ${c.email || ''} | ${c.note || ''}`);
+    const id = track(c._id);
+    items.push({
+      id, type: 'contact', title: c.name || '', at: ms(c.updatedAt) || ms(c.createdAt),
+      body: `${c.company || ''} ${c.phone || ''} ${c.email || ''} ${c.note || ''}`,
+      line: `CONTACT id=${id} | ${c.name} | ${c.company || ''} | ${c.phone || ''} | ${c.email || ''} | ${c.note || ''}`,
+    });
   }
   for (const doc of docs as any[]) {
     // Contents where we could read them; a scan or a video still gets a line so it can be cited
     const body = (doc.text || '').slice(0, 4000);
-    lines.push(`DOC id=${track(doc._id, doc.projectId)} | ${doc.name} | folder=${doc.folder || 'Personal'} | ${doc.type === 'link' ? doc.url : (doc.mimeType || 'file')} | added=${d(doc.createdAt)} | contents=${body || '(not readable — image, video or scan)'}`);
+    const id = track(doc._id, doc.projectId);
+    items.push({
+      id, type: 'document', title: doc.name || '', at: ms(doc.createdAt),
+      body: `${doc.folder || 'Personal'} ${body}`,
+      line: `DOC id=${id} | ${doc.name} | folder=${doc.folder || 'Personal'} | ${doc.type === 'link' ? doc.url : (doc.mimeType || 'file')} | added=${d(doc.createdAt)} | contents=${body || '(not readable — image, video or scan)'}`,
+    });
   }
-  return { text: lines.join('\n'), ids, projects, groupOf };
-}
-
-// Groq rate-limits by tokens per minute (8k on the free tier), and the whole vault goes up on
-// every turn. Under budget nothing changes; over it, keep the lines that share words with the
-// question. Tasks and projects get a nudge so they outrank unmatched clutter — "what's urgent
-// today" carries no words that match anything — but not enough to outrank a line that actually
-// answers the question, or one long document would never fit beside a long task list.
-const MAX_CONTEXT_CHARS = 24000;
-const TASK_BIAS = 0.5;
-function trimContext(text: string, question: string) {
-  if (text.length <= MAX_CONTEXT_CHARS) return text;
-  const terms = [...new Set(question.toLowerCase().match(/[a-z0-9]{3,}/g) || [])];
-  const scored = text.split('\n').map((line, i) => {
-    const l = line.toLowerCase();
-    const hits = terms.reduce((n, t) => n + (l.includes(t) ? 1 : 0), 0);
-    return { line, i, score: hits + (line.startsWith('TASK ') || line.startsWith('PROJECT ') ? TASK_BIAS : 0) };
-  });
-  scored.sort((a, b) => b.score - a.score || a.i - b.i);
-  const kept: typeof scored = [];
-  let size = 0;
-  for (const s of scored) {
-    if (size + s.line.length > MAX_CONTEXT_CHARS) break;
-    kept.push(s); size += s.line.length + 1;
-  }
-  kept.sort((a, b) => a.i - b.i);   // back into the original order so the sections read normally
-  return kept.map(s => s.line).join('\n');
+  return { items, ids, projects, groupOf };
 }
 
 export async function askJarvis(question: string, history: JarvisTurn[] = [], timeZone = '') {
@@ -139,12 +155,22 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     const email = (session.user.email || '').toLowerCase();
     const ctx = await gatherContext(userId, email, await hasSafe(userId), d);
 
+    // Retrieval, not a dump: score the vault against the question here and send only what answers
+    // it. ctx.items already holds nothing but rows myProjectFilter let through, and retrieve()
+    // can only return members of what it is given, so this narrows the prompt without ever
+    // widening what is readable.
+    const picked = retrieve(ctx.items, question);
+    const dataText = picked.map(p => p.line).join('\n');
+    const wholeVault = ctx.items.reduce((n, i) => n + i.line.length + 1, 0);
+    console.log(`Jarvis context: ${picked.length}/${ctx.items.length} items, ${dataText.length} chars (whole vault: ${wholeVault})`);
+
     // Everything down to DATA is byte-identical every turn, on purpose. Groq caches repeated
     // prompt prefixes and cached tokens do not count against the rate limit — but any variable
     // near the top (the clock used to be the very first line) invalidates everything behind it.
     // The current time now lives at the END, after DATA, where it costs only itself.
     const system = `You are Jarvis, the personal assistant inside the user's own vault app.
-Answer ONLY from the DATA below — it is everything the user has saved (links, notes, tasks, projects, meeting minutes "MOM", contacts, and "DOC" files in their Digi Locker). Never invent items.
+Answer ONLY from the DATA below — the items from everything the user has saved (links, notes, tasks, projects, meeting minutes "MOM", contacts, and "DOC" files in their Digi Locker) that best match this question. Never invent items.
+DATA is a SEARCH RESULT, not the whole vault: it holds the most relevant items, not all of them. So never answer with a total ("you have 12 links"), never claim something does not exist because it is missing here, and if the user seems to want a full list say what you found and point them at the page for the rest.
 A DOC line carries the file's actual contents where they could be read, so answer from what is inside it, not just its name — quote the figure, date or clause the user asks for. DOCs are filed in folders (Personal, a project name, whatever they chose); "what is in my Personal folder" means the DOCs with that folder. Contents may be cut off partway through a long file, and a scan, photo or video says so instead — in that case say you can see the document but cannot read inside it rather than guessing.
 Match meaning, not just words (e.g. "site that turns code into pretty images" should match a saved ray.so link; "anything about Morphle Labs" should match links, tasks, meetings, contacts, notes mentioning it).
 LANGUAGE — you understand English and Hindi, and you always answer in English.
@@ -184,8 +210,8 @@ HARD RULES — breaking these is a serious failure:
 Reply ONLY with JSON: {"answer": "plain text that fully answers the question on its own, short paragraphs, may use bullet lines starting with -", "items": [{"id": "<id from DATA>", "type": "link|note|task|project|mom|contact|document", "title": "...", "url": "<for links: the saved url, else null>", "detail": "one line: why it matters / key facts (due date, status, summary)", "urgent": true|false}], "actions": []}
 Put at most 12 items, most relevant first; mark urgent=true only for open tasks overdue or due within 48h.
 
-DATA:
-${trimContext(ctx.text, question) || '(empty — the user has not saved anything yet)'}
+DATA (${picked.length} of ${ctx.items.length} saved items, the closest matches to this question):
+${dataText || '(nothing matched — the vault may be empty, or the words used may not appear in it)'}
 
 NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
 
