@@ -8,6 +8,7 @@ import { escapeRegex } from "@/lib/regex";
 import { envAllowlisted } from "@/lib/sarvam";
 import { isValidObjectId } from "mongoose";
 import { DEFAULT_TZ } from "@/lib/time";
+import { resolveRange, type RangeInput } from "@/lib/adminRange";
 import { User } from "@/lib/models/User";
 import { Link } from "@/lib/models/Link";
 import { Note } from "@/lib/models/Note";
@@ -28,8 +29,6 @@ import { Suggestion } from "@/lib/models/Suggestion";
  * anything showing a title, note body or transcript means changing that page too.
  */
 
-const DAY = 86_400_000;
-const TREND_DAYS = 14;
 
 /** Whether to show the Admin row in Profile. A convenience only — getAdminStats is the real gate. */
 export async function amIAdmin() {
@@ -105,7 +104,7 @@ export async function setSarvamAccess(userId: string, on: boolean) {
   }
 }
 
-export async function getAdminStats() {
+export async function getAdminStats(range?: RangeInput) {
   try {
     const session = await getServerSession(authOptions);
     // Same answer for signed-out and non-admin: the dashboard does not advertise that it exists
@@ -113,26 +112,34 @@ export async function getAdminStats() {
     await connectToDatabase();
 
     const now = Date.now();
-    const weekAgo = new Date(now - 7 * DAY);
-    const trendFrom = new Date(now - (TREND_DAYS - 1) * DAY);
+    // The admin picks the window; resolveRange validates and clamps it and hands back the chart's
+    // bucket plan. Time-based metrics use [from, to]; the all-time totals stay all-time and carry
+    // an in-range companion so both are visible.
+    const { from, to, buckets } = resolveRange(range, now);
+    const inRange = { createdAt: { $gte: from, $lte: to } };
 
     const [
-      users, verified, newThisWeek, signupsByDay,
+      users, verified, newInRange, signupsByBucket,
       links, notes, tasks, moms, docs, projects, contacts,
+      linksIn, notesIn, tasksIn, momsIn, docsIn, projectsIn, contactsIn,
       extracted, fromMoms, fromMomsDone, fromMomsSigned,
-      suggestions, suggestionsThisWeek, byKind,
+      suggestions, suggestionsInRange, byKind,
       recentLinkUsers, recentNoteUsers, recentTaskUsers, recentMomUsers,
     ] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ emailVerified: { $ne: null } }),
-      User.countDocuments({ createdAt: { $gte: weekAgo } }),
+      User.countDocuments(inRange),
       User.aggregate([
-        { $match: { createdAt: { $gte: trendFrom } } },
-        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: DEFAULT_TZ } }, n: { $sum: 1 } } },
+        { $match: inRange },
+        { $group: { _id: { $dateToString: { format: buckets.format, date: '$createdAt', timezone: DEFAULT_TZ } }, n: { $sum: 1 } } },
       ]),
 
       Link.countDocuments(), Note.countDocuments(), Task.countDocuments(),
       Mom.countDocuments(), Doc.countDocuments(), Project.countDocuments(), Contact.countDocuments(),
+
+      // The same collections, but only what was created inside the chosen window
+      Link.countDocuments(inRange), Note.countDocuments(inRange), Task.countDocuments(inRange),
+      Mom.countDocuments(inRange), Doc.countDocuments(inRange), Project.countDocuments(inRange), Contact.countDocuments(inRange),
 
       // Every action item the extractor ever proposed, confirmed or not
       Mom.aggregate([{ $group: { _id: null, n: { $sum: { $size: { $ifNull: ['$candidates', []] } } } } }]),
@@ -143,16 +150,16 @@ export async function getAdminStats() {
       Task.countDocuments({ momId: { $exists: true, $ne: null }, signedOffAt: { $ne: null } }),
 
       Suggestion.countDocuments(),
-      Suggestion.countDocuments({ createdAt: { $gte: weekAgo } }),
+      Suggestion.countDocuments(inRange),
       Suggestion.aggregate([{ $group: { _id: '$kind', n: { $sum: 1 } } }]),
 
       // There is no lastSeenAt on User, and updatedAt only moves on a password or PIN change, so
-      // there is no honest "active users" figure to report. This is people who CREATED something,
-      // and the dashboard labels it as exactly that rather than dressing it up as activity.
-      Link.distinct('userId', { createdAt: { $gte: weekAgo } }),
-      Note.distinct('userId', { createdAt: { $gte: weekAgo } }),
-      Task.distinct('userId', { createdAt: { $gte: weekAgo } }),
-      Mom.distinct('userId', { createdAt: { $gte: weekAgo } }),
+      // there is no honest "active users" figure to report. This is people who CREATED something
+      // in the window, and the dashboard labels it as exactly that rather than as activity.
+      Link.distinct('userId', inRange),
+      Note.distinct('userId', inRange),
+      Task.distinct('userId', inRange),
+      Mom.distinct('userId', inRange),
     ]);
 
     const creators = new Set<string>();
@@ -160,26 +167,26 @@ export async function getAdminStats() {
       for (const id of list) creators.add(String(id));
     }
 
-    // Dense series: a day with no signups has to render as a zero-height bar, not vanish
-    const counts = new Map<string, number>(signupsByDay.map((d: { _id: string; n: number }) => [d._id, d.n]));
-    const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: DEFAULT_TZ });   // en-CA gives YYYY-MM-DD
-    const signups = Array.from({ length: TREND_DAYS }, (_, i) => {
-      const day = fmt.format(new Date(now - (TREND_DAYS - 1 - i) * DAY));
-      return { day, n: counts.get(day) || 0 };
-    });
+    // Dense series: a bucket with no signups has to render as a zero-height bar, not vanish
+    const counts = new Map<string, number>(signupsByBucket.map((d: { _id: string; n: number }) => [d._id, d.n]));
+    const signups = buckets.keys.map((day) => ({ day, n: counts.get(day) || 0 }));
 
     const kinds = Object.fromEntries(byKind.map((k: { _id: string; n: number }) => [k._id || 'other', k.n]));
 
     return {
       success: true as const,
+      range: { from: from.toISOString(), to: to.toISOString(), unit: buckets.unit },
       people: {
         total: users,
         verified,
-        newThisWeek,
-        createdSomethingThisWeek: creators.size,
+        newInRange,
+        createdSomethingInRange: creators.size,
         signups,
       },
-      usage: { links, notes, tasks, moms, docs, projects, contacts },
+      usage: {
+        links, notes, tasks, moms, docs, projects, contacts,
+        inRange: { links: linksIn, notes: notesIn, tasks: tasksIn, moms: momsIn, docs: docsIn, projects: projectsIn, contacts: contactsIn },
+      },
       loop: {
         meetings: moms,
         extracted: extracted[0]?.n || 0,
@@ -189,7 +196,7 @@ export async function getAdminStats() {
       },
       feedback: {
         total: suggestions,
-        thisWeek: suggestionsThisWeek,
+        inRange: suggestionsInRange,
         bug: kinds.bug || 0,
         idea: kinds.idea || 0,
         other: kinds.other || 0,

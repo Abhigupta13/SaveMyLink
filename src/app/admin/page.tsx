@@ -19,6 +19,20 @@ import { useFeedback } from '@/components/ui/Feedback';
 
 const ICON = { bug: Bug, idea: Lightbulb, other: MessageSquare } as const;
 
+// The window the numbers are scoped to. Server clamps and validates; this is just the picker.
+const RANGES = [
+  { key: 'today', label: 'Today' },
+  { key: '7d', label: '7 days' },
+  { key: '30d', label: '30 days' },
+  { key: '90d', label: '90 days' },
+  { key: 'all', label: 'All time' },
+] as const;
+type RangeKey = (typeof RANGES)[number]['key'];
+const RANGE_WORD: Record<RangeKey, string> = {
+  today: 'today', '7d': 'in the last 7 days', '30d': 'in the last 30 days',
+  '90d': 'in the last 90 days', all: 'all time',
+};
+
 /** 1,284 / 12.9K — a headline number should not need counting digits. */
 const compact = (n: number) =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
@@ -27,7 +41,8 @@ const compact = (n: number) =>
 
 const pct = (part: number, whole: number) => (whole ? Math.round((part / whole) * 100) : 0);
 
-const USAGE: [keyof Stats['usage'], string, typeof LinkIcon][] = [
+type UsageKey = 'links' | 'notes' | 'tasks' | 'moms' | 'docs' | 'projects' | 'contacts';
+const USAGE: [UsageKey, string, typeof LinkIcon][] = [
   ['links', 'Links', LinkIcon],
   ['notes', 'Notes', StickyNote],
   ['tasks', 'Tasks', CheckSquare],
@@ -131,6 +146,7 @@ export default function AdminPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [feedback, setFeedback] = useState<FeedbackRow[]>([]);
   const [denied, setDenied] = useState(false);
+  const [range, setRange] = useState<RangeKey>('7d');
 
   useEffect(() => {
     if (status !== 'authenticated' && status !== 'unauthenticated') return;
@@ -138,14 +154,14 @@ export default function AdminPage() {
     (async () => {
       // Signed out gets the same "Not found" as a signed-in non-admin, without a request
       if (status === 'unauthenticated') { if (!cancelled) setDenied(true); return; }
-      const [s, f] = await Promise.all([getAdminStats(), getSuggestions()]);
+      const [s, f] = await Promise.all([getAdminStats(range), getSuggestions()]);
       if (cancelled) return;
       if (!('success' in s) || !s.success) { setDenied(true); return; }
       setStats(s as Stats);
       if (f.success) setFeedback(f.suggestions || []);
     })();
     return () => { cancelled = true; };
-  }, [status]);
+  }, [status, range]);
 
   if (denied) return <div className="page narrow"><p style={{ color: 'var(--text-secondary)' }}>Not found.</p></div>;
   if (!stats) return <div className="page narrow"><p style={{ color: 'var(--text-secondary)' }}>Loading…</p></div>;
@@ -169,10 +185,25 @@ export default function AdminPage() {
 
   return (
     <div className="container viz" style={{ padding: '24px 16px 120px' }}>
-      <header style={{ marginBottom: '22px' }}>
+      <header style={{ marginBottom: '18px' }}>
         <h1 className="page-title">Admin</h1>
         <p className="page-subtitle">Aggregate numbers only — never anyone&rsquo;s content.</p>
       </header>
+
+      {/* Window picker — drives the time-based numbers; all-time totals keep an in-range companion */}
+      <div className="viz-chips" role="group" aria-label="Time range" style={{ marginBottom: '18px' }}>
+        {RANGES.map(r => (
+          <button
+            key={r.key}
+            className={`viz-chip${range === r.key ? ' on' : ''}`}
+            aria-pressed={range === r.key}
+            onClick={() => setRange(r.key)}
+            style={{ cursor: 'pointer', font: 'inherit' }}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
 
       {/* Hero: exactly one per view */}
       <section className="card viz-hero">
@@ -185,10 +216,10 @@ export default function AdminPage() {
 
       <section className="viz-kpis">
         {[
-          { label: 'New this week', value: compact(people.newThisWeek) },
-          { label: 'Saved something this week', value: compact(people.createdSomethingThisWeek) },
+          { label: `New ${RANGE_WORD[range]}`, value: compact(people.newInRange) },
+          { label: `Saved something ${RANGE_WORD[range]}`, value: compact(people.createdSomethingInRange) },
           { label: 'Things saved, all time', value: compact(totalItems) },
-          { label: 'Feedback this week', value: compact(fb.thisWeek) },
+          { label: `Feedback ${RANGE_WORD[range]}`, value: compact(fb.inRange) },
         ].map(k => (
           <div key={k.label} className="card viz-kpi">
             <span className="viz-kpi-value">{k.value}</span>
@@ -197,18 +228,18 @@ export default function AdminPage() {
         ))}
       </section>
 
-      {/* ---------- Signups, last 14 days ---------- */}
+      {/* ---------- Signups over the chosen window ---------- */}
       <section className="card viz-card">
         <h2 className="viz-title">Signups</h2>
-        <p className="viz-sub">Last 14 days · {people.signups.reduce((n, d) => n + d.n, 0)} total</p>
+        <p className="viz-sub">{RANGES.find(r => r.key === range)?.label} · {people.signups.reduce((n, d) => n + d.n, 0)} total{stats.range.unit === 'month' ? ' · by month' : ''}</p>
 
-        <div className="viz-cols" role="img" aria-label={`Signups per day for the last 14 days. ${people.signups.map(d => `${d.day}: ${d.n}`).join(', ')}`}>
+        <div className="viz-cols" role="img" aria-label={`Signups per ${stats.range.unit} for ${RANGE_WORD[range]}. ${people.signups.map(d => `${d.day}: ${d.n}`).join(', ')}`}>
           {people.signups.map((d, i) => (
             <div key={d.day} className="viz-col-slot" title={`${d.day} · ${d.n} signup${d.n === 1 ? '' : 's'}`}>
               {d.n > 0 && d.n === busiestDay && <span className="viz-col-value">{d.n}</span>}
               <span className="viz-col" style={{ height: `${Math.max(2, (d.n / busiestDay) * 100)}%` }} />
               {(i === 0 || i === people.signups.length - 1) && (
-                <span className="viz-col-tick">{d.day.slice(8)}/{d.day.slice(5, 7)}</span>
+                <span className="viz-col-tick">{stats.range.unit === 'month' ? `${d.day.slice(5, 7)}/${d.day.slice(2, 4)}` : `${d.day.slice(8)}/${d.day.slice(5, 7)}`}</span>
               )}
             </div>
           ))}
@@ -269,16 +300,16 @@ export default function AdminPage() {
       {/* ---------- What people actually touch ---------- */}
       <section className="card viz-card">
         <h2 className="viz-title">What&rsquo;s being used</h2>
-        <p className="viz-sub">Everything saved across every account.</p>
+        <p className="viz-sub">All time, with what was added {RANGE_WORD[range]} in brackets.</p>
 
         <div className="viz-ranked">
           {[...USAGE].sort((a, b) => usage[b[0]] - usage[a[0]]).map(([key, label, Icon]) => (
-            <div key={key} className="viz-ranked-row" title={`${label}: ${usage[key]}`}>
+            <div key={key} className="viz-ranked-row" title={`${label}: ${usage[key]} all time, ${usage.inRange[key]} ${RANGE_WORD[range]}`}>
               <span className="viz-ranked-label"><Icon size={14} strokeWidth={2.2} /> {label}</span>
               <span className="viz-ranked-track">
                 <span className="viz-ranked-bar" style={{ width: `${Math.max(1.5, (usage[key] / usageMax) * 100)}%` }} />
               </span>
-              <span className="viz-ranked-value">{compact(usage[key])}</span>
+              <span className="viz-ranked-value">{compact(usage[key])}{usage.inRange[key] > 0 && <span className="viz-ranked-delta"> +{compact(usage.inRange[key])}</span>}</span>
             </div>
           ))}
         </div>
@@ -289,7 +320,7 @@ export default function AdminPage() {
       {/* ---------- Feedback ---------- */}
       <section className="card viz-card">
         <h2 className="viz-title">Help us improve</h2>
-        <p className="viz-sub">{fb.total} {fb.total === 1 ? 'submission' : 'submissions'} · {fb.thisWeek} this week</p>
+        <p className="viz-sub">{fb.total} {fb.total === 1 ? 'submission' : 'submissions'} · {fb.inRange} {RANGE_WORD[range]}</p>
 
         <div className="viz-chips">
           {([['bug', 'Bugs', fb.bug], ['idea', 'Ideas', fb.idea], ['other', 'Other', fb.other]] as const).map(([kind, label, n]) => {

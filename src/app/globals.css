@@ -2869,7 +2869,14 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 @media (max-width: 420px) { .viz-ranked-row { grid-template-columns: 84px 1fr 40px; } }
 
 .viz-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.viz-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; background: var(--bg-tertiary); font-size: 0.78rem; font-weight: 700; color: var(--text-secondary); }
+.viz-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; background: var(--bg-tertiary); font-size: 0.78rem; font-weight: 700; color: var(--text-secondary); border: 1px solid transparent; }
+/* The range picker reuses .viz-chip as buttons; .on marks the chosen window. */
+button.viz-chip { transition: var(--transition); }
+button.viz-chip:hover { color: var(--text-primary); }
+.viz-chip.on { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-color) 35%, transparent); }
+.viz-chip:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+/* The "+N added in the window" companion beside an all-time total. */
+.viz-ranked-delta { color: var(--accent-text); font-weight: 700; }
 .viz-context { font-size: 0.82rem; color: var(--text-secondary); margin: -6px 0 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); }
 .viz-context strong { color: var(--text-primary); font-weight: 800; font-variant-numeric: tabular-nums; }
 

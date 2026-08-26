@@ -14,6 +14,7 @@ import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
 import { projectNameMap, sharedLabel, needsShareNotice, memberCount } from '../src/lib/visibility.ts';
+import { resolveRange, MAX_SPAN_DAYS } from '../src/lib/adminRange.ts';
 import { INTRO_STEPS, introProgress, isIntroStep } from '../src/lib/intro.ts';
 import { AUDIO_MODELS, audioMime } from '../src/lib/geminiAudio.ts';
 
@@ -654,6 +655,35 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   const mom = readFileSync(new URL('../src/actions/mom.ts', import.meta.url), 'utf8');
   assert.ok(!mom.includes('momScope'), 'mom.ts no longer gates an existing meeting on its projectId alone');
   assert.equal((mom.match(/canAccess\(mom,/g) || []).length, 5, 'poll, extract, confirm, impact and update each check the document');
+}
+
+// ----------------------------------------------------------------------------------------------
+// The /admin range picker hands the server a window, and a window from a client is untrusted: a
+// reversed pair, a future date or a decade-wide span would each break a query or the chart. The
+// clamping lives in one pure function so these rules can be asserted rather than hoped for.
+{
+  const DAY = 86_400_000;
+  const now = Date.parse('2026-08-26T10:00:00Z');
+
+  assert.equal(resolveRange('all', now).from.getTime(), 0, "'all time' starts at the epoch");
+  assert.equal(resolveRange('7d', now).from.getTime(), now - 7 * DAY, '7d looks back exactly a week');
+  assert.equal(resolveRange(undefined, now).from.getTime(), now - 7 * DAY, 'no choice means the 7-day default');
+  assert.equal(resolveRange('nonsense', now).from.getTime(), now - 7 * DAY, 'an unknown preset falls back, it does not throw');
+
+  // Reversed input is a real mis-click on two date fields, not a hypothetical.
+  const flipped = resolveRange({ from: '2026-08-20', to: '2026-08-10' }, now);
+  assert.ok(flipped.from <= flipped.to, 'a reversed custom range is put back in order');
+
+  // A window may never run past now, or the trend chart grows empty bars into the future.
+  const future = resolveRange({ from: '2026-08-01', to: '2027-01-01' }, now);
+  assert.ok(future.to.getTime() <= now, 'a custom range never reaches past the present');
+
+  const huge = resolveRange({ from: '2000-01-01', to: '2026-08-26' }, now);
+  assert.ok((huge.to - huge.from) / DAY <= MAX_SPAN_DAYS + 1, 'a decade-wide span is capped');
+
+  assert.equal(resolveRange('7d', now).buckets.unit, 'day', 'a short window charts by day');
+  assert.equal(resolveRange('all', now).buckets.unit, 'month', 'all-time charts by month, not thousands of days');
+  assert.ok(resolveRange('7d', now).buckets.keys.length >= 7, 'every day in the window gets a bucket, including empty ones');
 }
 
 console.log('self-check: all assertions passed');
