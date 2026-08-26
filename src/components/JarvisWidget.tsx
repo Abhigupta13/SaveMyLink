@@ -55,6 +55,7 @@ export default function JarvisWidget() {
   const [heard, setHeard] = useState(false);   // have you said anything this turn?
   const [tab, setTab] = useState<Tab>('chat');
   const [sessions, setSessions] = useState<JarvisSessionMeta[]>([]);
+  const [left, setLeft] = useState<number | null>(null);   // questions left today; null = not counted / unknown
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -150,6 +151,9 @@ export default function JarvisWidget() {
     setBusy(true);
     const res = await askJarvis(question, history, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setBusy(false);
+    // -1 means this account is not counted (an admin); undefined means the turn never reached the
+    // counter at all. Neither is a number to show anyone.
+    if (typeof res.remaining === 'number' && res.remaining >= 0) setLeft(res.remaining);
     if (res.success) for (const t of res.createdTasks || []) syncTask(t);
     if (res.success && !introMarkedRef.current) { introMarkedRef.current = true; markIntro('jarvis').catch(() => {}); }
     const reply: Msg = res.success
@@ -561,6 +565,15 @@ export default function JarvisWidget() {
               <button type="submit" disabled={!q.trim() || busy || mode === 'capturing'} aria-label="Send"><Send size={16} /></button>
             </form>
           </div>
+          )}
+
+          {/* Only near the end. Counting down from five on every turn makes the app feel metered;
+              running out with no warning at all feels broken. */}
+          {tab === 'chat' && left !== null && left <= 2 && (
+            <p className="jarvis-left">
+              {left === 0 ? 'That was today\u2019s last question.' : `${left} question${left === 1 ? '' : 's'} left today.`}
+              {' '}The free AI allowance is shared by everyone; it resets tomorrow.
+            </p>
           )}
         </div>
       )}

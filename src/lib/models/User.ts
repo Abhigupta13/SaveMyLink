@@ -35,6 +35,11 @@ export interface IUser extends Document {
   // been nulled. The row itself lingers up to 90 days (purgeDeletedAccounts) so the disclosed
   // retention promise in /terms is one we actually keep, then it is removed for good.
   deletedAt?: Date | null;
+  // Jarvis's per-user daily allowance. The pair is the whole mechanism: a count, and the day in
+  // the user's own zone it belongs to. A count stamped with any other day reads as zero, so there
+  // is no reset job to run and no midnight cron to get wrong.
+  jarvisCount?: number;
+  jarvisCountDate?: string;
   // Their role-in-company, captured once on the delete screen — the only new profile field, and
   // the only content kept alongside name and email during retention.
   role?: string;
@@ -72,6 +77,8 @@ const UserSchema: Schema<IUser> = new Schema({
   sarvamAccess: { type: Boolean },
   sarvamAccessBy: { type: String },
   sarvamAccessAt: { type: Date },
+  jarvisCount: { type: Number, default: 0 },
+  jarvisCountDate: { type: String, default: '' },
   // Absent on every live account, which reads as "not deleted" — the honest default.
   deletedAt: { type: Date, default: null },
   role: { type: String },

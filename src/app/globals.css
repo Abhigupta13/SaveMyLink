@@ -2259,6 +2259,8 @@ body {
 .jarvis-input input:focus { border-color: var(--accent-color); }
 .jarvis-input button { width: 42px; border-radius: 12px; border: none; background: var(--accent-strong); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .jarvis-input button:disabled { opacity: 0.4; cursor: default; }
+/* Only drawn on the last two questions of the day — a permanent counter makes it feel metered. */
+.jarvis-left { padding: 0 12px 10px; font-size: 0.72rem; line-height: 1.45; color: var(--text-secondary); }
 /* keep the Links "+" FAB clear of Jarvis */
 .fab-container { bottom: 100px; }
 /* Jarvis voice-first controls */

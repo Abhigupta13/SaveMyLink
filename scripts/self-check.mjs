@@ -19,6 +19,7 @@ import { INTRO_STEPS, introProgress, isIntroStep } from '../src/lib/intro.ts';
 import { AUDIO_MODELS, audioMime } from '../src/lib/geminiAudio.ts';
 import { chooseHandover, isPurgeDue } from '../src/lib/accountDeletion.ts';
 import { retrieve, terms } from '../src/lib/retrieval.ts';
+import { spendQuestion, dayKey, capMessage, SHARED_OUT_MESSAGE } from '../src/lib/jarvisLimit.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -795,6 +796,48 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   // Hindi and Hinglish reach Jarvis constantly; the tokenizer must not drop Devanagari.
   assert.ok(terms('कल की मीटिंग').length > 0, 'Devanagari survives tokenizing');
   assert.ok(!terms('what is my task').includes('is'), 'stop words are dropped');
+}
+
+// ----------------------------------------------------------------------------------------------
+// Jarvis's daily allowance. Two ways to get this wrong and both are visible to users: refuse
+// someone who still has questions left, or roll the day over on the server's clock so an Indian
+// user's allowance resets at 5:30 in the morning.
+{
+  const T = '2026-08-26';
+  const fresh = (n) => ({ count: n, date: T });
+
+  assert.equal(spendQuestion(null, T, 5).allowed, true, 'a brand-new account may ask');
+  assert.equal(spendQuestion(null, T, 5).count, 1, 'the first question counts as one');
+  assert.equal(spendQuestion(null, T, 5).remaining, 4, 'four left after the first of five');
+  assert.equal(spendQuestion(fresh(4), T, 5).allowed, true, 'the fifth question is still allowed');
+  assert.equal(spendQuestion(fresh(4), T, 5).remaining, 0, 'and it is the last one');
+  assert.equal(spendQuestion(fresh(5), T, 5).allowed, false, 'the sixth is refused');
+  assert.equal(spendQuestion(fresh(5), T, 5).count, 5, 'a refused question does not increment the count');
+
+  // Yesterday's count is not today's problem — no reset job, no cron, no midnight edge case.
+  assert.equal(spendQuestion({ count: 99, date: '2026-08-25' }, T, 5).allowed, true, 'a stale day reads as zero used');
+  assert.equal(spendQuestion({ count: 99, date: '2026-08-25' }, T, 5).count, 1, 'and starts counting again at one');
+
+  // Admins are never refused, and are marked as uncounted rather than given a fake number.
+  assert.equal(spendQuestion(fresh(500), T, 5, true).allowed, true, 'an admin is exempt');
+  assert.equal(spendQuestion(fresh(500), T, 5, true).remaining, -1, 'an exempt caller reports "not counted"');
+
+  // Garbage in the stored field must fail OPEN (the user keeps their questions), never closed.
+  assert.equal(spendQuestion({ count: undefined, date: T }, T, 5).allowed, true, 'a missing count is zero used');
+  assert.equal(spendQuestion({ count: -7, date: T }, T, 5).count, 1, 'a negative stored count cannot mint questions');
+  assert.equal(spendQuestion({ count: 'x', date: T }, T, 5).allowed, true, 'an unparseable count does not lock anyone out');
+
+  // The day is the ASKER's day. 00:30 in Kolkata is still the previous day in UTC; if the server's
+  // clock decided, the allowance would roll over five and a half hours early.
+  const justAfterMidnightIST = Date.parse('2026-08-26T19:00:00Z');   // 00:30 on the 27th in Kolkata
+  assert.equal(dayKey(justAfterMidnightIST, 'Asia/Kolkata'), '2026-08-27', 'the day is read in the user\'s zone');
+  assert.equal(dayKey(justAfterMidnightIST, 'UTC'), '2026-08-26', 'and it really does differ from the server\'s');
+  assert.equal(dayKey(justAfterMidnightIST, 'Not/AZone'), '2026-08-27', 'a junk zone falls back, it does not throw');
+  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(dayKey(Date.now(), 'America/New_York')), 'the key is a plain sortable date');
+
+  // The two messages are different facts and must not collapse into one another.
+  assert.ok(capMessage(5).includes('5'), 'the cap message names the actual limit');
+  assert.ok(!SHARED_OUT_MESSAGE.includes('went wrong'), 'a spent shared quota is never reported as a generic failure');
 }
 
 console.log('self-check: all assertions passed');

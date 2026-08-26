@@ -43,7 +43,11 @@ function errorReason(body: string): string | null {
 }
 
 export type ChatMsg = { role: 'system' | 'user' | 'assistant'; content: string };
-export type ChatResult = { ok: true; data: any } | { ok: false; error: string };
+/**
+ * `code` exists so a caller can tell "the free quota is gone until tomorrow" apart from "something
+ * broke" — they are different facts and the user deserves the true one. Only 429 sets it.
+ */
+export type ChatResult = { ok: true; data: any } | { ok: false; error: string; code?: 'rate_limited' };
 
 /**
  * Models are asked for JSON, but a provider that ignores response_format tends to return it
@@ -73,6 +77,7 @@ export async function chatJSON(messages: ChatMsg[]): Promise<ChatResult> {
 
   const models = [MODEL, ...FALLBACKS.filter(m => m !== MODEL)];
   let lastError = 'Assistant unavailable';
+  let lastCode: 'rate_limited' | undefined;
 
   for (const model of models) {
     // Two goes at each model before moving on: 503s often clear within a second or two
@@ -87,6 +92,7 @@ export async function chatJSON(messages: ChatMsg[]): Promise<ChatResult> {
 
       if (res.status === 503) {
         lastError = 'Gemini is busy right now. Try again in a moment.';
+        lastCode = undefined;
         console.warn(`LLM busy: ${model} (attempt ${attempt + 1})`);
         if (attempt === 0) { await sleep(1200); continue; }
         break;   // this model is saturated — fall through to the next one
@@ -98,6 +104,7 @@ export async function chatJSON(messages: ChatMsg[]): Promise<ChatResult> {
         const reason = errorReason(body);
         console.warn('LLM rate limited:', model, reason);
         lastError = reason ? `Rate limited — ${reason}` : 'Rate limited. Give it a minute.';
+        lastCode = 'rate_limited';
 
         // A short per-minute burst on this model clears in seconds — one wait beats a dead turn
         if (wait <= 10 && attempt === 0) { await sleep(wait * 1000); continue; }
@@ -116,9 +123,11 @@ export async function chatJSON(messages: ChatMsg[]): Promise<ChatResult> {
         // 400/404 is a retired model name — the next one in the list may well work
         if (res.status === 400 || res.status === 404) {
           lastError = `Model "${model}" rejected it${reason ? ` — ${reason}` : ''}`;
+          lastCode = undefined;
           break;
         }
         lastError = `Assistant unavailable (${res.status})`;
+        lastCode = undefined;
         break;
       }
 
@@ -128,5 +137,5 @@ export async function chatJSON(messages: ChatMsg[]): Promise<ChatResult> {
     }
   }
 
-  return { ok: false, error: lastError };
+  return { ok: false, error: lastError, code: lastCode };
 }

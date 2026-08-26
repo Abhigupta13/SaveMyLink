@@ -16,6 +16,8 @@ import { myProjectFilter } from "@/lib/projectAccess";
 import { retrieve, type Candidate } from "@/lib/retrieval";
 import { isProjectOwner, canWrite, type OwnableProject } from "@/lib/scope";
 import { hasSafe } from "@/lib/safeCookie";
+import { isAdmin } from "@/lib/isAdmin";
+import { dayKey, spendQuestion, capMessage, SHARED_OUT_MESSAGE, JARVIS_DAILY_LIMIT } from "@/lib/jarvisLimit";
 import { User } from "@/lib/models/User";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
@@ -153,6 +155,26 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     const d = fmtIn(tz);
     const userId = session.user.id;
     const email = (session.user.email || '').toLowerCase();
+
+    /* The daily allowance, spent BEFORE the call and refunded if the call itself fails — charging
+       someone for an answer they never got is the kind of small dishonesty that loses trust.
+       ponytail: read-then-write, so two questions fired at the same instant can both pass the
+       check and spend one slot between them. The cost of that race is one extra question; making
+       it atomic costs an update pipeline nobody can read at 3am. Revisit if it ever matters. */
+    const today = dayKey(Date.now(), tz);
+    const exempt = isAdmin(email);
+    const spent = spendQuestion(
+      await User.findById(userId).select('jarvisCount jarvisCountDate')
+        .lean<{ jarvisCount?: number; jarvisCountDate?: string } | null>()
+        .then(u => ({ count: u?.jarvisCount, date: u?.jarvisCountDate })),
+      today, JARVIS_DAILY_LIMIT, exempt,
+    );
+    if (!spent.allowed) return { success: false, error: capMessage(JARVIS_DAILY_LIMIT), remaining: 0 };
+    await User.updateOne({ _id: userId }, { jarvisCount: spent.count, jarvisCountDate: today });
+    const refund = () => User.updateOne(
+      { _id: userId, jarvisCountDate: today, jarvisCount: { $gt: 0 } }, { $inc: { jarvisCount: -1 } },
+    ).catch(() => {});
+
     const ctx = await gatherContext(userId, email, await hasSafe(userId), d);
 
     // Retrieval, not a dump: score the vault against the question here and send only what answers
@@ -223,7 +245,12 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
       ...history.slice(-4).map(h => ({ role: h.role, content: h.content.slice(0, 500) })),
       { role: 'user', content: question },
     ]);
-    if (!res.ok) return { success: false, error: res.error };
+    if (!res.ok) {
+      await refund();   // they asked, nothing answered — it should not count against their five
+      // A 429 after the whole fallback chain means the shared free quota is gone for today. Say
+      // that, because "Assistant unavailable" reads as "this app is broken" and it is not.
+      return { success: false, error: res.code === 'rate_limited' ? SHARED_OUT_MESSAGE : res.error, remaining: spent.remaining };
+    }
     const parsed = res.data;
     // Run the actions the model asked for (this is the ONLY way it can change data)
     const created: JarvisItem[] = [];
@@ -391,7 +418,7 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
       .map((i: any) => ({ ...i, project: ctx.groupOf.get(String(i.id)) }));
     const items = [...created, ...cited.filter(c => !created.some(x => x.id === c.id))];
 
-    return { success: true, answer: String(parsed.answer || '').trim(), items, createdTasks };
+    return { success: true, answer: String(parsed.answer || '').trim(), items, createdTasks, remaining: spent.remaining };
   } catch (error) {
     console.error('Jarvis failed:', error);
     return { success: false, error: 'Assistant failed' };
