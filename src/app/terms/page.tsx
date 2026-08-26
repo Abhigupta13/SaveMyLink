@@ -41,6 +41,7 @@ const SECTIONS: [string, string[]][] = [
   ]],
   ['Your account', [
     'You can delete anything you have saved from inside the app. If you want your account and everything in it removed, ask us and we will do it.',
+    'When you delete your account we erase your content immediately and keep only your name, email and role for up to 90 days for our records, then erase those too.',
     'Deleting shared work inside a project is the project owner’s decision, so that one person tidying up cannot remove a teammate’s work.',
   ]],
   ['This will change', [

@@ -17,6 +17,7 @@ import { projectNameMap, sharedLabel, needsShareNotice, memberCount } from '../s
 import { resolveRange, MAX_SPAN_DAYS } from '../src/lib/adminRange.ts';
 import { INTRO_STEPS, introProgress, isIntroStep } from '../src/lib/intro.ts';
 import { AUDIO_MODELS, audioMime } from '../src/lib/geminiAudio.ts';
+import { chooseHandover, isPurgeDue } from '../src/lib/accountDeletion.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -684,6 +685,44 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   assert.equal(resolveRange('7d', now).buckets.unit, 'day', 'a short window charts by day');
   assert.equal(resolveRange('all', now).buckets.unit, 'month', 'all-time charts by month, not thousands of days');
   assert.ok(resolveRange('7d', now).buckets.keys.length >= 7, 'every day in the window gets a bucket, including empty ones');
+}
+
+// ----------------------------------------------------------------------------------------------
+// Account deletion. Two decisions with no undo: who inherits a group whose creator is leaving, and
+// when a retained stub is finally purged. Getting the first wrong orphans a team's shared work;
+// getting the second wrong either keeps data too long or deletes it early — both break the
+// disclosed-retention promise in /terms.
+{
+  const OLD = '2026-01-01', MID = '2026-04-01', NEW = '2026-08-01';
+
+  // Oldest CO-OWNER wins, ahead of any member however old.
+  assert.deepEqual(
+    chooseHandover([{ email: 'b@x', createdAt: MID }, { email: 'a@x', createdAt: OLD }],
+                   [{ email: 'm@x', createdAt: OLD }]),
+    { action: 'transfer', email: 'a@x' }, 'oldest co-owner inherits');
+
+  // No co-owner → oldest MEMBER is promoted.
+  assert.deepEqual(
+    chooseHandover([], [{ email: 'y@x', createdAt: NEW }, { email: 'x@x', createdAt: MID }]),
+    { action: 'promote', email: 'x@x' }, 'oldest member is promoted when there is no co-owner');
+
+  // Nobody else registered → the group is deleted, not left ownerless.
+  assert.deepEqual(chooseHandover([], []), { action: 'delete' }, 'sole member means delete');
+
+  // createdAt shapes are mixed in the wild (Date, ISO string, ms) — all must compare correctly.
+  assert.deepEqual(
+    chooseHandover([{ email: 'ms@x', createdAt: Date.parse(OLD) }, { email: 'd@x', createdAt: new Date(NEW) }], []),
+    { action: 'transfer', email: 'ms@x' }, 'oldest wins across Date / string / number');
+
+  // isPurgeDue: the 90-day line, and everything that must fail closed around it.
+  const now = Date.parse('2026-08-26T00:00:00Z');
+  const daysAgo = (n) => new Date(now - n * 86_400_000);
+  assert.equal(isPurgeDue(daysAgo(91), now), true, '91 days is past the 90-day window');
+  assert.equal(isPurgeDue(daysAgo(89), now), false, '89 days is still within retention');
+  assert.equal(isPurgeDue(daysAgo(90), now), true, 'exactly 90 days is due');
+  assert.equal(isPurgeDue(null, now), false, 'a live account (no deletedAt) is never purged');
+  assert.equal(isPurgeDue(undefined, now), false, 'missing deletedAt is never purged');
+  assert.equal(isPurgeDue('not a date', now), false, 'an unparseable stamp fails closed, it does not throw');
 }
 
 console.log('self-check: all assertions passed');

@@ -30,6 +30,14 @@ export interface IUser extends Document {
   sarvamAccess?: boolean;
   sarvamAccessBy?: string;
   sarvamAccessAt?: Date;
+  // Account deletion with disclosed retention. Once set the account is gone: it cannot sign in
+  // (auth.ts refuses), it is excluded from admin totals, and everything but name/email/role has
+  // been nulled. The row itself lingers up to 90 days (purgeDeletedAccounts) so the disclosed
+  // retention promise in /terms is one we actually keep, then it is removed for good.
+  deletedAt?: Date | null;
+  // Their role-in-company, captured once on the delete screen — the only new profile field, and
+  // the only content kept alongside name and email during retention.
+  role?: string;
 }
 
 const UserSchema: Schema<IUser> = new Schema({
@@ -64,6 +72,9 @@ const UserSchema: Schema<IUser> = new Schema({
   sarvamAccess: { type: Boolean },
   sarvamAccessBy: { type: String },
   sarvamAccessAt: { type: Date },
+  // Absent on every live account, which reads as "not deleted" — the honest default.
+  deletedAt: { type: Date, default: null },
+  role: { type: String },
 }, { timestamps: true });
 
 export const User: Model<IUser> = defineModel<IUser>('User', UserSchema);

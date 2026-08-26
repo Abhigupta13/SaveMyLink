@@ -117,6 +117,12 @@ export async function getAdminStats(range?: RangeInput) {
     // an in-range companion so both are visible.
     const { from, to, buckets } = resolveRange(range, now);
     const inRange = { createdAt: { $gte: from, $lte: to } };
+    // A deleted account is retained as a name/email/role stub for 90 days but is no longer a user
+    // of the product, so it must not inflate any people count. `{ deletedAt: null }` also matches
+    // the field's absence, so every live account still counts. Only the User counts filter on it;
+    // their content is already gone, so the usage collections need no such clause.
+    const live = { deletedAt: null };
+    const liveInRange = { ...inRange, ...live };
 
     const [
       users, verified, newInRange, signupsByBucket,
@@ -126,11 +132,11 @@ export async function getAdminStats(range?: RangeInput) {
       suggestions, suggestionsInRange, byKind,
       recentLinkUsers, recentNoteUsers, recentTaskUsers, recentMomUsers,
     ] = await Promise.all([
-      User.countDocuments(),
-      User.countDocuments({ emailVerified: { $ne: null } }),
-      User.countDocuments(inRange),
+      User.countDocuments(live),
+      User.countDocuments({ emailVerified: { $ne: null }, ...live }),
+      User.countDocuments(liveInRange),
       User.aggregate([
-        { $match: inRange },
+        { $match: liveInRange },
         { $group: { _id: { $dateToString: { format: buckets.format, date: '$createdAt', timezone: DEFAULT_TZ } }, n: { $sum: 1 } } },
       ]),
 

@@ -11,6 +11,7 @@ import { useUser } from '@/components/UserContext';
 import ThemeToggle from '@/components/ThemeToggle';
 import SuggestBox from '@/components/SuggestBox';
 import SarvamKeyCard from '@/components/SarvamKeyCard';
+import DeleteAccountCard from '@/components/DeleteAccountCard';
 import Link from 'next/link';
 import { appUrl } from '@/lib/url';
 import { amIAdmin } from '@/actions/admin';
@@ -182,6 +183,8 @@ export default function ProfilePage() {
         style={{ marginTop: '18px', width: '100%', height: '48px', borderRadius: '14px', background: 'var(--danger-soft)', color: 'var(--danger-color)', fontWeight: 800, border: '1px solid color-mix(in srgb, var(--danger-color) 25%, transparent)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
         <LogOut size={18} /> Log out
       </button>
+
+      <DeleteAccountCard />
     </div>
   );
 }

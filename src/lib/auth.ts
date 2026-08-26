@@ -31,6 +31,12 @@ export const authOptions = {
           throw new Error("No user found with this email");
         }
 
+        // A deleted account keeps a retained row (name/email/role) for 90 days but must never
+        // sign back in — the password was nulled anyway, so bcrypt would fail, but say it plainly.
+        if (user.deletedAt) {
+          throw new Error("This account has been deleted");
+        }
+
         const isPasswordCorrect = await bcrypt.compare(credentials.password, user.password);
 
         if (!isPasswordCorrect) {
@@ -57,6 +63,8 @@ export const authOptions = {
       try {
         await connectToDatabase();
         const existing = await User.findOne({ email });
+        // A deleted account cannot be revived by signing in with Google either.
+        if (existing?.deletedAt) return false;
         // Google has already proven the address. That is the whole job of our own OTP, so a
         // Google sign-in settles it — including for a password account that predates verification
         // and is now signing in this way (allowDangerousEmailAccountLinking makes them one row).
@@ -71,6 +79,17 @@ export const authOptions = {
     async session({ session, token }: any) {
       if (token) {
         session.user.id = token.id;
+        // The route gate and authorize already refuse a deleted account, but a JWT minted before
+        // the deletion is still stateless and valid — this is where a lingering token is caught,
+        // so every getServerSession-guarded action sees no user and refuses.
+        // ponytail: one indexed _id lookup per session read. Fold into the JWT if it ever profiles.
+        try {
+          await connectToDatabase();
+          const u = await User.findById(token.id).select('deletedAt').lean<{ deletedAt?: Date | null } | null>();
+          if (u?.deletedAt) { session.user = undefined; return session; }
+        } catch (err) {
+          console.error('[session] could not check account status:', err);
+        }
       }
       return session;
     },
