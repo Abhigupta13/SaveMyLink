@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { Sparkles, X, Send, ArrowUpRight, Mic, Square, Volume2, VolumeX, Trash2, MessageSquare } from 'lucide-react';
+import { Sparkles, X, Send, ArrowUpRight, Mic, Square, Volume2, VolumeX, Trash2, MessageSquare, Users } from 'lucide-react';
 import {
   askJarvis, transcribeQuestion, getJarvisSessions, getJarvisSession, saveJarvisSession,
-  deleteJarvisSession, JarvisItem, JarvisTurn, Msg, JarvisSessionMeta,
+  deleteJarvisSession, runJarvisActions, JarvisItem, JarvisTurn, Msg, JarvisSessionMeta, JarvisPending,
 } from '@/actions/jarvis';
+import { pickVoice } from '@/lib/voice';
 import { syncTask } from '@/lib/taskNotifications';
 import { getProjects } from '@/actions/project';
 import { markIntro } from '@/actions/intro';
@@ -34,6 +35,11 @@ function itemHref(i: JarvisItem) {
   return '/links';
 }
 const speakable = (s: string) => s.replace(/^[-*•]\s*/gm, '').replace(/\s+/g, ' ').trim();
+// Round 5: male whenever the speech comes from the non-Sarvam path, which today is every word the
+// widget says — the browser synthesiser here, Gemini TTS when that lands. Sarvam speaks female;
+// lib/sarvam is transcription-only so far, so nothing calls pickVoice with 'female' yet, and the
+// day it does it is this one argument.
+const JARVIS_VOICE = 'male' as const;
 // Speak Hindi replies with a Hindi voice; Hinglish comes back in Latin script and stays on en-IN.
 const voiceLang = (s: string) => /[ऀ-ॿ]/.test(s) ? 'hi-IN' : 'en-IN';
 const when = (iso: string) => {
@@ -56,6 +62,7 @@ export default function JarvisWidget() {
   const [tab, setTab] = useState<Tab>('chat');
   const [sessions, setSessions] = useState<JarvisSessionMeta[]>([]);
   const [left, setLeft] = useState<number | null>(null);   // questions left today; null = not counted / unknown
+  const [pending, setPending] = useState<JarvisPending[]>([]);   // writes into a group, waiting on a yes
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -75,6 +82,7 @@ export default function JarvisWidget() {
   const [voiceBlocked, setVoiceBlocked] = useState(false);
   const mutedRef = useRef(false);
   const speakingRef = useRef(false);     // our own flag: speechSynthesis.speaking gets stuck in Chrome
+  const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
   const msgsRef = useRef<Msg[]>([]);
   msgsRef.current = msgs;
   const sessionIdRef = useRef<string | null>(null);   // null until this conversation's first save
@@ -89,6 +97,14 @@ export default function JarvisWidget() {
   const hasTTS = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
   useEffect(() => { try { const m = localStorage.getItem('jarvisMuted') === '1'; setMuted(m); mutedRef.current = m; } catch {} }, []);
+  // getVoices() is empty on first call in Chrome and fills in later, so listen as well as ask.
+  useEffect(() => {
+    if (!hasTTS) return;
+    const load = () => { voicesRef.current = window.speechSynthesis.getVoices() || []; };
+    load();
+    window.speechSynthesis.addEventListener('voiceschanged', load);
+    return () => window.speechSynthesis.removeEventListener('voiceschanged', load);
+  }, [hasTTS]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, busy]);
   // Keep the tail of a long dictation visible instead of the first few words
   useEffect(() => { const el = inputRef.current; if (el) el.scrollLeft = el.scrollWidth; }, [q]);
@@ -126,6 +142,10 @@ export default function JarvisWidget() {
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(speakable(text));
     u.lang = voiceLang(text);
+    // Language first: an English male voice reading Devanagari is worse than a Hindi voice of the
+    // wrong gender. Left unset when the device has nothing to choose from, exactly as before.
+    const chosen = pickVoice(voicesRef.current, u.lang, JARVIS_VOICE);
+    if (chosen) u.voice = chosen as SpeechSynthesisVoice;
     u.rate = 1.02;
     // Chrome silently stops an utterance after ~15s unless it's nudged, which truncates any
     // answer longer than a couple of sentences. resume() on a speaking synth is a no-op elsewhere.
@@ -159,6 +179,8 @@ export default function JarvisWidget() {
     if (typeof res.remaining === 'number' && res.remaining >= 0) setLeft(res.remaining);
     if (res.success) for (const t of res.createdTasks || []) syncTask(t);
     if (res.success && !introMarkedRef.current) { introMarkedRef.current = true; markIntro('jarvis').catch(() => {}); }
+    // A sheet is waiting on an answer — do not reopen the mic behind it
+    if (res.success && res.pending?.length) { loopRef.current = false; setPending(res.pending); }
     const reply: Msg = res.success
       ? { role: 'assistant', content: res.answer || '…', items: res.items }
       : { role: 'assistant', content: res.error || 'Something went wrong.' };
@@ -370,7 +392,7 @@ export default function JarvisWidget() {
   };
 
   // ---------- panel lifecycle ----------
-  const closePanel = useCallback(() => { loopRef.current = false; stopListening(); stopSpeaking(); setOpen(false); }, [stopListening, stopSpeaking]);
+  const closePanel = useCallback(() => { loopRef.current = false; stopListening(); stopSpeaking(); setPending([]); setOpen(false); }, [stopListening, stopSpeaking]);
 
   /** Greets, then listens; every answer reopens the mic until you stop it or close the panel. */
   const openPanel = useCallback(() => {
@@ -447,6 +469,27 @@ export default function JarvisWidget() {
     if (!id || id === sessionIdRef.current) sessionIdRef.current = null;
   };
 
+  /**
+   * Round 2's share sheet, in Jarvis's shape: before the assistant writes into a group, say who
+   * will see it. Personal writes never reach here — the server only holds an action that has a
+   * group behind it — and the whole gate can be switched off in Profile.
+   */
+  const settlePending = async (ok: boolean) => {
+    const held = pending;
+    setPending([]);
+    if (!ok || !held.length) {
+      if (held.length) setMsgs(m => [...m, { role: 'assistant', content: 'Left it alone.' }]);
+      return;
+    }
+    setBusy(true);
+    const r = await runJarvisActions(held.map(p => p.action), Intl.DateTimeFormat().resolvedOptions().timeZone);
+    setBusy(false);
+    if (r.success) for (const t of r.createdTasks || []) syncTask(t);
+    setMsgs(m => [...m, r.success
+      ? { role: 'assistant', content: `Done — it's in ${[...new Set(held.map(h => h.group))].join(' and ')}.`, items: r.items }
+      : { role: 'assistant', content: r.error || 'Could not do that.' }]);
+  };
+
   const toggleMute = () => {
     const next = !muted; setMuted(next); mutedRef.current = next;
     try { localStorage.setItem('jarvisMuted', next ? '1' : '0'); } catch {}
@@ -467,6 +510,25 @@ export default function JarvisWidget() {
       <button ref={fabRef} className={`jarvis-fab ${open ? 'is-open' : ''} ${mode === 'capturing' ? 'listening' : ''}`} onClick={toggleOpen} title="Jarvis (Ctrl+J)" aria-label="Jarvis">
         {open ? <X size={22} /> : <Sparkles size={22} />}
       </button>
+
+      {pending.length > 0 && (
+        <div className="confirm-overlay" onClick={() => settlePending(false)}>
+          <div className="confirm-box" onClick={e => e.stopPropagation()} role="alertdialog" aria-modal="true">
+            <div className="confirm-icon"><Users size={20} /></div>
+            <h3>Everyone in {[...new Set(pending.map(p => p.group))].join(' and ')} will see this</h3>
+            <p>
+              {pending[0].people === 1
+                ? 'Only you are in it right now — anyone you add later sees it too.'
+                : `${pending[0].people} people are in this group.`}
+              {' '}Jarvis will {pending.length === 1 ? 'make this change' : `make these ${pending.length} changes`} once you say so.
+            </p>
+            <div className="confirm-actions">
+              <button className="confirm-cancel" onClick={() => settlePending(false)}>Cancel</button>
+              <button className="confirm-ok" onClick={() => settlePending(true)} autoFocus>Go ahead</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {open && (
         <div className="jarvis-panel" ref={panelRef}>

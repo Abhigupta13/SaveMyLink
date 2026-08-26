@@ -21,6 +21,7 @@ import { chooseHandover, isPurgeDue } from '../src/lib/accountDeletion.ts';
 import { retrieve, terms } from '../src/lib/retrieval.ts';
 import { spendQuestion, dayKey, capMessage, SHARED_OUT_MESSAGE } from '../src/lib/jarvisLimit.ts';
 import { isHowTo, EXTRA_PAGES, HOW_IT_WORKS } from '../src/lib/manual.ts';
+import { pickVoice } from '../src/lib/voice.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -877,6 +878,78 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   assert.ok(/not encryption/.test(HOW_IT_WORKS), 'the manual repeats the honest Private Safe line');
   assert.ok(/never shared/.test(HOW_IT_WORKS), 'the manual states that links are never shared');
   assert.ok(EXTRA_PAGES.every(p => p.href.startsWith('/')), 'every extra destination is an in-app route');
+}
+
+// ----------------------------------------------------------------------------------------------
+// The voice rule: male on the non-Sarvam path (browser / Gemini TTS), female when Sarvam speaks.
+// The Web Speech API reports no gender, so this is name matching, and the interesting cases are
+// the ones where it must NOT guess: language always outranks gender, and a device with nothing
+// installed must leave the voice unset rather than pick a wrong one.
+{
+  const V = (name, lang, extra = {}) => ({ name, lang, ...extra });
+  const chrome = [
+    V('Google UK English Female', 'en-GB'),
+    V('Google UK English Male', 'en-GB'),
+    V('Google US English', 'en-US', { default: true }),
+    V('Google हिन्दी', 'hi-IN'),
+    V('Microsoft Heera - English (India)', 'en-IN'),
+    V('Microsoft Ravi - English (India)', 'en-IN'),
+  ];
+
+  assert.equal(pickVoice(chrome, 'en-GB', 'male').name, 'Google UK English Male', 'male is picked when named');
+  assert.equal(pickVoice(chrome, 'en-GB', 'female').name, 'Google UK English Female', 'and female when asked for');
+  assert.equal(pickVoice(chrome, 'en-IN', 'female').name, 'Microsoft Heera - English (India)', 'a known female name is recognised');
+
+  // Language beats gender. A male English voice reading Devanagari is worse than a Hindi voice.
+  assert.equal(pickVoice(chrome, 'hi-IN', 'male').lang, 'hi-IN', 'the requested language wins over the gender');
+
+  // No male voice in that language at all: fall back within the language, never out of it.
+  const femaleOnly = [V('Google UK English Female', 'en-GB'), V('Zira', 'en-US')];
+  assert.equal(pickVoice(femaleOnly, 'en-GB', 'male').lang, 'en-GB', 'no male voice still keeps the language');
+
+  // A regional variant is close enough when the exact tag is missing.
+  assert.equal(pickVoice([V('Microsoft Ravi - English (India)', 'en-IN')], 'en-GB', 'male').lang, 'en-IN',
+    'en-IN answers for en-GB rather than nothing');
+
+  // Nothing installed → null, and the caller leaves utterance.voice alone, exactly as before.
+  assert.equal(pickVoice([], 'en-IN', 'male'), null, 'an empty voice list picks nothing');
+  assert.equal(pickVoice(null, 'en-IN', 'male'), null, 'a missing voice list does not throw');
+  assert.equal(pickVoice(undefined, '', 'male'), null, 'no language and no voices is still safe');
+
+  // A name that says neither is preferred over one that says the OPPOSITE.
+  const mixed = [V('Microsoft Zira - English (US)', 'en-US'), V('Samantha', 'en-US'), V('Alex', 'en-US')];
+  assert.equal(pickVoice(mixed, 'en-US', 'male').name, 'Alex', 'a known male name beats two known female ones');
+  const noMale = [V('Microsoft Zira - English (US)', 'en-US'), V('Announcer', 'en-US')];
+  assert.equal(pickVoice(noMale, 'en-US', 'male').name, 'Announcer', 'an unlabelled voice beats a known-female one');
+
+  // Underscored tags turn up on Android.
+  assert.equal(pickVoice([V('en_IN male', 'en_IN')], 'en-IN', 'male').lang, 'en_IN', 'en_IN and en-IN are the same language');
+}
+
+// ----------------------------------------------------------------------------------------------
+// isProjectCreator, across BOTH shapes ownerId arrives in. A .lean() read gives a mongoose
+// ObjectId, which is an object — and "it is an object, so it is a populated user" was the whole
+// test. The consequence was silent and server-side only: canWrite said no on a group you created
+// yourself, Jarvis dropped the write, and told you it had done it.
+{
+  const asId = { ownerId: 'u1', memberEmails: [], viewerEmails: [] };
+  const asObjectIdLike = { ownerId: { toString: () => 'u1' }, memberEmails: [], viewerEmails: [] };
+  const asPopulated = { ownerId: { _id: 'u1', email: 'me@x.com' }, memberEmails: [], viewerEmails: [] };
+
+  assert.equal(isProjectCreator(asId, null, 'u1'), true, 'a plain id matches on userId');
+  assert.equal(isProjectCreator(asObjectIdLike, 'me@x.com', 'u1'), true, 'an ObjectId is an id, not a populated user');
+  assert.equal(isProjectCreator(asPopulated, 'me@x.com', null), true, 'a populated owner still matches on email');
+  assert.equal(isProjectCreator(asPopulated, null, 'u1'), true, 'a populated owner also matches on its _id');
+
+  // And still says no to everyone else, in every shape.
+  assert.equal(isProjectCreator(asObjectIdLike, 'me@x.com', 'u2'), false, 'a different user is not the creator');
+  assert.equal(isProjectCreator(asPopulated, 'someone@else.com', 'u2'), false, 'neither email nor id matching means no');
+  assert.equal(isProjectCreator(asId, 'me@x.com', null), false, 'an id with no userId to compare against is not a match');
+  assert.equal(isProjectCreator({ ownerId: null }, 'me@x.com', 'u1'), false, 'no owner is never a creator');
+
+  // The consequence the bug actually had: writing into your own group.
+  assert.equal(canWrite(asObjectIdLike, 'me@x.com', 'u1'), true, 'the creator may write to a group read with .lean()');
+  assert.equal(canWrite(asObjectIdLike, 'stranger@x.com', 'u2'), false, 'and a stranger still may not');
 }
 
 console.log('self-check: all assertions passed');

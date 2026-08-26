@@ -115,11 +115,21 @@ export function isProjectCreator(
 ): boolean {
   const owner = project?.ownerId;
   if (!owner) return false;
-  if (typeof owner === 'object') {
+  /* `typeof owner === 'object'` was the whole test for "this is a populated user", and a mongoose
+     ObjectId is also an object — so a project read with .lean() took the email branch, found no
+     `.email` on the id, and reported that the creator was not the creator. Server-side that meant
+     Jarvis could not write into a group you had made yourself: canWrite said no, the create_task
+     was dropped, and the assistant cheerfully said it had added the task. Client callers pass a
+     populated owner and no userId, which is why the screens never showed it.
+     A populated user is one that actually carries an email; anything else is an id, whichever
+     shape it arrives in. */
+  const populated = typeof owner === 'object' && owner !== null && typeof (owner as { email?: unknown }).email === 'string';
+  if (populated) {
     const me = lower(myEmail);
-    return !!me && lower(owner.email) === me;
+    if (!!me && lower((owner as { email?: string }).email) === me) return true;
   }
-  return !!myUserId && String(owner) === String(myUserId);
+  const ownerId = (owner as { _id?: unknown })?._id ?? owner;
+  return !!myUserId && String(ownerId) === String(myUserId);
 }
 
 const has = (list: (string | null | undefined)[] | null | undefined, email: string) =>

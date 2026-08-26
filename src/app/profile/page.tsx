@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Eye, Compass } from 'lucide-react';
+import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Eye, Compass, Sparkles } from 'lucide-react';
 import { getContacts } from '@/actions/contact';
 import { getMyOpenTasks } from '@/actions/task';
 import { getProjects } from '@/actions/project';
@@ -15,6 +15,7 @@ import DeleteAccountCard from '@/components/DeleteAccountCard';
 import Link from 'next/link';
 import { appUrl } from '@/lib/url';
 import { amIAdmin } from '@/actions/admin';
+import { getJarvisConfirm, setJarvisConfirm } from '@/actions/jarvis';
 
 export default function ProfilePage() {
   const { confirm, toast } = useFeedback();
@@ -22,6 +23,7 @@ export default function ProfilePage() {
   const { data: session, status } = useSession();
   const [stats, setStats] = useState<{ tasks: number; projects: number; contacts: number } | null>(null);
   const [admin, setAdmin] = useState(false);
+  const [askFirst, setAskFirst] = useState(true);   // Jarvis confirms before writing into a group
   const user = session?.user;
   const initial = (user?.name || user?.email || 'U')[0].toUpperCase();
 
@@ -34,6 +36,11 @@ export default function ProfilePage() {
         contacts: c.success ? (c.contacts || []).length : 0,
       });
     });
+  }, [status]);
+
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+    getJarvisConfirm().then(r => setAskFirst(r.on)).catch(() => {});
   }, [status]);
 
   // Only decides whether the row is drawn; /admin's own actions are what actually gate the data
@@ -103,6 +110,28 @@ export default function ProfilePage() {
           <input type="checkbox" checked={privateSafe} onChange={() => {
             if (privateSafe) { setPrivateSafe(false); toast('Private Safe locked', 'success'); }
             else setPinModalOpen(true);          // PIN required only to turn it on
+          }} />
+          <span className="slider round"></span>
+        </label>
+      </div>
+
+      <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '14px' }}>
+        <span className="row-icon"><Sparkles size={18} strokeWidth={2.2} /></span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontWeight: 700 }}>Ask before Jarvis posts to a group</span>
+          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            {askFirst
+              ? 'A task or note Jarvis files under a group waits for your yes. Personal ones are saved straight away.'
+              : 'Off — Jarvis files things into your groups without asking. Personal ones were never asked about.'}
+          </span>
+        </span>
+        <label className="switch" title={askFirst ? 'Stop asking' : 'Ask me first'}>
+          <input type="checkbox" checked={askFirst} onChange={async e => {
+            const next = e.target.checked;
+            setAskFirst(next);
+            const r = await setJarvisConfirm(next);
+            if (!r.success) { setAskFirst(!next); toast('Could not save that', 'error'); return; }
+            toast(next ? 'Jarvis will ask first' : 'Jarvis will not ask', 'success');
           }} />
           <span className="slider round"></span>
         </label>

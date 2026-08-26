@@ -20,6 +20,7 @@ import { isAdmin } from "@/lib/isAdmin";
 import { dayKey, spendQuestion, capMessage, SHARED_OUT_MESSAGE, JARVIS_DAILY_LIMIT } from "@/lib/jarvisLimit";
 import { isHowTo, HOW_IT_WORKS, EXTRA_PAGES } from "@/lib/manual";
 import { NAV } from "@/lib/nav";
+import { memberCount } from "@/lib/visibility";
 import { extractUrl, hostnameOf } from "@/lib/url";
 import { Category } from "@/lib/models/Category";
 import { createLink } from "@/actions/link";
@@ -45,6 +46,13 @@ export interface JarvisTurn {
 }
 export type Msg = JarvisTurn & { items?: JarvisItem[] };
 export interface JarvisSessionMeta { id: string; title: string; updatedAt: string }
+
+/**
+ * A write Jarvis wants to make into a shared group, held back until the user says yes.
+ * `action` is the model's own request, handed to the client and handed straight back — the server
+ * revalidates every field of it either way, so nothing here is trusted on the return trip.
+ */
+export interface JarvisPending { action: unknown; group: string; people: number }
 
 /** Every page Jarvis may open. An href not in this set is dropped, whatever the model wrote. */
 const DESTINATIONS = new Set<string>([...NAV.map(n => n.href), ...EXTRA_PAGES.map(p => p.href)]);
@@ -156,6 +164,230 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   return { items, ids, projects, groupOf };
 }
 
+/**
+ * The ONE place a Jarvis action is executed, whether the model just asked for it or the user has
+ * since confirmed it. Two entry points, one executor: a permission check that exists on one path
+ * and not the other is how a view-only client ends up with write access.
+ *
+ * `confirmOn` turns the shared-write gate on. When it holds an action, nothing is written and the
+ * action comes back in `pending` for the client to ask about — then straight back here with the
+ * gate off, revalidated from scratch, because the client is never the authority on any of this.
+ */
+async function applyActions(actions: any[], env: {
+  userId: string; email: string; tz: string; d: Fmt;
+  projects: any[]; question: string; confirmOn: boolean;
+}) {
+    const { userId, email, tz, d, projects, question, confirmOn } = env;
+    const projectIds = projects.map(p => p._id);
+    const pending: JarvisPending[] = [];
+    // Personal writes stay silent; a write landing in a group asks first, exactly like the sheet
+    // the Links and Notes composers already show before the first share into a group.
+    const hold = (action: unknown, projectId: unknown) => {
+      if (!confirmOn || !projectId) return false;
+      const project = projects.find(p => String(p._id) === String(projectId));
+      pending.push({
+        action,
+        group: project?.name || 'that group',
+        // The caller is added to the count because these rows are read with .lean() and an
+        // unpopulated ownerId has no email for memberCount to see — without this, a group with
+        // one other person in it says "only you are in it right now", which is the opposite of
+        // what the sheet exists to tell you. memberCount dedupes, so being listed twice is free.
+        people: memberCount({ ...project, memberEmails: [...(project?.memberEmails || []), email] }),
+      });
+      return true;
+    };
+    const created: JarvisItem[] = [];
+    let nav = '';                     // a page the user asked to be taken to; the client pushes it
+    const createdTasks: { _id: string; title: string; dueAt?: string | null; completed?: boolean }[] = [];
+    const str = (v: any) => String(v ?? '').trim();
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const CONTACT_FIELDS = { name: str, phone: str, email: (v: any) => str(v).toLowerCase(), company: str, note: str };
+    const contactLine = (c: any) => [c.phone, c.email, c.company].filter(Boolean).join(' · ') || 'no details yet';
+    // Only the fields the model actually sent get written; everything else is left alone.
+    // An empty string counts as "not sent" — a model that echoes back "phone":"" must never
+    // wipe a saved number. Clearing is always explicit instead (dueAt: "none").
+    const patch = (a: any, map: Record<string, (v: any) => any>) => {
+      const set: any = {};
+      for (const [key, take] of Object.entries(map)) {
+        if (a[key] === undefined || a[key] === null) continue;
+        const v = take(a[key]);
+        if (v !== '') set[key] = v;
+      }
+      return set;
+    };
+    /**
+     * Everything in ctx is READABLE. Only some of it is writable.
+     *
+     * gatherContext builds ctx.projects from myProjectFilter, which now includes groups you can
+     * only view — deliberately, so Jarvis can answer questions about them. That makes "it is in
+     * my context" stop meaning "I may change it", and the three write branches below have to ask
+     * separately. Without this a view-only client could say "rename that project" or "mark that
+     * task done" and Jarvis would do it.
+     */
+    const writable = new Set(
+      projects.filter(p => canWrite(p as unknown as OwnableProject, email, userId)).map(p => String(p._id))
+    );
+    const mayWrite = (projectId: unknown) => !projectId || writable.has(String(projectId));
+
+    for (const a of (actions || []).slice(0, 5)) {
+      try {
+        if (a?.type === 'update_task' && a.id) {
+          const set = patch(a, { title: str, description: str, completed: (v: any) => v === true || v === 'true' });
+          if (a.dueAt !== undefined) {
+            // The model writes a bare wall clock ("2026-08-26T17:00") in the user's zone.
+            // Parsed here it would take the server's zone instead — 17:00 becoming 22:30 in India.
+            const due = a.dueAt === null || /^(none|null|clear)$/i.test(str(a.dueAt)) ? null : zonedToUtc(a.dueAt, tz);
+            set.dueAt = due || null;
+          }
+          // Append instead of replace, so a long description is never lost to a rewrite
+          const add = str(a.appendDescription);
+          /* Ownership, asked as a query rather than assumed from the prompt. This used to lean on
+             ctx.ids — "the id was in the context we built, so it must be mine" — which was true
+             only while the context held the whole vault. It is a scope check either way, but a
+             real one belongs here, next to the write, not in a set assembled a hundred lines up. */
+          const task = await Task.findOne({ _id: a.id, $or: [{ userId }, { assigneeId: userId }, { projectId: { $in: projectIds } }] });
+          if (!task) continue;
+          if (!mayWrite(task.projectId)) continue;   // visible in a view-only group is not editable
+          if (hold(a, task.projectId)) continue;
+          if (add) set.description = [str(set.description ?? task.description), add].filter(Boolean).join('\n');
+          if (!Object.keys(set).length) continue;
+          Object.assign(task, set);
+          await task.save();
+          created.push({ id: String(task._id), type: 'task', title: task.title, detail: `Updated${task.dueAt ? ` · due ${d(task.dueAt)}` : ''}`, urgent: !task.completed && !!task.dueAt && task.dueAt.getTime() - Date.now() < 48 * 3600e3 });
+          createdTasks.push({ _id: String(task._id), title: task.title, dueAt: task.dueAt ? task.dueAt.toISOString() : null, completed: task.completed });
+        } else if (a?.type === 'update_note' && a.id) {
+          const note = await Note.findOne({ _id: a.id, userId });
+          if (!note) continue;
+          const set = patch(a, { title: str, text: str });
+          if (set.text !== undefined) { note.body = set.text; delete set.text; }
+          const add = str(a.appendText);
+          if (add) note.body = [note.body, add].filter(Boolean).join('\n');
+          if (set.title !== undefined) note.title = set.title;
+          if (!note.isModified()) continue;
+          if (hold(a, note.projectId)) continue;
+          await note.save();
+          created.push({ id: String(note._id), type: 'note', title: note.title || note.body.slice(0, 60), detail: 'Updated in Notes' });
+        } else if (a?.type === 'update_contact' && a.id) {
+          const contact = await Contact.findOne({ _id: a.id, userId });
+          if (!contact) continue;
+          Object.assign(contact, patch(a, CONTACT_FIELDS));
+          const add = str(a.appendNote);
+          if (add) contact.note = [str(contact.note), add].filter(Boolean).join('\n');
+          if (!contact.isModified()) continue;
+          await contact.save();
+          created.push({ id: String(contact._id), type: 'contact', title: contact.name, detail: `Updated · ${contactLine(contact)}` });
+        } else if (a?.type === 'create_contact' && a.name) {
+          const set = patch(a, CONTACT_FIELDS);
+          // "save Abhishek's number" when Abhishek is already saved should fill him in, not clone him
+          const byEmail = str(a.email).toLowerCase();
+          const existing = await Contact.findOne({
+            userId,
+            $or: [{ name: new RegExp(`^${esc(str(a.name))}$`, 'i') }, ...(byEmail ? [{ email: byEmail }] : [])],
+          });
+          const contact = existing || new Contact({ userId });
+          Object.assign(contact, set);
+          await contact.save();
+          created.push({ id: String(contact._id), type: 'contact', title: contact.name, detail: `${existing ? 'Updated' : 'Saved to Contacts'} · ${contactLine(contact)}` });
+        } else if (a?.type === 'create_project' && a.name) {
+          const name = str(a.name);
+          const dup = projects.find((p: any) => p.name?.toLowerCase() === name.toLowerCase());
+          if (dup) {
+            created.push({ id: String(dup._id), type: 'project', title: dup.name, detail: 'Already exists' });
+          } else {
+            const project = await Project.create({ name, ownerId: userId, memberEmails: [] });
+            // So a create_task later in the same reply can file itself under the new project
+            projects.push(project.toObject() as any);
+            writable.add(String(project._id));
+            created.push({ id: String(project._id), type: 'project', title: project.name, detail: 'Project created' });
+          }
+        } else if (a?.type === 'update_project' && a.id) {
+          const project = await Project.findOne({ _id: a.id });
+          if (!project) continue;
+          if (!writable.has(String(project._id))) continue;   // view-only: readable, never editable
+          const isOwner = isProjectOwner(project as unknown as OwnableProject, email, userId);
+          const changes: string[] = [];
+
+          if (a.notes !== undefined) { project.notes = str(a.notes); changes.push('notes'); }   // any member
+          const addNotes = str(a.appendNotes);
+          if (addNotes) { project.notes = [str(project.notes), addNotes].filter(Boolean).join('\n'); changes.push('notes'); }
+
+          // Renaming and membership are an owner's alone, same as the Projects page
+          if (str(a.name) && isOwner && str(a.name) !== project.name) { project.name = str(a.name); changes.push('renamed'); }
+          const add = str(a.addMember).toLowerCase();
+          if (add && isOwner && /^\S+@\S+\.\S+$/.test(add) && !project.memberEmails.includes(add)) {
+            project.memberEmails.push(add); changes.push(`added ${add}`);
+          }
+          const drop = str(a.removeMember).toLowerCase();
+          if (drop && isOwner && drop !== email && project.memberEmails.includes(drop)) {
+            project.memberEmails = project.memberEmails.filter(e => e !== drop);
+            // Their tasks keep their assignee, same as removeMember in actions/project.ts — the
+            // group page surfaces them under "Needs an owner". This path used to blank them, so
+            // "remove X from the project" through Jarvis quietly orphaned their work.
+            changes.push(`removed ${drop}`);
+          }
+
+          if (!changes.length) continue;
+          if (hold(a, project._id)) continue;
+          await project.save();
+          created.push({ id: String(project._id), type: 'project', title: project.name, detail: `Updated · ${[...new Set(changes)].join(', ')}` });
+        } else if (a?.type === 'create_task' && a.title) {
+          const named = a.projectName ? projects.find((p: any) => p.name?.toLowerCase() === String(a.projectName).toLowerCase()) : null;
+          // Refuse rather than quietly filing it somewhere else: silently turning "add this to
+          // the client's project" into a personal task is a worse answer than not doing it.
+          if (named && !writable.has(String(named._id))) continue;
+          if (named && hold(a, named._id)) continue;
+          const project = named;
+          let assigneeId;
+          if (project && a.assigneeEmail) {
+            const u = await User.findOne({ email: String(a.assigneeEmail).toLowerCase() }).select('_id');
+            assigneeId = u?._id;
+          }
+          const dueAt = zonedToUtc(a.dueAt, tz) || undefined;
+          const task = await Task.create({
+            title: String(a.title), userId,
+            description: a.description ? String(a.description) : undefined,
+            dueAt,
+            projectId: project?._id, assigneeId,
+            assigneeEmail: project && a.assigneeEmail ? String(a.assigneeEmail).toLowerCase() : undefined,
+          });
+          created.push({ id: String(task._id), type: 'task', title: task.title, detail: task.dueAt ? `Created · due ${d(task.dueAt)}` : 'Created', urgent: !!task.dueAt && task.dueAt.getTime() - Date.now() < 48 * 3600e3 });
+          createdTasks.push({ _id: String(task._id), title: task.title, dueAt: task.dueAt ? task.dueAt.toISOString() : null });
+        } else if (a?.type === 'create_note' && (a.text || a.title)) {
+          const note = await Note.create({ userId, title: a.title ? String(a.title) : undefined, body: String(a.text || '') });
+          created.push({ id: String(note._id), type: 'note', title: note.title || String(a.text).slice(0, 60), detail: 'Saved to Notes' });
+        } else if (a?.type === 'save_link') {
+          // extractUrl, not the raw string: a dictated URL arrives inside a sentence, and a model
+          // that answers "sure, saving https://x.com for you" must not create a link titled that.
+          const url = extractUrl(str(a.url)) || extractUrl(question);
+          if (!url) continue;
+          // File it where the same link saved by hand would land — a Jarvis link that ignores the
+          // user's own domain rules is a link they then have to go and move.
+          // Same rule AddLinkForm applies in the browser: exact host, or a subdomain of one.
+          // Matched in JS because "endsWith a stored value" is not a query mongo can index;
+          // the fetch itself rides the existing { userId, isPrivate, name } index.
+          const host = hostnameOf(url);
+          const cats = host
+            ? await Category.find({ userId, domains: { $exists: true, $ne: [] } }).select('_id name domains').lean()
+            : [];
+          const cat = cats.find(c => (c.domains || []).some((dm: string) => host === dm || host.endsWith('.' + dm)));
+          // createLink re-checks the session itself and scrapes the title and thumbnail
+          const res2 = await createLink(url, cat ? String(cat._id) : '');
+          if (!res2?.success || !res2.link) continue;
+          created.push({
+            id: String(res2.link._id), type: 'link', title: res2.link.title || url, url,
+            detail: `Saved to Links${cat ? ` · ${cat.name}` : ''}`,
+          });
+        } else if (a?.type === 'navigate' && !nav) {
+          // The model is told which pages exist; this is the gate that means it does not matter
+          // if it invents one. Only an exact known route ever reaches the router.
+          const href = str(a.href);
+          if (DESTINATIONS.has(href)) nav = href;
+        }
+      } catch (e) { console.error('Jarvis action failed:', e); }
+    }
+    return { created, createdTasks, nav, pending };
+}
+
 export async function askJarvis(question: string, history: JarvisTurn[] = [], timeZone = '') {
   try {
     const session = await getServerSession(authOptions);
@@ -177,12 +409,12 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
        it atomic costs an update pipeline nobody can read at 3am. Revisit if it ever matters. */
     const today = dayKey(Date.now(), tz);
     const exempt = isAdmin(email);
-    const spent = spendQuestion(
-      await User.findById(userId).select('jarvisCount jarvisCountDate')
-        .lean<{ jarvisCount?: number; jarvisCountDate?: string } | null>()
-        .then(u => ({ count: u?.jarvisCount, date: u?.jarvisCountDate })),
-      today, JARVIS_DAILY_LIMIT, exempt,
-    );
+    const me = await User.findById(userId).select('jarvisCount jarvisCountDate jarvisConfirmShared')
+      .lean<{ jarvisCount?: number; jarvisCountDate?: string; jarvisConfirmShared?: boolean } | null>();
+    // Default ON. Someone who has never opened the setting should be asked before Jarvis writes
+    // into their team's group, not after.
+    const confirmOn = me?.jarvisConfirmShared !== false;
+    const spent = spendQuestion({ count: me?.jarvisCount, date: me?.jarvisCountDate }, today, JARVIS_DAILY_LIMIT, exempt);
     if (!spent.allowed) return { success: false, error: capMessage(JARVIS_DAILY_LIMIT), remaining: 0 };
     await User.updateOne({ _id: userId }, { jarvisCount: spent.count, jarvisCountDate: today });
     const refund = () => User.updateOne(
@@ -282,189 +514,10 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
       return { success: false, error: res.code === 'rate_limited' ? SHARED_OUT_MESSAGE : res.error, remaining: spent.remaining };
     }
     const parsed = res.data;
-    // Run the actions the model asked for (this is the ONLY way it can change data)
-    const created: JarvisItem[] = [];
-    let nav = '';                     // a page the user asked to be taken to; the client pushes it
-    const createdTasks: { _id: string; title: string; dueAt?: string | null; completed?: boolean }[] = [];
-    const str = (v: any) => String(v ?? '').trim();
-    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const CONTACT_FIELDS = { name: str, phone: str, email: (v: any) => str(v).toLowerCase(), company: str, note: str };
-    const contactLine = (c: any) => [c.phone, c.email, c.company].filter(Boolean).join(' · ') || 'no details yet';
-    // Only the fields the model actually sent get written; everything else is left alone.
-    // An empty string counts as "not sent" — a model that echoes back "phone":"" must never
-    // wipe a saved number. Clearing is always explicit instead (dueAt: "none").
-    const patch = (a: any, map: Record<string, (v: any) => any>) => {
-      const set: any = {};
-      for (const [key, take] of Object.entries(map)) {
-        if (a[key] === undefined || a[key] === null) continue;
-        const v = take(a[key]);
-        if (v !== '') set[key] = v;
-      }
-      return set;
-    };
-    /**
-     * Everything in ctx is READABLE. Only some of it is writable.
-     *
-     * gatherContext builds ctx.projects from myProjectFilter, which now includes groups you can
-     * only view — deliberately, so Jarvis can answer questions about them. That makes "it is in
-     * my context" stop meaning "I may change it", and the three write branches below have to ask
-     * separately. Without this a view-only client could say "rename that project" or "mark that
-     * task done" and Jarvis would do it.
-     */
-    const writable = new Set(
-      ctx.projects.filter(p => canWrite(p as unknown as OwnableProject, email, userId)).map(p => String(p._id))
-    );
-    const mayWrite = (projectId: unknown) => !projectId || writable.has(String(projectId));
-
-    for (const a of (parsed.actions || []).slice(0, 5)) {
-      try {
-        if (a?.type === 'update_task' && a.id && ctx.ids.has(String(a.id))) {
-          const set = patch(a, { title: str, description: str, completed: (v: any) => v === true || v === 'true' });
-          if (a.dueAt !== undefined) {
-            // The model writes a bare wall clock ("2026-08-26T17:00") in the user's zone.
-            // Parsed here it would take the server's zone instead — 17:00 becoming 22:30 in India.
-            const due = a.dueAt === null || /^(none|null|clear)$/i.test(str(a.dueAt)) ? null : zonedToUtc(a.dueAt, tz);
-            set.dueAt = due || null;
-          }
-          // Append instead of replace, so a long description is never lost to a rewrite
-          const add = str(a.appendDescription);
-          // ownership: ctx.ids only holds ids the user can already see, so this cannot reach someone else's task
-          const task = await Task.findOne({ _id: a.id });
-          if (!task) continue;
-          if (!mayWrite(task.projectId)) continue;   // visible in a view-only group is not editable
-          if (add) set.description = [str(set.description ?? task.description), add].filter(Boolean).join('\n');
-          if (!Object.keys(set).length) continue;
-          Object.assign(task, set);
-          await task.save();
-          created.push({ id: String(task._id), type: 'task', title: task.title, detail: `Updated${task.dueAt ? ` · due ${d(task.dueAt)}` : ''}`, urgent: !task.completed && !!task.dueAt && task.dueAt.getTime() - Date.now() < 48 * 3600e3 });
-          createdTasks.push({ _id: String(task._id), title: task.title, dueAt: task.dueAt ? task.dueAt.toISOString() : null, completed: task.completed });
-        } else if (a?.type === 'update_note' && a.id && ctx.ids.has(String(a.id))) {
-          const note = await Note.findOne({ _id: a.id, userId });
-          if (!note) continue;
-          const set = patch(a, { title: str, text: str });
-          if (set.text !== undefined) { note.body = set.text; delete set.text; }
-          const add = str(a.appendText);
-          if (add) note.body = [note.body, add].filter(Boolean).join('\n');
-          if (set.title !== undefined) note.title = set.title;
-          if (!note.isModified()) continue;
-          await note.save();
-          created.push({ id: String(note._id), type: 'note', title: note.title || note.body.slice(0, 60), detail: 'Updated in Notes' });
-        } else if (a?.type === 'update_contact' && a.id && ctx.ids.has(String(a.id))) {
-          const contact = await Contact.findOne({ _id: a.id, userId });
-          if (!contact) continue;
-          Object.assign(contact, patch(a, CONTACT_FIELDS));
-          const add = str(a.appendNote);
-          if (add) contact.note = [str(contact.note), add].filter(Boolean).join('\n');
-          if (!contact.isModified()) continue;
-          await contact.save();
-          created.push({ id: String(contact._id), type: 'contact', title: contact.name, detail: `Updated · ${contactLine(contact)}` });
-        } else if (a?.type === 'create_contact' && a.name) {
-          const set = patch(a, CONTACT_FIELDS);
-          // "save Abhishek's number" when Abhishek is already saved should fill him in, not clone him
-          const byEmail = str(a.email).toLowerCase();
-          const existing = await Contact.findOne({
-            userId,
-            $or: [{ name: new RegExp(`^${esc(str(a.name))}$`, 'i') }, ...(byEmail ? [{ email: byEmail }] : [])],
-          });
-          const contact = existing || new Contact({ userId });
-          Object.assign(contact, set);
-          await contact.save();
-          created.push({ id: String(contact._id), type: 'contact', title: contact.name, detail: `${existing ? 'Updated' : 'Saved to Contacts'} · ${contactLine(contact)}` });
-        } else if (a?.type === 'create_project' && a.name) {
-          const name = str(a.name);
-          const dup = ctx.projects.find((p: any) => p.name?.toLowerCase() === name.toLowerCase());
-          if (dup) {
-            created.push({ id: String(dup._id), type: 'project', title: dup.name, detail: 'Already exists' });
-          } else {
-            const project = await Project.create({ name, ownerId: userId, memberEmails: [] });
-            // So a create_task later in the same reply can file itself under the new project
-            ctx.projects.push(project.toObject() as any);
-            writable.add(String(project._id));
-            created.push({ id: String(project._id), type: 'project', title: project.name, detail: 'Project created' });
-          }
-        } else if (a?.type === 'update_project' && a.id && ctx.ids.has(String(a.id))) {
-          const project = await Project.findOne({ _id: a.id });
-          if (!project) continue;
-          if (!writable.has(String(project._id))) continue;   // view-only: readable, never editable
-          const isOwner = isProjectOwner(project as unknown as OwnableProject, email, userId);
-          const changes: string[] = [];
-
-          if (a.notes !== undefined) { project.notes = str(a.notes); changes.push('notes'); }   // any member
-          const addNotes = str(a.appendNotes);
-          if (addNotes) { project.notes = [str(project.notes), addNotes].filter(Boolean).join('\n'); changes.push('notes'); }
-
-          // Renaming and membership are an owner's alone, same as the Projects page
-          if (str(a.name) && isOwner && str(a.name) !== project.name) { project.name = str(a.name); changes.push('renamed'); }
-          const add = str(a.addMember).toLowerCase();
-          if (add && isOwner && /^\S+@\S+\.\S+$/.test(add) && !project.memberEmails.includes(add)) {
-            project.memberEmails.push(add); changes.push(`added ${add}`);
-          }
-          const drop = str(a.removeMember).toLowerCase();
-          if (drop && isOwner && drop !== email && project.memberEmails.includes(drop)) {
-            project.memberEmails = project.memberEmails.filter(e => e !== drop);
-            // Their tasks keep their assignee, same as removeMember in actions/project.ts — the
-            // group page surfaces them under "Needs an owner". This path used to blank them, so
-            // "remove X from the project" through Jarvis quietly orphaned their work.
-            changes.push(`removed ${drop}`);
-          }
-
-          if (!changes.length) continue;
-          await project.save();
-          created.push({ id: String(project._id), type: 'project', title: project.name, detail: `Updated · ${[...new Set(changes)].join(', ')}` });
-        } else if (a?.type === 'create_task' && a.title) {
-          const named = a.projectName ? ctx.projects.find((p: any) => p.name?.toLowerCase() === String(a.projectName).toLowerCase()) : null;
-          // Refuse rather than quietly filing it somewhere else: silently turning "add this to
-          // the client's project" into a personal task is a worse answer than not doing it.
-          if (named && !writable.has(String(named._id))) continue;
-          const project = named;
-          let assigneeId;
-          if (project && a.assigneeEmail) {
-            const u = await User.findOne({ email: String(a.assigneeEmail).toLowerCase() }).select('_id');
-            assigneeId = u?._id;
-          }
-          const dueAt = zonedToUtc(a.dueAt, tz) || undefined;
-          const task = await Task.create({
-            title: String(a.title), userId,
-            description: a.description ? String(a.description) : undefined,
-            dueAt,
-            projectId: project?._id, assigneeId,
-            assigneeEmail: project && a.assigneeEmail ? String(a.assigneeEmail).toLowerCase() : undefined,
-          });
-          created.push({ id: String(task._id), type: 'task', title: task.title, detail: task.dueAt ? `Created · due ${d(task.dueAt)}` : 'Created', urgent: !!task.dueAt && task.dueAt.getTime() - Date.now() < 48 * 3600e3 });
-          createdTasks.push({ _id: String(task._id), title: task.title, dueAt: task.dueAt ? task.dueAt.toISOString() : null });
-        } else if (a?.type === 'create_note' && (a.text || a.title)) {
-          const note = await Note.create({ userId, title: a.title ? String(a.title) : undefined, body: String(a.text || '') });
-          created.push({ id: String(note._id), type: 'note', title: note.title || String(a.text).slice(0, 60), detail: 'Saved to Notes' });
-        } else if (a?.type === 'save_link') {
-          // extractUrl, not the raw string: a dictated URL arrives inside a sentence, and a model
-          // that answers "sure, saving https://x.com for you" must not create a link titled that.
-          const url = extractUrl(str(a.url)) || extractUrl(question);
-          if (!url) continue;
-          // File it where the same link saved by hand would land — a Jarvis link that ignores the
-          // user's own domain rules is a link they then have to go and move.
-          // Same rule AddLinkForm applies in the browser: exact host, or a subdomain of one.
-          // Matched in JS because "endsWith a stored value" is not a query mongo can index;
-          // the fetch itself rides the existing { userId, isPrivate, name } index.
-          const host = hostnameOf(url);
-          const cats = host
-            ? await Category.find({ userId, domains: { $exists: true, $ne: [] } }).select('_id name domains').lean()
-            : [];
-          const cat = cats.find(c => (c.domains || []).some((dm: string) => host === dm || host.endsWith('.' + dm)));
-          // createLink re-checks the session itself and scrapes the title and thumbnail
-          const res2 = await createLink(url, cat ? String(cat._id) : '');
-          if (!res2?.success || !res2.link) continue;
-          created.push({
-            id: String(res2.link._id), type: 'link', title: res2.link.title || url, url,
-            detail: `Saved to Links${cat ? ` · ${cat.name}` : ''}`,
-          });
-        } else if (a?.type === 'navigate' && !nav) {
-          // The model is told which pages exist; this is the gate that means it does not matter
-          // if it invents one. Only an exact known route ever reaches the router.
-          const href = str(a.href);
-          if (DESTINATIONS.has(href)) nav = href;
-        }
-      } catch (e) { console.error('Jarvis action failed:', e); }
-    }
+    // Everything the model asked to change goes through applyActions — the only path that writes.
+    const { created, createdTasks, nav, pending } = await applyActions(parsed.actions || [], {
+      userId, email, tz, d, projects: ctx.projects, question, confirmOn,
+    });
     if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); revalidatePath('/contacts'); }
 
     // Anti-hallucination: keep only items whose id really exists (or that we just created)
@@ -476,11 +529,69 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
       .map((i: any) => ({ ...i, project: ctx.groupOf.get(String(i.id)) }));
     const items = [...created, ...cited.filter(c => !created.some(x => x.id === c.id))];
 
-    return { success: true, answer: String(parsed.answer || '').trim(), items, createdTasks, nav, remaining: spent.remaining };
+    // The model has already written "Task added". It is not added yet, and saying nothing would
+    // make the assistant a liar — so the answer says out loud what is waiting on the user.
+    const answer = String(parsed.answer || '').trim();
+    const held = pending.length
+      ? ` ${pending.length === 1 ? 'That goes into' : `Those go into`} ${[...new Set(pending.map(p => p.group))].join(' and ')}, where everyone in the group can see it — confirm below and I'll do it.`
+      : '';
+
+    return { success: true, answer: answer + held, items, createdTasks, nav, pending, remaining: spent.remaining };
   } catch (error) {
     console.error('Jarvis failed:', error);
     return { success: false, error: 'Assistant failed' };
   }
+}
+
+/**
+ * "Yes, put it in the group." The client hands back the actions askJarvis held, and every one of
+ * them is checked again from scratch — session, ownership, view-only, the lot — because between
+ * the two calls the only thing that has happened is a round trip through a browser.
+ *
+ * The confirmation itself is deliberately NOT a token we minted and stored: a stored token would
+ * be a second thing that can be replayed, and re-running the same checks is both cheaper and
+ * stricter than trusting a token that says the checks already passed.
+ */
+export async function runJarvisActions(actions: unknown[], timeZone = '') {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+    if (!Array.isArray(actions) || !actions.length) return { success: false, error: 'Nothing to do' };
+
+    await connectToDatabase();
+    const tz = safeZone(timeZone);
+    const userId = session.user.id;
+    const email = (session.user.email || '').toLowerCase();
+    const projects = await Project.find(await myProjectFilter(userId, email)).lean();
+
+    // confirmOn: false — this IS the confirmation, and asking again would be a loop.
+    const { created, createdTasks, nav } = await applyActions(actions, {
+      userId, email, tz, d: fmtIn(tz), projects, question: '', confirmOn: false,
+    });
+    if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); revalidatePath('/contacts'); }
+    return { success: true, items: created, createdTasks, nav };
+  } catch (error) {
+    console.error('runJarvisActions failed:', error);
+    return { success: false, error: 'Could not do that' };
+  }
+}
+
+/** Whether Jarvis asks before writing into a shared group. Default on. */
+export async function getJarvisConfirm() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { on: true };
+  await connectToDatabase();
+  const user = await User.findById(session.user.id).select('jarvisConfirmShared')
+    .lean<{ jarvisConfirmShared?: boolean } | null>();
+  return { on: user?.jarvisConfirmShared !== false };
+}
+
+export async function setJarvisConfirm(on: boolean) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { success: false };
+  await connectToDatabase();
+  await User.updateOne({ _id: session.user.id }, { jarvisConfirmShared: on === true });
+  return { success: true };
 }
 
 // Voice fallback for environments without the Web Speech API (Android WebView):

@@ -40,6 +40,9 @@ export interface IUser extends Document {
   // is no reset job to run and no midnight cron to get wrong.
   jarvisCount?: number;
   jarvisCountDate?: string;
+  // Ask before Jarvis writes into a shared group. Absent reads as ON — someone who has never
+  // opened the setting should be asked before the assistant posts into their team's group.
+  jarvisConfirmShared?: boolean;
   // Their role-in-company, captured once on the delete screen — the only new profile field, and
   // the only content kept alongside name and email during retention.
   role?: string;
@@ -79,6 +82,7 @@ const UserSchema: Schema<IUser> = new Schema({
   sarvamAccessAt: { type: Date },
   jarvisCount: { type: Number, default: 0 },
   jarvisCountDate: { type: String, default: '' },
+  jarvisConfirmShared: { type: Boolean, default: true },
   // Absent on every live account, which reads as "not deleted" — the honest default.
   deletedAt: { type: Date, default: null },
   role: { type: String },
