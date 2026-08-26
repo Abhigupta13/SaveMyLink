@@ -310,18 +310,34 @@ recognise the problem instantly because they live it.
 | — | Project groups: owner chip, created-by, "Project groups" heading | ✅ built |
 | — | Assignee ticks / owner signs off; offboarding keeps tasks; Needs-an-owner band | ✅ built, untested |
 | — | Activity trail ("What changed") | ✅ built, untested |
-| — | View-only role | ✅ built · **needs a second-account test before shipping** |
+| — | View-only role | ✅ built · **tested by Swaraj with a second account, 26 Aug 2026** |
 | — | Notes composer in-group; `Note.momId`; meeting-delete choice | ✅ built, MOM tested end to end |
 | — | **Route gate actually running** — `proxy.ts` moved to `src/` (it was never loaded at the repo root; pages exposed empty shells, never data) | ✅ built, proven by signed-out curls |
 | — | Landing page, brand mark, auth pages, Android icon (4 commits) | ✅ built, needs visual pass on a deploy |
 | 2 | "Who can see my data" — shared tags in search/digest/Jarvis, first-share confirm, Your data page | ✅ built, needs signed-in visual pass |
-| 3 | In-app introduction — checklist, sample meeting via real extraction, empty-state hints | ✅ built, needs signed-in visual pass |
+| 3 | In-app introduction — **spotlight tour** (replaced the checklist, 26 Aug 2026), sample meeting via real extraction, empty-state hints | 🔄 tour in build; sample + hints built |
 | 4 | Free Hindi meetings — Gemini audio + bring-your-own Sarvam key | planned |
-| 5 | Jarvis — retrieval instead of whole-vault dump, plus new powers | planned |
-| 6 | Distribution — Play Store org account, iOS | paperwork can start now |
+| 5 | Jarvis — local retrieval (no extra AI call), per-user daily cap, conversation memory, powers, confirm-before-shared-write, voice rule | 🔄 in build (26 Aug 2026) |
+| 6 | Distribution — Play Store org account, iOS, **Android app shortcuts** (long-press menu + draggable per-tab icons, decided 25 Aug 2026) | paperwork can start now |
 | 7 | Encrypt the Private Safe (server-held key) | when a prospect pushes back |
 
 ### Decided, not yet built
+
+- **Admin date-range control (queued 26 Aug 2026).** `/admin` gets a duration selector (Today · 7d ·
+  30d · 90d · All time · Custom from/to) that re-scopes the time-based metrics — new signups, active
+  users, suggestions, the trend chart. `getAdminStats(range)` replaces the hardcoded `weekAgo`/
+  `trendFrom` windows; all-time totals keep an all-time figure plus an in-range companion count.
+  Admin-gated as today.
+
+- **Account deletion (disclosed retention), decided 26 Aug 2026 — NOT yet built.** A "Delete my
+  account" button in Profile scrubs the user's links, notes, tasks, meetings/transcripts, documents
+  (+ S3), contacts, Private Safe PIN and Sarvam key. **Retained for 90 days, then purged:** name,
+  email, role-in-company. `/terms` states this in one plain sentence — retention is disclosed, never
+  hidden (an undisclosed-retention version was explicitly rejected: it breaks the "your data stays
+  yours" promise and violates DPDP/GDPR). Group handover on owner deletion: auto-transfer to the
+  oldest co-owner → else promote the oldest member → else delete the group with a warning. Role is
+  captured once on the delete screen (no new signup/profile field). Confirm dialog + re-auth before
+  it runs; sign out to landing after.
 
 - **Round 4:** starts with a **test, not code** — run Gemini against the real recordings in
   `public/uploads/mom/` and compare transcripts against Whisper's before building anything. Hindi
@@ -365,6 +381,9 @@ recognise the problem instantly because they live it.
   included — the one write a viewer can still trigger. It changes nothing a person chose, so it was
   left; worth knowing.
 - Web push, so reminders reach the browser and not only the Android app.
+- Home-screen **widgets** (live tile with today's tasks) — native Android widget provider +
+  data bridge out of the webview; revisit after the Play Store listing exists. App shortcuts
+  (Round 6) cover the quick-access need until then.
 - An email when someone is made a project owner.
 - Letting the creator hand over or step down from a project — currently they are permanent, which
   is right for a mutiny but wrong for someone leaving the company.
