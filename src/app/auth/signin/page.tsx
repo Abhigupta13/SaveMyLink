@@ -18,7 +18,17 @@ function SigninInner() {
   const [password, setPassword] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
-  const [formError, setFormError] = useState(params.get('error') ? 'Please sign in to continue.' : '');
+  // next-auth bounces a failed provider sign-in back here with ?error=<code>. Saying only
+  // "please sign in" for every code hid the fact that Google had failed at all, and left the
+  // founder hunting a password problem that never existed.
+  const errParam = params.get('error');
+  const [formError, setFormError] = useState(
+    !errParam ? ''
+      : errParam === 'SessionRequired' ? 'Please sign in to continue.'
+      : errParam === 'OAuthAccountNotLinked' ? 'That email already has a password. Sign in with it below.'
+      : errParam === 'AccessDenied' ? 'Google sign-in was refused for that account.'
+      : `Google sign-in did not complete (${errParam}). Try again, or use your email and password.`
+  );
   const message = params.get('message') || '';
   const [loading, setLoading] = useState(false);
   const [google, setGoogle] = useState(false);
@@ -40,10 +50,21 @@ function SigninInner() {
     if (Object.values(next).some(Boolean)) return;
 
     setLoading(true);
-    const res = await signIn('credentials', { email: email.trim(), password, redirect: false });
+    // callbackUrl is passed explicitly on purpose. Left out, next-auth defaults it to the CURRENT
+    // url — and after a failed Google attempt that url still carries ?error=OAuthCallback, which
+    // next-auth then reads back out of its own SUCCESS response. The sign-in worked, the cookie
+    // was set, and the page still said the password was wrong.
+    const target = params.get('callbackUrl') || '/';
+    const res = await signIn('credentials', { email: email.trim(), password, redirect: false, callbackUrl: target });
     setLoading(false);
-    if (res?.error) setFormError('Incorrect email or password. Please try again.');
-    else { router.push(params.get('callbackUrl') || '/'); router.refresh(); }
+    // Only next-auth's credentials rejection means the password was wrong. Anything else is our
+    // problem, not theirs, and saying "incorrect password" for it sends people hunting a password
+    // that was never the issue.
+    if (res?.error) {
+      setFormError(res.error === 'CredentialsSignin'
+        ? 'Incorrect email or password. Please try again.'
+        : 'Something went wrong signing you in. Please try again.');
+    } else { router.push(target); router.refresh(); }
   };
 
   return (

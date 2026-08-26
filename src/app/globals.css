@@ -3024,3 +3024,9 @@ button.viz-chip:hover { color: var(--text-primary); }
 .tour-btn.ghost:hover { color: var(--text-primary); }
 .tour-btn.primary { background: var(--accent-strong); color: #fff; border: none; }
 .tour-btn.primary:hover { background: var(--accent-hover); }
+
+/* Autofill detection. Chrome does not fire an event React can see when it fills a field, but it
+   does apply :-webkit-autofill — so we hang a zero-effect animation off that state and listen for
+   animationstart in AuthField. Without this a filled box can sit above "Please enter your email". */
+@keyframes authAutofill { from { /* no visual change */ } to { /* no visual change */ } }
+.field:-webkit-autofill { animation-name: authAutofill; animation-duration: 1ms; }
