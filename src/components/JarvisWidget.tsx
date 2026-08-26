@@ -146,7 +146,10 @@ export default function JarvisWidget() {
     finalRef.current = '';
     committedRef.current = '';
     stopSpeaking();
-    const history: JarvisTurn[] = msgsRef.current.map(m => ({ role: m.role, content: m.content }));
+    // The ids each turn cited ride along, so "add that one to my tasks" still has something to
+    // point at once retrieval stops sending the whole vault. The server only honours an id that
+    // is in the caller's own scope anyway.
+    const history: JarvisTurn[] = msgsRef.current.map(m => ({ role: m.role, content: m.content, ids: m.items?.map(i => i.id) }));
     setMsgs(m => [...m, { role: 'user', content: question }]);
     setBusy(true);
     const res = await askJarvis(question, history, Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -167,12 +170,19 @@ export default function JarvisWidget() {
       .then(r => { if (r.success && r.id) sessionIdRef.current = r.id; })
       .catch(() => {});
     await speak(reply.content);
+    // "Show my tasks" — spoken first, then we actually go. The panel closes with it, because
+    // landing on a page behind a covering sheet is not arriving anywhere.
+    if (res.success && res.nav) {
+      loopRef.current = false; stopListening(); setOpen(false);   // closePanel, minus the cycle it would create
+      router.push(res.nav);
+      return;
+    }
     // A beat before the mic reopens — otherwise it starts capturing the moment Jarvis stops,
     // which reads as being cut off. Muted means nothing was spoken at all, so leave roughly
     // the time it takes to read the reply instead.
     await new Promise(r => setTimeout(r, mutedRef.current ? Math.min(8000, 1200 + reply.content.length * 28) : 900));
     listenAgainRef.current();   // keep the conversation going until you stop the mic or close
-  }, [speak, stopSpeaking]);
+  }, [speak, stopSpeaking, stopListening, router]);
 
   // ---------- listening ----------
   const submitNow = useCallback(() => {

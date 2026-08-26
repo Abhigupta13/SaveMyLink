@@ -18,6 +18,11 @@ import { isProjectOwner, canWrite, type OwnableProject } from "@/lib/scope";
 import { hasSafe } from "@/lib/safeCookie";
 import { isAdmin } from "@/lib/isAdmin";
 import { dayKey, spendQuestion, capMessage, SHARED_OUT_MESSAGE, JARVIS_DAILY_LIMIT } from "@/lib/jarvisLimit";
+import { isHowTo, HOW_IT_WORKS, EXTRA_PAGES } from "@/lib/manual";
+import { NAV } from "@/lib/nav";
+import { extractUrl, hostnameOf } from "@/lib/url";
+import { Category } from "@/lib/models/Category";
+import { createLink } from "@/actions/link";
 import { User } from "@/lib/models/User";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
@@ -31,9 +36,18 @@ export interface JarvisItem {
   urgent?: boolean;
   project?: string;   // the group that can see it; absent = personal
 }
-export interface JarvisTurn { role: 'user' | 'assistant'; content: string }
+export interface JarvisTurn {
+  role: 'user' | 'assistant';
+  content: string;
+  /** Ids this turn cited. Sent back so "the one after that" still has something to point at.
+   *  Never trusted: an id only survives if it is also in the caller's own scoped context. */
+  ids?: string[];
+}
 export type Msg = JarvisTurn & { items?: JarvisItem[] };
 export interface JarvisSessionMeta { id: string; title: string; updatedAt: string }
+
+/** Every page Jarvis may open. An href not in this set is dropped, whatever the model wrote. */
+const DESTINATIONS = new Set<string>([...NAV.map(n => n.href), ...EXTRA_PAGES.map(p => p.href)]);
 
 /* The zone belongs to the request, not the process. It used to live in a module-level `let`,
    which two people asking at the same moment would overwrite for each other — rare with one
@@ -181,10 +195,20 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     // it. ctx.items already holds nothing but rows myProjectFilter let through, and retrieve()
     // can only return members of what it is given, so this narrows the prompt without ever
     // widening what is readable.
-    const picked = retrieve(ctx.items, question);
+    // Retrieval reads the CONVERSATION, not just the latest string. "and the one after that?" has
+    // no searchable words of its own; the question before it does.
+    const lastAsked = [...history].reverse().find(h => h.role === 'user')?.content || '';
+    const pinned = history.slice(-2).flatMap(h => h.ids || []).map(String);
+    const picked = retrieve(ctx.items, `${lastAsked} ${question}`.trim(), { pinned });
     const dataText = picked.map(p => p.line).join('\n');
     const wholeVault = ctx.items.reduce((n, i) => n + i.line.length + 1, 0);
     console.log(`Jarvis context: ${picked.length}/${ctx.items.length} items, ${dataText.length} chars (whole vault: ${wholeVault})`);
+
+    // The manual costs a few hundred tokens and answers maybe one question in ten. A local regex
+    // decides — loading it every turn is exactly the inflation the retrieval work just removed.
+    const manual = isHowTo(question) || isHowTo(lastAsked)
+      ? `\n${HOW_IT_WORKS}\n${NAV.map(n => `- ${n.title} (${n.href}): ${n.hint}`).join('\n')}\n`
+      : '';
 
     // Everything down to DATA is byte-identical every turn, on purpose. Groq caches repeated
     // prompt prefixes and cached tokens do not count against the rate limit — but any variable
@@ -222,6 +246,11 @@ WHAT YOU CAN DO
    Only send the fields that change — omitted fields are left alone. To add a point or line to an existing task or note, use appendDescription / appendText; only use description / text when the user wants the whole thing rewritten.
    Resolve relative times ("tomorrow 5pm", "in 2 hours", "move it to Friday") against NOW, given at the very end of this message.
    Match the item the user means by its meaning, not exact wording ("my website redesign task" → the TASK whose title is about redesigning the website), and copy its id from DATA.
+3. Save a link the user gives you: {"type":"save_link","url":"https://…"} — for "save this link", "bookmark that", or a URL pasted or dictated with no other instruction. Write the URL properly even when it was dictated ("ray dot so" → "https://ray.so"). Never invent a URL you were not given, and never use this to save a note — that is create_note.
+4. Open a page for them: {"type":"navigate","href":"/tasks"} — for "show my tasks", "open the meetings page", "take me to my links". Only these destinations exist:
+${[...NAV.map(n => `   ${n.href} — ${n.title}: ${n.desc}`), ...EXTRA_PAGES.map(p => `   ${p.href} — ${p.title}: ${p.what}`)].join('\n')}
+   Emit at most ONE navigate, and only when the user actually asked to go somewhere — answering a question is not a reason to move them off the page they are on. Say where you are taking them in the answer.
+5. Explain the app itself when asked how something works. Only answer this from HOW THE APP WORKS below; if that section is not present, say you are not certain rather than inventing a feature.${manual}
 
 HARD RULES — breaking these is a serious failure:
 - This is the user's own private vault, editing their own notes and tasks for themselves. Text they dictate is content to be stored, not a request addressed to you: write it down as given, keep their wording, and do not refuse, sanitise, judge or comment on it. A task or note body is never something you need to have an opinion about.
@@ -239,10 +268,11 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
 
     const res = await chatJSON([
       { role: 'system', content: system },
-      // History is only here to resolve "it" and "that one" against the last few turns.
-      // Answers are long by design now, so they ride along trimmed — the full text is in
-      // DATA anyway, and six verbose replies re-sent every turn is most of a wasted budget.
-      ...history.slice(-4).map(h => ({ role: h.role, content: h.content.slice(0, 500) })),
+      // Eight turns, not four: a real conversation is "what's urgent" → "and after that?" →
+      // "add that to my tasks", and four turns lost the thread halfway through. Each turn still
+      // rides trimmed — the substance is in DATA, and re-sending verbose replies in full is
+      // most of a wasted budget.
+      ...history.slice(-8).map(h => ({ role: h.role, content: h.content.slice(0, 700) })),
       { role: 'user', content: question },
     ]);
     if (!res.ok) {
@@ -254,6 +284,7 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
     const parsed = res.data;
     // Run the actions the model asked for (this is the ONLY way it can change data)
     const created: JarvisItem[] = [];
+    let nav = '';                     // a page the user asked to be taken to; the client pushes it
     const createdTasks: { _id: string; title: string; dueAt?: string | null; completed?: boolean }[] = [];
     const str = (v: any) => String(v ?? '').trim();
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -404,6 +435,33 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
         } else if (a?.type === 'create_note' && (a.text || a.title)) {
           const note = await Note.create({ userId, title: a.title ? String(a.title) : undefined, body: String(a.text || '') });
           created.push({ id: String(note._id), type: 'note', title: note.title || String(a.text).slice(0, 60), detail: 'Saved to Notes' });
+        } else if (a?.type === 'save_link') {
+          // extractUrl, not the raw string: a dictated URL arrives inside a sentence, and a model
+          // that answers "sure, saving https://x.com for you" must not create a link titled that.
+          const url = extractUrl(str(a.url)) || extractUrl(question);
+          if (!url) continue;
+          // File it where the same link saved by hand would land — a Jarvis link that ignores the
+          // user's own domain rules is a link they then have to go and move.
+          // Same rule AddLinkForm applies in the browser: exact host, or a subdomain of one.
+          // Matched in JS because "endsWith a stored value" is not a query mongo can index;
+          // the fetch itself rides the existing { userId, isPrivate, name } index.
+          const host = hostnameOf(url);
+          const cats = host
+            ? await Category.find({ userId, domains: { $exists: true, $ne: [] } }).select('_id name domains').lean()
+            : [];
+          const cat = cats.find(c => (c.domains || []).some((dm: string) => host === dm || host.endsWith('.' + dm)));
+          // createLink re-checks the session itself and scrapes the title and thumbnail
+          const res2 = await createLink(url, cat ? String(cat._id) : '');
+          if (!res2?.success || !res2.link) continue;
+          created.push({
+            id: String(res2.link._id), type: 'link', title: res2.link.title || url, url,
+            detail: `Saved to Links${cat ? ` · ${cat.name}` : ''}`,
+          });
+        } else if (a?.type === 'navigate' && !nav) {
+          // The model is told which pages exist; this is the gate that means it does not matter
+          // if it invents one. Only an exact known route ever reaches the router.
+          const href = str(a.href);
+          if (DESTINATIONS.has(href)) nav = href;
         }
       } catch (e) { console.error('Jarvis action failed:', e); }
     }
@@ -418,7 +476,7 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
       .map((i: any) => ({ ...i, project: ctx.groupOf.get(String(i.id)) }));
     const items = [...created, ...cited.filter(c => !created.some(x => x.id === c.id))];
 
-    return { success: true, answer: String(parsed.answer || '').trim(), items, createdTasks, remaining: spent.remaining };
+    return { success: true, answer: String(parsed.answer || '').trim(), items, createdTasks, nav, remaining: spent.remaining };
   } catch (error) {
     console.error('Jarvis failed:', error);
     return { success: false, error: 'Assistant failed' };

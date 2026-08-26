@@ -20,6 +20,7 @@ import { AUDIO_MODELS, audioMime } from '../src/lib/geminiAudio.ts';
 import { chooseHandover, isPurgeDue } from '../src/lib/accountDeletion.ts';
 import { retrieve, terms } from '../src/lib/retrieval.ts';
 import { spendQuestion, dayKey, capMessage, SHARED_OUT_MESSAGE } from '../src/lib/jarvisLimit.ts';
+import { isHowTo, EXTRA_PAGES, HOW_IT_WORKS } from '../src/lib/manual.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -838,6 +839,44 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   // The two messages are different facts and must not collapse into one another.
   assert.ok(capMessage(5).includes('5'), 'the cap message names the actual limit');
   assert.ok(!SHARED_OUT_MESSAGE.includes('went wrong'), 'a spent shared quota is never reported as a generic failure');
+}
+
+// ----------------------------------------------------------------------------------------------
+// The how-to gate. It decides whether the app's manual joins the prompt, and it has to be wrong in
+// the cheap direction: a false positive costs a few hundred tokens on one turn, a false negative
+// means the assistant cannot explain its own product. Loading it every turn is the inflation the
+// retrieval work exists to remove, so "always true" is not an option either.
+{
+  for (const q of [
+    'how do I share a note with my team?',
+    'How do I record a meeting',
+    'where is the private safe?',
+    'how does this app work',
+    'how to add someone to a project',
+    'explain what a group is',
+    'what can you do?',
+    'meeting kaise record karu',
+    'प्राइवेट सेफ कहाँ है',
+    'can you delete a task?',
+  ]) assert.equal(isHowTo(q), true, `should load the manual: "${q}"`);
+
+  for (const q of [
+    'what is urgent today?',
+    'what did the vendor say about the pump price',
+    'add a task to call Priya tomorrow at 5pm',
+    'show my tasks',
+    'save this link https://ray.so',
+    'who is Abhishek',
+    'and the one after that?',
+  ]) assert.equal(isHowTo(q), false, `should NOT load the manual: "${q}"`);
+
+  assert.equal(isHowTo(''), false, 'an empty question loads nothing');
+  assert.equal(isHowTo(null), false, 'a missing question does not throw');
+
+  // The manual must never contradict /terms — the Private Safe is a lock on a screen, not crypto.
+  assert.ok(/not encryption/.test(HOW_IT_WORKS), 'the manual repeats the honest Private Safe line');
+  assert.ok(/never shared/.test(HOW_IT_WORKS), 'the manual states that links are never shared');
+  assert.ok(EXTRA_PAGES.every(p => p.href.startsWith('/')), 'every extra destination is an in-app route');
 }
 
 console.log('self-check: all assertions passed');
