@@ -14,7 +14,7 @@ import { chatJSON } from "@/lib/llm";
 import { formatInZone, safeZone, zonedToUtc } from "@/lib/time";
 import { myProjectFilter } from "@/lib/projectAccess";
 import { retrieve, type Candidate } from "@/lib/retrieval";
-import { isProjectOwner, canWrite, type OwnableProject } from "@/lib/scope";
+import { isProjectOwner, isProjectCreator, canWrite, type OwnableProject } from "@/lib/scope";
 import { hasSafe } from "@/lib/safeCookie";
 import { isAdmin } from "@/lib/isAdmin";
 import { dayKey, spendQuestion, capMessage, SHARED_OUT_MESSAGE, JARVIS_DAILY_LIMIT } from "@/lib/jarvisLimit";
@@ -339,10 +339,21 @@ async function applyActions(actions: any[], env: {
           if (add && isOwner && /^\S+@\S+\.\S+$/.test(add) && !project.memberEmails.includes(add)) {
             project.memberEmails.push(add); changes.push(`added ${add}`);
           }
+          // Removal here has to mean exactly what it means on the Projects page. Filtering only
+          // memberEmails left a co-owner holding rename and delete powers no screen still shows,
+          // and a viewer still reading the group — so every role goes, the creator is refused, and
+          // their claim on the group's tasks leaves with them (see removeMember in project.ts).
           const drop = str(a.removeMember).toLowerCase();
-          const removed = drop && isOwner && drop !== email && project.memberEmails.includes(drop);
+          const onProject = drop
+            && (project.memberEmails.includes(drop)
+              || (project.ownerEmails || []).includes(drop)
+              || (project.viewerEmails || []).includes(drop));
+          const removed = onProject && isOwner && drop !== email
+            && !isProjectCreator(project as unknown as OwnableProject, drop);
           if (removed) {
             project.memberEmails = project.memberEmails.filter(e => e !== drop);
+            project.ownerEmails = (project.ownerEmails || []).filter((e: string) => e !== drop);
+            project.viewerEmails = (project.viewerEmails || []).filter((e: string) => e !== drop);
             changes.push(`removed ${drop}`);
           }
 
