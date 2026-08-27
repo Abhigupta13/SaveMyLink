@@ -11,7 +11,7 @@ import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, fo
 import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
 import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite, withinProject, canAccessDoc } from '../src/lib/scope.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
-import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf } from '../src/lib/taskAccess.ts';
+import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf, assigneeEmailsOf } from '../src/lib/taskAccess.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
 import { projectNameMap, sharedLabel, needsShareNotice, memberCount } from '../src/lib/visibility.ts';
 import { resolveRange, MAX_SPAN_DAYS } from '../src/lib/adminRange.ts';
@@ -450,6 +450,66 @@ assert.equal(needsOwner({ assigneeEmail: 'boss@x.com' }, MEMBERS), false, 'a cur
 assert.equal(needsOwner({ assigneeId: { email: 'BOSS@x.com' } }, MEMBERS), false, 'the populated shape counts too');
 assert.equal(needsOwner({}, MEMBERS), true, 'never assigned is exactly the same failure');
 assert.equal(needsOwner({ assigneeEmail: 'gone@x.com', completed: true }, MEMBERS), false, 'finished work needs nobody');
+
+// ---------------------------------------------------------------------------
+// Several people on ONE task, any of whom may tick it.
+//
+// assigneeId/assigneeEmail stay the primary and assigneeIds/assigneeEmails carry the rest, with
+// the invariant assigneeEmail === assigneeEmails[0]. The dangerous case is the SECOND assignee:
+// a co-assignee who cannot close their own work is a silent permission strip, and the array
+// arriving where a scalar used to be is exactly the shape idOf used to answer '' to.
+const THIRD = 'u3';
+const shared = (over = {}) => ({ projectId: 'p1', userId: OTHER, assigneeId: OTHER, assigneeEmail: 'boss@x.com',
+  assigneeIds: [OTHER, ME], assigneeEmails: ['boss@x.com', 'me@x.com'], ...over });
+
+assert.equal(canWorkOn(shared(), ME, 'me@x.com', false), true, 'a co-assignee ticks the shared task');
+assert.equal(canWorkOn(shared(), OTHER, 'boss@x.com', false), true, 'and so does the primary');
+assert.equal(canWorkOn(shared(), THIRD, 'nobody@x.com', false), false, 'a stranger still cannot');
+// The id branch alone, with no email to fall back on — this is the one idOf used to strip.
+assert.equal(canWorkOn({ projectId: 'p1', userId: OTHER, assigneeIds: [OTHER, ME] }, ME, 'me@x.com', false), true,
+  'an array of raw ids matches its member');
+assert.equal(canWorkOn({ projectId: 'p1', userId: OTHER, assigneeIds: [{ _id: OTHER, email: 'b@x.com' }, { _id: ME, email: 'me@x.com' }] }, ME, 'zz@x.com', false), true,
+  'and so does an array of populated users');
+assert.equal(canWorkOn({ projectId: 'p1', userId: OTHER, assigneeIds: [OTHER] }, ME, 'me@x.com', false), false,
+  'an array that does not contain me opens nothing');
+assert.equal(canWorkOn({ projectId: 'p1', userId: OTHER, assigneeIds: [] }, ME, 'me@x.com', false), false,
+  'an empty list is not a wildcard');
+assert.equal(canWorkOn({ projectId: 'p1', userId: OTHER, assigneeIds: [null, undefined, ''] }, ME, '', false), false,
+  'blanks in the list never match a blank id');
+// idOf's array branch, reached when a list lands in the SCALAR slot. `typeof [] === 'object'`, so
+// before the branch existed it fell into the populated case, found no `_id`, and answered '' —
+// silently stripping the assignee's right to tick their own task. It resolves to element zero,
+// which is the primary, exactly as assigneeEmail === assigneeEmails[0] says.
+assert.equal(canWorkOn({ projectId: 'p1', userId: OTHER, assigneeId: [ME, OTHER] }, ME, 'zz@x.com', false), true,
+  'a list in the scalar id slot resolves to its primary instead of to nothing');
+assert.equal(canWorkOn({ projectId: 'p1', userId: OTHER, assigneeId: [OTHER, ME] }, ME, 'zz@x.com', false), false,
+  'and it is element zero specifically — the scalar slot never means "any of them"');
+assert.equal(assigneeEmailOf({ assigneeId: [{ email: 'a@x.com' }], assigneeEmail: 'b@x.com' }), 'b@x.com',
+  'a list in the scalar slot is not read as a populated user; the primary email answers');
+
+// Unclaimed co-assignee: they signed up after the task was written, so only the email is there.
+assert.equal(canWorkOn({ projectId: 'p1', userId: OTHER, assigneeEmails: ['boss@x.com', 'Me@X.com'] }, ME, 'me@x.com', false), true,
+  'an unclaimed co-assignee ticks by email, case-insensitively');
+// Sign-off is untouched by any of this: it is the owner's act, never the assignees'.
+assert.equal(canSignOff(shared({ completed: true }), false), false, 'a co-assignee cannot sign off their own work');
+assert.equal(canSignOff(shared({ completed: true }), true), true, 'an owner still can');
+
+// assigneeEmailsOf: the primary leads, the list follows, duplicates collapse, and a row written
+// before multi-assignee existed answers [assigneeEmail] — which is why no migration was needed.
+assert.deepEqual(assigneeEmailsOf(shared()), ['boss@x.com', 'me@x.com'], 'primary first, then the rest');
+assert.deepEqual(assigneeEmailsOf({ assigneeEmail: 'B@X.com' }), ['b@x.com'], 'a legacy row falls back to its primary');
+assert.deepEqual(assigneeEmailsOf({ assigneeEmail: 'a@x.com', assigneeEmails: ['a@x.com'] }), ['a@x.com'], 'the primary is not listed twice');
+assert.deepEqual(assigneeEmailsOf({}), [], 'nobody is nobody');
+assert.equal(assigneeEmailOf(shared()), 'boss@x.com', 'assigneeEmailOf still answers the primary alone');
+
+// needsOwner: shared work is held while ANY assignee is still in the group — one of three people
+// leaving does not make the task ownerless.
+assert.equal(needsOwner({ assigneeEmail: 'gone@x.com', assigneeEmails: ['gone@x.com', 'boss@x.com'] }, MEMBERS), false,
+  'a remaining co-assignee holds it even when the primary left');
+assert.equal(needsOwner({ assigneeEmail: 'boss@x.com', assigneeEmails: ['boss@x.com', 'gone@x.com'] }, MEMBERS), false,
+  'and the primary holds it when the co-assignee left');
+assert.equal(needsOwner({ assigneeEmail: 'gone@x.com', assigneeEmails: ['gone@x.com', 'also-gone@x.com'] }, MEMBERS), true,
+  'only when every last one of them has left does it need an owner');
 
 // ---------------------------------------------------------------------------
 // The activity trail's vocabulary.

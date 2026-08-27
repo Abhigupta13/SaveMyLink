@@ -10,6 +10,8 @@ export interface ITask extends MongooseDocument {
   projectId?: mongoose.Types.ObjectId;
   assigneeId?: mongoose.Types.ObjectId;
   assigneeEmail?: string;
+  assigneeIds: mongoose.Types.ObjectId[];
+  assigneeEmails: string[];
   momId?: mongoose.Types.ObjectId;
   linkId?: mongoose.Types.ObjectId;
   signedOffBy?: mongoose.Types.ObjectId;
@@ -27,6 +29,12 @@ const TaskSchema = new Schema<ITask>({
   projectId: { type: Schema.Types.ObjectId, ref: 'Project' },
   assigneeId: { type: Schema.Types.ObjectId, ref: 'User' },
   assigneeEmail: { type: String, lowercase: true }, // kept so assignments to not-yet-registered emails survive; claimed on their first read
+  // One shared task can be given to several people, and any of them ticks it for everybody.
+  // assigneeId/assigneeEmail stay the PRIMARY, with the invariant assigneeEmail === assigneeEmails[0],
+  // so every row written before this — and every LLM path that still assigns one person — reads
+  // correctly with no migration: lib/taskAccess falls back to [assigneeEmail] when the list is empty.
+  assigneeIds: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  assigneeEmails: [{ type: String, lowercase: true }],
   momId: { type: Schema.Types.ObjectId, ref: 'Mom' },
   linkId: { type: Schema.Types.ObjectId, ref: 'Link' },
   // Completion and sign-off are two states, not one: the assignee ticks their own work, an owner
@@ -43,5 +51,13 @@ const TaskSchema = new Schema<ITask>({
 TaskSchema.index({ userId: 1 });
 TaskSchema.index({ projectId: 1 });
 TaskSchema.index({ assigneeId: 1 });
+// Every "my tasks" surface now ORs assigneeIds alongside assigneeId. Mongo indexes each branch of
+// an $or separately, so without this multikey index the co-assignee branch is a collection scan.
+TaskSchema.index({ assigneeIds: 1 });
+// claimAssignments matches on the email on EVERY task read, not just at signup — one query per
+// field. Neither was indexed, so both were full scans that only stayed cheap while the collection
+// was small. The array one is new; the scalar one was already there and is fixed while we are here.
+TaskSchema.index({ assigneeEmail: 1 });
+TaskSchema.index({ assigneeEmails: 1 });
 
 export default defineModel<ITask>('Task', TaskSchema);

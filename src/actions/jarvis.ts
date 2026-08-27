@@ -76,7 +76,7 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
 
   const [links, tasks, moms, contacts, notes, docs] = await Promise.all([
     Link.find(linkQuery).populate('category', 'name').sort({ createdAt: -1 }).limit(600).lean(),
-    Task.find({ $or: [{ userId }, { assigneeId: userId }, { projectId: { $in: projectIds } }] })
+    Task.find({ $or: [{ userId }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] })
       .populate('assigneeId', 'email').sort({ completed: 1, dueAt: 1 }).limit(400).lean(),
     // my project meetings + my personal ones, which have no project to match on
     Mom.find({ $or: [{ projectId: { $in: projectIds } }, { userId }] }).sort({ createdAt: -1 }).limit(60).lean(),
@@ -245,7 +245,7 @@ async function applyActions(actions: any[], env: {
              ctx.ids — "the id was in the context we built, so it must be mine" — which was true
              only while the context held the whole vault. It is a scope check either way, but a
              real one belongs here, next to the write, not in a set assembled a hundred lines up. */
-          const task = await Task.findOne({ _id: a.id, $or: [{ userId }, { assigneeId: userId }, { projectId: { $in: projectIds } }] });
+          const task = await Task.findOne({ _id: a.id, $or: [{ userId }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] });
           if (!task) continue;
           if (!mayWrite(task.projectId)) continue;   // visible in a view-only group is not editable
           if (hold(a, task.projectId)) continue;

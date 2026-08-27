@@ -39,7 +39,7 @@ export async function searchAll(q: string) {
     Link.find(linkQuery).populate('category', 'name color').sort({ createdAt: -1 }).limit(20).lean(),
     Task.find({
       $and: [
-        { $or: [{ userId }, { assigneeId: userId }, { projectId: { $in: projectIds } }] },
+        { $or: [{ userId }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] },
         { $or: [{ title: regex }, { description: regex }] },
       ],
     }).sort({ completed: 1, createdAt: -1 }).limit(20).lean(),

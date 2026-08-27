@@ -5,20 +5,60 @@ import connectToDatabase from "@/lib/mongodb";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
 import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject } from "@/lib/projectAccess";
-import { canWorkOn, canSignOff } from "@/lib/taskAccess";
+import { canWorkOn, canSignOff, assigneeEmailsOf } from "@/lib/taskAccess";
 import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
+import { Types } from "mongoose";
 import { revalidatePath } from "next/cache";
 
 const lower = (v: unknown) => String(v ?? '').trim().toLowerCase();
 
+/**
+ * The primary claim stays 1:1 — assigneeEmail is one address and assigneeId is that person.
+ * The second pass is the co-assignee half: a shared task lists everyone's address from the day it
+ * was written, and each of them attaches their id here on their first read. $addToSet rather than
+ * $push so a repeated read cannot list somebody twice, and the $ne narrows it to rows that would
+ * actually change.
+ */
 async function claimAssignments(userId: string, email?: string | null) {
   if (!email) return;
+  const at = email.toLowerCase();
   await Task.updateMany(
-    { assigneeEmail: email.toLowerCase(), assigneeId: null },
+    { assigneeEmail: at, assigneeId: null },
     { $set: { assigneeId: userId } }
   );
+  await Task.updateMany(
+    { assigneeEmails: at, assigneeIds: { $ne: userId } },
+    { $addToSet: { assigneeIds: userId } }
+  );
 }
+
+/**
+ * The assignee list a write should store, from whatever the caller sent. The primary leads it —
+ * `assigneeEmail === assigneeEmails[0]` is the invariant everything else reads through.
+ *
+ * Capped, because this arrives from the browser: an unbounded list would be an unbounded $in and
+ * an unbounded document, chosen by whoever is calling the action.
+ */
+const MAX_ASSIGNEES = 20;
+function assigneeList(primary?: string | null, list?: (string | null | undefined)[] | null): string[] {
+  return [...new Set([primary, ...(list || [])].map(lower).filter(Boolean))].slice(0, MAX_ASSIGNEES);
+}
+
+/**
+ * Which of those addresses already have accounts. Returned as a map rather than a list because
+ * the primary has to be looked up by name: a list filtered of its misses would silently promote
+ * the second person's id into assigneeId whenever the first has not signed up yet.
+ */
+async function resolveAssignees(emails: string[]) {
+  if (!emails.length) return new Map<string, Types.ObjectId>();
+  const users = await User.find({ email: { $in: emails } }).select('_id email').lean();
+  return new Map(users.map(u => [lower(u.email), u._id]));
+}
+
+/** The ids of whoever in the list has an account. The rest stay email-only until they claim. */
+const idsFor = (emails: string[], byEmail: Map<string, Types.ObjectId>) =>
+  emails.map(e => byEmail.get(e)).filter((v): v is Types.ObjectId => !!v);
 
 export async function getTasks(projectId?: string) {
   try {
@@ -61,7 +101,9 @@ export async function getMyOpenTasks() {
 
     const tasks = await Task.find({
       completed: false,
-      $or: [{ userId: session.user.id, projectId: null }, { assigneeId: session.user.id }],
+      // assigneeIds as well as assigneeId, or a co-assignee's shared work would be missing from
+      // My Tasks — and from the phone reminders, which each device schedules off this list.
+      $or: [{ userId: session.user.id, projectId: null }, { assigneeId: session.user.id }, { assigneeIds: session.user.id }],
     }).select('_id title dueAt completed projectId').lean(); // projectId drives the per-scope counts on /tasks
     return { success: true, tasks: JSON.parse(JSON.stringify(tasks)) };
   } catch (error) {
@@ -75,6 +117,7 @@ interface TaskOpts {
   dueAt?: string; // ISO string from client
   projectId?: string;
   assigneeEmail?: string;
+  assigneeEmails?: string[];   // several people, one shared task — any of them ticks it
   momId?: string;
   linkId?: string;
 }
@@ -85,14 +128,14 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
-    let assigneeId;
+    // Assignment only exists inside a group — a personal task has nobody to hand it to.
+    let emails: string[] = [];
+    let byEmail = new Map<string, Types.ObjectId>();
     if (opts.projectId) {
       const project = await projectForWriter(opts.projectId, session.user.id, session.user.email);
       if (!project) return { success: false, error: 'You cannot add work to this group' };
-      if (opts.assigneeEmail) {
-        const assignee = await User.findOne({ email: opts.assigneeEmail.toLowerCase() }).select('_id');
-        assigneeId = assignee?._id; // unresolved email → kept as assigneeEmail, claimed when they sign up
-      }
+      emails = assigneeList(opts.assigneeEmail, opts.assigneeEmails);
+      byEmail = await resolveAssignees(emails);   // unresolved → kept as email, claimed when they sign up
     }
 
     const task = await Task.create({
@@ -101,8 +144,10 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
       dueAt: opts.dueAt ? new Date(opts.dueAt) : undefined,
       userId: session.user.id,
       projectId: opts.projectId || undefined,
-      assigneeId,
-      assigneeEmail: opts.projectId ? opts.assigneeEmail?.toLowerCase() : undefined,
+      assigneeId: byEmail.get(emails[0]),
+      assigneeEmail: emails[0],
+      assigneeIds: idsFor(emails, byEmail),
+      assigneeEmails: emails,
       momId: opts.momId || undefined,
       linkId: opts.linkId || undefined,
     });
@@ -117,7 +162,7 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
   }
 }
 
-export async function updateTask(id: string, data: { title?: string; description?: string; dueAt?: string | null; assigneeEmail?: string | null; projectId?: string | null }) {
+export async function updateTask(id: string, data: { title?: string; description?: string; dueAt?: string | null; assigneeEmail?: string | null; assigneeEmails?: string[] | null; projectId?: string | null }) {
   try {
     await connectToDatabase();
     const session = await getServerSession(authOptions);
@@ -135,7 +180,7 @@ export async function updateTask(id: string, data: { title?: string; description
     if (!canWorkOn(task, session.user.id, session.user.email, isOwner)) {
       return { success: false, error: 'Task not found' };
     }
-    const wasAssigned = lower(task.assigneeEmail);
+    const wasAssigned = assigneeEmailsOf(task);
 
     if (data.title !== undefined) task.title = data.title;
     if (data.description !== undefined) task.description = data.description;
@@ -147,28 +192,35 @@ export async function updateTask(id: string, data: { title?: string; description
         task.projectId = project._id as any;
       } else {
         task.projectId = undefined;
-        task.assigneeId = undefined;
-        task.assigneeEmail = undefined; // personal tasks have no assignee
+        task.set({ assigneeId: undefined, assigneeEmail: undefined, assigneeIds: [], assigneeEmails: [] }); // personal tasks have no assignee
       }
     }
-    if (data.assigneeEmail !== undefined) {
-      if (data.assigneeEmail) {
-        const assignee = await User.findOne({ email: data.assigneeEmail.toLowerCase() }).select('_id');
-        task.assigneeId = assignee?._id;
-        task.assigneeEmail = data.assigneeEmail.toLowerCase();
-      } else {
-        task.assigneeId = undefined;
-        task.assigneeEmail = undefined;
-      }
+    if (data.assigneeEmail !== undefined || data.assigneeEmails !== undefined) {
+      const emails = assigneeList(data.assigneeEmail, data.assigneeEmails);
+      const byEmail = await resolveAssignees(emails);
+      task.set({
+        assigneeId: byEmail.get(emails[0]),
+        assigneeEmail: emails[0],
+        assigneeIds: idsFor(emails, byEmail),
+        assigneeEmails: emails,
+      });
     }
     // Only a change of hands is worth a line in the trail. Retitling and re-dating happen
     // constantly while someone is thinking, and a trail that logs thinking is not read.
-    const reassigned = data.assigneeEmail !== undefined && lower(data.assigneeEmail) !== wasAssigned;
+    //
+    // A set difference, not a scalar compare: with several people on one task, "added Priya" and
+    // "took Ravi off" are separate facts, and comparing only the primary would log a reassignment
+    // every time the list was re-ordered and none at all when a third person was added.
+    const nowAssigned = assigneeEmailsOf(task);
+    const added = nowAssigned.filter(e => !wasAssigned.includes(e));
+    const removed = wasAssigned.filter(e => !nowAssigned.includes(e));
     await task.save();
-    if (reassigned) {
+    if (added.length || removed.length) {
+      const said = [added.length && `to ${added.join(', ')}`, removed.length && `off ${removed.join(', ')}`]
+        .filter(Boolean).join(' · ');
       await recordEvent({
         projectId: task.projectId, actorId: session.user.id, verb: 'task_reassigned',
-        subject: `${task.title} to ${task.assigneeEmail || 'nobody'}`,
+        subject: `${task.title} ${said || 'to nobody'}`,
       });
     }
 

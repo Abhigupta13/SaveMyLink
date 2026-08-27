@@ -25,7 +25,7 @@ export default async function DigestPage() {
     Task.find({
       completed: false,
       dueAt: { $lte: weekAhead },
-      $or: [{ userId }, { assigneeId: userId }],
+      $or: [{ userId }, { assigneeId: userId }, { assigneeIds: userId }],
     }).sort({ dueAt: 1 }).limit(30).lean(),
   ]);
 
