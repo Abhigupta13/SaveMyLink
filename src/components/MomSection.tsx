@@ -90,6 +90,21 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const canEdit = !project || canWrite(project, myEmail);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  /**
+   * The mic, claimed SYNCHRONOUSLY — before the getUserMedia await, not after it.
+   *
+   * `setRecording(true)` lives on the far side of that await, so for as long as it takes the phone
+   * to grant the mic (on Android WebView that is the OS permission dialog: seconds) the dot still
+   * reads "record" and is still enabled. A second tap in that window used to build a SECOND
+   * MediaRecorder whose `ondataavailable` pushes into the same `chunksRef`, and `recorderRef` then
+   * only pointed at the newer one — so Stop stopped one recorder and the other kept running.
+   * The blob was two overlapping webm streams interleaved, and the transcript came back with whole
+   * sentences twice. Measured on real Chrome with a fake mic: 25s of speech → a 43.5s blob with
+   * the timestamps restarting mid-file, Whisper repeating "testing environment setup… I will do it
+   * by Wednesday" verbatim. One recording, one mic — a boolean ref is the only thing fast enough
+   * to say so, because React state is not set until the await returns.
+   */
+  const micBusy = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [editing, setEditing] = useState<string | null>(null);   // momId whose title/summary is being edited
   const [draftMom, setDraftMom] = useState<{ title: string; summary: string }>({ title: '', summary: '' });
@@ -131,6 +146,8 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   useEffect(() => { fetchMoms(); }, [fetchMoms]);
 
   const startRecording = async () => {
+    if (micBusy.current) return;   // a start is already in flight, or one is already running
+    micBusy.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream, {
@@ -140,6 +157,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       chunksRef.current = [];
       recorder.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
       recorder.onstop = async () => {
+        micBusy.current = false;
         stream.getTracks().forEach(t => t.stop());
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         await runPipeline(blob);
@@ -156,6 +174,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
         return s + 1;
       }), 1000);
     } catch (err) {
+      micBusy.current = false;   // nothing to stop, so nothing else will release it
       toast('Microphone unavailable. Check app permissions.', 'error');
     }
   };

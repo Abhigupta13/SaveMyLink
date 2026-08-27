@@ -71,6 +71,15 @@ export default function JarvisWidget() {
   const recRef = useRef<any>(null);
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  /**
+   * Same claim MomSection makes, for the same reason: `setModeBoth('capturing')` is on the far
+   * side of the getUserMedia await, so `micTap`'s `mode === 'capturing'` test cannot see a start
+   * that is still in flight. A second tap — or `listenAgainRef` firing again — would build a
+   * second MediaRecorder pushing into this same `chunksRef` while `mediaRef` forgot the first,
+   * and the question came back with its own words repeated. `startRecognition` already refuses to
+   * run two sessions; this is that guard for the Android path, which has no Web Speech API.
+   */
+  const micBusy = useRef(false);
   const finalRef = useRef('');        // finals of the live recognition session, rebuilt each event
   const committedRef = useRef('');    // finals banked from earlier sessions this turn
   const silenceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -314,12 +323,15 @@ export default function JarvisWidget() {
 
   /** Fallback for the Android app (no Web Speech API): tap-to-talk, stops on silence. */
   const recordOnce = useCallback(async () => {
+    if (micBusy.current) return;   // a start is already in flight, or one is already running
+    micBusy.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const rec = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : undefined });
       chunksRef.current = [];
       rec.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
       rec.onstop = async () => {
+        micBusy.current = false;
         stream.getTracks().forEach(t => t.stop());
         setModeBoth('idle');
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
@@ -365,6 +377,7 @@ export default function JarvisWidget() {
       };
       requestAnimationFrame(tick);
     } catch {
+      micBusy.current = false;   // nothing to stop, so nothing else will release it
       speak('Microphone is not available.');
       setModeBoth('idle');
     }
