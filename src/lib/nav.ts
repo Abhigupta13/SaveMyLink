@@ -21,4 +21,4 @@ export const NAV = [
 export const hintFor = (href: (typeof NAV)[number]['href']) => NAV.find(n => n.href === href)!.hint;
 
 // Phone bottom bar: the daily-use four, everything else lives in the Home grid
-export const MOBILE_NAV = ['/links', '/notes', '/tasks', '/mom'];
+export const MOBILE_NAV = ['/links', '/notes', '/tasks', '/projects', '/mom'];
