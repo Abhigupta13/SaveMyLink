@@ -47,12 +47,14 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const [pipeline, setPipeline] = useState(''); // status text while upload/transcribe/extract runs
   type Kind = 'task' | 'note' | 'brief';
   type Draft = { kind: Kind; title: string; detail?: string; assigneeEmail: string; dueAt: string; projectId: string; missing: string[] };
-  // task → note → project brief → task. One button, no dropdown for three options.
-  const nextKind = (k: Kind): Kind => (k === 'task' ? 'note' : k === 'note' ? 'brief' : 'task');
+  // What an extracted item becomes. Three named choices, all visible at once — the old single
+  // icon cycled task → note → brief and explained itself in a `title` tooltip, which on a phone
+  // is no explanation at all.
+  const KINDS = ['task', 'note', 'brief'] as const;
   const kindMeta = {
-    task: { Icon: CheckSquare, label: 'Task', hint: 'A task — click for a note' },
-    note: { Icon: StickyNote, label: 'Note', hint: 'A note — click to add to the project brief' },
-    brief: { Icon: BookOpen, label: 'Project brief', hint: 'Appends to the project’s About text — click for a task' },
+    task: { Icon: CheckSquare, label: 'Task' },
+    note: { Icon: StickyNote, label: 'Note' },
+    brief: { Icon: BookOpen, label: 'Brief' },
   } as const;
   const [drafts, setDrafts] = useState<Record<string, Draft[]>>({});
   const toLocalInput = (iso?: string | null) => {
@@ -521,14 +523,26 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                         return (
                           <div key={i} className="card" style={{ padding: '12px', display: 'grid', gap: '8px' }}>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                              <button type="button" title={kindMeta[d.kind].hint}
-                                onClick={() => updateDraft(mom._id, i, { kind: nextKind(d.kind) })}
-                                className="icon-btn" style={{ flexShrink: 0, color: d.kind === 'task' ? 'var(--accent-color)' : 'var(--text-secondary)' }}>
-                                {(() => { const { Icon } = kindMeta[d.kind]; return <Icon size={15} />; })()}
-                              </button>
                               <input type="text" value={d.title} onChange={e => updateDraft(mom._id, i, { title: e.target.value })}
                                 className="field" style={{ flex: 1, fontWeight: 700 }} />
                               <button onClick={() => removeDraft(mom._id, i)} className="icon-btn danger" title="Discard"><Trash2 size={14} /></button>
+                            </div>
+
+                            {/* Task or note, said out loud and reversible. It sits directly above the
+                                fields it governs, so picking Note visibly takes the assignee and the
+                                deadline away — they only mean something on a task. Same segmented
+                                control as the theme picker: 44px tall, no hover needed. */}
+                            <div className="segmented mom-kind" role="radiogroup" aria-label={`What to make of “${d.title.slice(0, 60) || 'this item'}”`}>
+                              {KINDS.map(k => {
+                                const { Icon, label } = kindMeta[k];
+                                return (
+                                  <button key={k} type="button" role="radio" aria-checked={d.kind === k}
+                                    className={`segment ${d.kind === k ? 'on' : ''}`}
+                                    onClick={() => updateDraft(mom._id, i, { kind: k })}>
+                                    <Icon size={15} strokeWidth={2.2} aria-hidden="true" /> {label}
+                                  </button>
+                                );
+                              })}
                             </div>
 
                             {d.detail && <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-tertiary)', lineHeight: 1.45 }}>{d.detail}</p>}

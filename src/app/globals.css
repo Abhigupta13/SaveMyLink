@@ -2971,6 +2971,12 @@ button.viz-chip:hover { color: var(--text-primary); }
 .mom-found { margin: 0 0 8px; text-align: center; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-tertiary); animation: mom-found 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 @keyframes mom-found { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 
+/* Task / Note / Brief on a confirm row. Full width on a phone, where it is one of two things a
+   thumb ever touches here; capped on desktop so a wide card does not stretch three short words
+   across the whole column. Labels shrink before the control does, so it never wraps. */
+.mom-kind { max-width: 360px; }
+.mom-kind .segment { font-size: 0.78rem; min-width: 0; }
+
 /* Desktop: the recorder is a control, not content — a card stretched to 1700px leaves the waveform
    marooned beside a pill on the far horizon. Cap it and the whole strip stays in proportion. */
 @media (min-width: 900px) { .mom-stage { max-width: 760px; } }
