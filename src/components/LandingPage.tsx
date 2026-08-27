@@ -207,29 +207,38 @@ function Loop() {
 
 /* The Home grid the signed-in app actually draws (HomeTiles: every NAV destination, plus Search
    which is a FAB everywhere else). Read from NAV so a new destination shows up here too. */
-const PH_TILES = [...NAV, { href: '/search', Icon: Search, title: 'Search' }];
+const PH_TILES = [...NAV, { href: '/search', Icon: Search, title: 'Search' } as const];
 const PH_TABS = NAV.filter(n => MOBILE_NAV.includes(n.href));
 
-/* Six things the phone is for, each pinned to the real surface it lives on — five Home tiles
-   and Jarvis, which in the app is a floating button, not a tile. Walk order follows the grid. */
-const FEATURES = [
-  { at: '/links', title: 'Save from anywhere', text: 'Share from any app. Filed for you.' },
-  { at: '/notes', title: 'Notes and files together', text: 'Notes, PDFs, docs — one search.' },
-  { at: '/tasks', title: 'Reminders that reach you', text: 'A real notification, until you tick it.' },
-  { at: '/projects', title: 'Project groups', text: 'Add people like a WhatsApp group.' },
-  { at: '/d-locker', title: 'Private Safe', text: 'Sensitive things behind a PIN.' },
-  { at: 'jarvis', title: 'Ask Jarvis', text: 'Answers out loud, from your own stuff.' },
-];
+/* One line per tile the phone draws, plus Jarvis (a floating button in the app, not a tile).
+   Typed against the grid, so a new NAV destination fails the build until it has a line — that is
+   how half the tiles ended up dark: a hand-written list drifted behind NAV. */
+const CAPTIONS: Record<(typeof PH_TILES)[number]['href'] | 'jarvis', { title: string; text: string }> = {
+  '/links': { title: 'Save from anywhere', text: 'Share from any app. Filed for you.' },
+  '/notes': { title: 'Notes and files together', text: 'Write the note, attach the file.' },
+  '/tasks': { title: 'Reminders that reach you', text: 'A real notification, until you tick it.' },
+  '/projects': { title: 'Project groups', text: 'Add people like a WhatsApp group.' },
+  // Longest line of the set: kept to two rendered lines at 320px so the caption block never jumps.
+  '/mom': { title: 'Meetings write themselves', text: 'Record it. Tasks come out with names and dates.' },
+  '/d-locker': { title: 'Papers in one place', text: 'Contracts, IDs, PDFs — a PIN on the private ones.' },
+  '/contacts': { title: 'The people you work with', text: 'Who is in which group, and what they can see.' },
+  '/digest': { title: 'Your Monday morning', text: 'What you saved this week, what is due next.' },
+  '/import': { title: 'Bring in what you have', text: 'Browser bookmarks and files, in one go.' },
+  '/search': { title: 'One search, everything', text: 'Links, notes, tasks, meetings and files.' },
+  jarvis: { title: 'Ask Jarvis', text: 'Answers out loud, from your own stuff.' },
+};
+/* Walk order is grid order, so index k is both the tile and its line; Jarvis comes last. */
+const FEATURES = [...PH_TILES.map(t => ({ at: t.href as string, ...CAPTIONS[t.href] })), { at: 'jarvis', ...CAPTIONS.jarvis }];
 const JARVIS = FEATURES.length - 1;
 
-/* One phone running the app's own Home screen; a spotlight walks six of its tiles and the Jarvis
-   button, lighting the matching bottom tab as it goes. Hover/tap holds it. Reduced motion never
-   ticks, so the first tile stays lit with its caption. A toolbar, not a tablist: the grid also
-   holds the destinations no feature line points at. */
+/* One phone running the app's own Home screen; a spotlight walks every tile and the Jarvis button,
+   lighting the matching bottom tab as it goes. Hover/tap holds it. Reduced motion never ticks, so
+   the first tile stays lit with its caption. A toolbar, not a tablist — these are not routes here. */
 function Pocket() {
   const ref = useRef<HTMLDivElement>(null);
   const [i, setI] = useState(0);
-  const { setPaused } = useCycle(ref, () => setI(n => (n + 1) % FEATURES.length), 2000, [i]);
+  // 11 stops now, not 6 — 1.6s keeps a full rotation under 18s and still reads.
+  const { setPaused } = useCycle(ref, () => setI(n => (n + 1) % FEATURES.length), 1600, [i]);
   const pick = (n: number) => { setI((n + FEATURES.length) % FEATURES.length); setPaused(true); };
   const at = FEATURES[i].at;
   const spot = (k: number) => ({
@@ -252,13 +261,11 @@ function Pocket() {
 
           <div className="ph-tiles" role="toolbar" aria-label="What lives in the app"
             onKeyDown={e => { if (e.key === 'ArrowRight') pick(i + 1); if (e.key === 'ArrowLeft') pick(i - 1); }}>
-            {PH_TILES.map(({ href, Icon, title }) => {
-              const k = FEATURES.findIndex(f => f.at === href);
-              const face = <><span className="ph-ic"><Icon size={17} strokeWidth={2.2} aria-hidden="true" /></span><span className="ph-tt">{title}</span></>;
-              return k < 0
-                ? <div key={href} className="ph-tile">{face}</div>
-                : <button key={href} className={`ph-tile ${k === i ? 'on' : ''}`} {...spot(k)}>{face}</button>;
-            })}
+            {PH_TILES.map(({ href, Icon, title }, k) => (
+              <button key={href} className={`ph-tile ${k === i ? 'on' : ''}`} {...spot(k)}>
+                <span className="ph-ic"><Icon size={17} strokeWidth={2.2} aria-hidden="true" /></span><span className="ph-tt">{title}</span>
+              </button>
+            ))}
             <button className={`ph-jarvis ${at === 'jarvis' ? 'on' : ''}`} {...spot(JARVIS)}>
               <Sparkles size={15} strokeWidth={2.2} aria-hidden="true" />
             </button>
