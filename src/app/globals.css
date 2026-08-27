@@ -2974,6 +2974,14 @@ button.viz-chip:hover { color: var(--text-primary); }
 /* Task / Note / Brief on a confirm row. Full width on a phone, where it is one of two things a
    thumb ever touches here; capped on desktop so a wide card does not stretch three short words
    across the whole column. Labels shrink before the control does, so it never wraps. */
+/* A meeting card's header carries a title, a date and up to five icon buttons. At 390px they do
+   not fit on one line, and the title was the thing that gave way — wrapping to two lines around
+   the buttons. Let the row wrap instead: the title takes the first line, the date and the buttons
+   sit under it. Above 520px it is one line again. */
+.mom-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.mom-card-head > :first-child { flex: 1 1 100%; min-width: 0; }
+@media (min-width: 520px) { .mom-card-head > :first-child { flex: 1 1 auto; } }
+
 .mom-kind { max-width: 360px; }
 .mom-kind .segment { font-size: 0.78rem; min-width: 0; }
 

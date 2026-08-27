@@ -15,6 +15,15 @@ interface MomSectionProps {
   myEmail: string;
   memberOptions: string[];
   onTasksCreated: () => void;
+  /**
+   * Show only the meetings whose items nobody has confirmed yet — unfinished work. The group page
+   * puts the recorder at the top of its first screen and lists those underneath it; the finished
+   * meetings live one tap away, behind the Meetings card. A filter and not a second instance
+   * because the recorder must stay mounted: two of these would mean two pipelines and two polls.
+   */
+  pendingOnly?: boolean;
+  /** Slots straight under the recorder, above the meetings — the group page's warning band. */
+  afterRecorder?: React.ReactNode;
 }
 
 // The honest cap. Sarvam accepts 2 hours in one file, but the recording reaches the server inside
@@ -37,7 +46,7 @@ const Wave = () => (
   <div className="mom-wave" aria-hidden="true">{Array.from({ length: 40 }, (_, i) => <i key={i} />)}</div>
 );
 
-export default function MomSection({ project, projects = [], myEmail, memberOptions, onTasksCreated }: MomSectionProps) {
+export default function MomSection({ project, projects = [], myEmail, memberOptions, onTasksCreated, pendingOnly = false, afterRecorder }: MomSectionProps) {
   const { toast, confirm } = useFeedback();
   const { confirmShare, shareDialog } = useShareNotice();
   const [moms, setMoms] = useState<any[]>([]);
@@ -359,6 +368,14 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const stageWord = pipeline.startsWith('Uploading') ? 'Uploading'
     : pipeline.startsWith('Transcribing') ? 'Transcribing' : 'Extracting';
 
+  // A meeting still transcribing has no candidates yet, and it is the least finished thing there
+  // is — so "not confirmed" is the whole filter, not "has items waiting".
+  //
+  // Capped at two, because a group with six unreviewed meetings would otherwise rebuild the wall
+  // this page was rebuilt to remove — and every one of these cards can grow a full review form.
+  // The caller says how many are left over and offers the way to the rest.
+  const shown = pendingOnly ? moms.filter(m => !m.tasksConfirmed).slice(0, 2) : moms;
+
   return (
     <div>
       {shareDialog}
@@ -403,9 +420,13 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
         </p>
       </div>}
 
+      {afterRecorder}
+
       {/* Hindi is free now, so the old "needs the upgraded engine" line would be a lie. What is
-          still true: the free engine has a daily ceiling, and falling past it drops to English. */}
-      {!hinglish && (
+          still true: the free engine has a daily ceiling, and falling past it drops to English.
+          It is an explainer about the engine, so it belongs with the meetings, not on a summary
+          screen whose job is to get you to the dot. */}
+      {!hinglish && !pendingOnly && (
         <p style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem', fontWeight: 600, margin: '0 0 24px', padding: '0 4px', lineHeight: 1.5 }}>
           Hindi and Hinglish are transcribed free, and take a little longer than English. On a busy
           day the free engine runs out and the meeting falls back to English only. For the upgraded
@@ -414,23 +435,28 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       )}
 
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}><div className="loading-spinner"></div></div>
-      ) : moms.length === 0 && !pipeline ? (
-        <div className="empty-state">
-          <p style={{ fontWeight: 800, marginBottom: '4px' }}>No meetings yet</p>
-          <p className="empty-hint">{hintFor('/mom')}</p>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Tap Record above. Hindi and Hinglish work too.</p>
-        </div>
+        pendingOnly ? null : <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}><div className="loading-spinner"></div></div>
+      ) : shown.length === 0 && !pipeline ? (
+        // Nothing to confirm is the normal state, not an empty state — the count on the Meetings
+        // card is what says how many there are.
+        pendingOnly ? null : (
+          <div className="empty-state">
+            <p style={{ fontWeight: 800, marginBottom: '4px' }}>No meetings yet</p>
+            <p className="empty-hint">{hintFor('/mom')}</p>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Tap Record above. Hindi and Hinglish work too.</p>
+          </div>
+        )
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {moms.map(mom => (
+          {shown.map(mom => (
             <div key={mom._id} style={{ padding: '20px', background: 'var(--bg-secondary)', borderRadius: '24px', border: '1px solid var(--border-color)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+              <div className="mom-card-head">
                 {editing === mom._id ? (
                   <input value={draftMom.title} onChange={e => setDraftMom(d => ({ ...d, title: e.target.value }))}
-                    className="field" style={{ flex: 1, fontWeight: 800 }} autoFocus />
+                    className="field" style={{ fontWeight: 800 }} autoFocus />
                 ) : (
-                  <span style={{ fontWeight: 800, color: 'var(--text-primary)', flex: 1 }}>{mom.title}</span>
+                  /* Width comes from .mom-card-head — full line at 390px, shared line above it. */
+                  <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{mom.title}</span>
                 )}
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontWeight: 600 }}>
                   {formatDay(mom.createdAt)}
