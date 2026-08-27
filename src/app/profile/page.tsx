@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Eye, Compass, Sparkles } from 'lucide-react';
+import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles } from 'lucide-react';
 import { getContacts } from '@/actions/contact';
 import { getMyOpenTasks } from '@/actions/task';
 import { getProjects } from '@/actions/project';
@@ -167,28 +167,16 @@ export default function ProfilePage() {
         </span>
       </button>
 
-      <button onClick={() => window.dispatchEvent(new Event('tour:start'))} className="card" style={{
-        display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
-        marginTop: '14px', textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit',
+      {/* One row, not two: the tour explainer and the sharing picture answer the same question. */}
+      <Link href="/your-data" className="card" style={{
+        display: 'flex', alignItems: 'center', gap: '12px',
+        marginTop: '14px', textDecoration: 'none', color: 'inherit',
       }}>
         <span className="row-icon"><Compass size={18} strokeWidth={2.2} /></span>
         <span style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ display: 'block', fontWeight: 700 }}>Take the tour</span>
+          <span style={{ display: 'block', fontWeight: 700 }}>How it works, and who sees it</span>
           <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-            A quick guided walk through the app, any time
-          </span>
-        </span>
-      </button>
-
-      <Link href="/your-data" className="card" style={{
-        display: 'flex', alignItems: 'center', gap: '12px',
-        marginTop: '10px', textDecoration: 'none', color: 'inherit',
-      }}>
-        <span className="row-icon"><Eye size={18} strokeWidth={2.2} /></span>
-        <span style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ display: 'block', fontWeight: 700 }}>Who can see my data</span>
-          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-            Your groups, what you have put in each, and how to stop sharing
+            Take the guided tour, and see what each of your groups can read
           </span>
         </span>
       </Link>
