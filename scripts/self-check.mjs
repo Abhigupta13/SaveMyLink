@@ -689,6 +689,9 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   assert.equal(resolveRange('7d', now).buckets.unit, 'day', 'a short window charts by day');
   assert.equal(resolveRange('all', now).buckets.unit, 'month', 'all-time charts by month, not thousands of days');
   assert.ok(resolveRange('7d', now).buckets.keys.length >= 7, 'every day in the window gets a bucket, including empty ones');
+  // 'all' starts at the epoch, so the month walk has no data-driven stop and only the cap holds it.
+  // At 92 it drew ninety empty bars back to 2019 and squeezed the real months into three pixels.
+  assert.ok(resolveRange('all', now).buckets.keys.length <= 24, 'all-time charts at most two years of months, so the bars stay wide enough to see');
 }
 
 // ----------------------------------------------------------------------------------------------

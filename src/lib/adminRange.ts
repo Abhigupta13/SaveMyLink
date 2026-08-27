@@ -20,6 +20,13 @@ const DAY = 86_400_000;
 export const MAX_SPAN_DAYS = 366;
 /** A day chart above this many bars is unreadable on a 390px screen; switch to month buckets. */
 const MAX_DAY_BUCKETS = 92;
+/**
+ * And a month chart has its own ceiling. This used to reuse MAX_DAY_BUCKETS — two different jobs
+ * on one constant — so "All time", whose `from` is the epoch, walked back 92 months to 2019 and
+ * drew a 390px-wide box of ninety empty bars with the app's actual two months squeezed into three
+ * pixels at the end. Two years of history is what fits and what anyone is looking at.
+ */
+const MAX_MONTH_BUCKETS = 24;
 
 export const PRESETS = ['today', '7d', '30d', '90d', 'all'] as const;
 export type RangePreset = (typeof PRESETS)[number];
@@ -69,12 +76,12 @@ function bucketPlan(fromMs: number, toMs: number, tz: string): ResolvedRange['bu
   }
 
   // Month buckets, walked backwards from the end so an epoch 'from' caps at the most recent
-  // MAX_DAY_BUCKETS months instead of generating hundreds of empty bars back to 1970.
+  // MAX_MONTH_BUCKETS months instead of generating hundreds of empty bars back to 1970.
   const [ty, tm] = dayKey(toMs, tz).split('-').map(Number);
   const [fy, fm] = dayKey(fromMs, tz).split('-').map(Number);
   const rev: string[] = [];
   let y = ty, m = tm;
-  for (let i = 0; i < MAX_DAY_BUCKETS; i++) {
+  for (let i = 0; i < MAX_MONTH_BUCKETS; i++) {
     rev.push(`${y}-${String(m).padStart(2, '0')}`);
     if (y === fy && m === fm) break;
     if (--m === 0) { m = 12; y--; }
