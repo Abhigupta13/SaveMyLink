@@ -1,0 +1,236 @@
+/* /admin — the founders' dashboard, rebuilt phone-first in the landing page's voice.
+
+   Scoped under .adm and every class a- prefixed, because globals.css already owns generic names
+   like .card, .chip, .row and .grid. The idioms here — the eyebrow/lede rhythm, the clamp() +
+   opsz/SOFT display scale, the 24px card, the pill, the italic display numeral — are COPIED from
+   src/styles/landing.css, as src/styles/guide.css and src/styles/workspace.css copy them. That
+   file stays scoped under .landing.
+
+   Motion is CSS only: no dependency ships to the Android webview for a chart that grows. Every
+   animation is a geometry reveal of a value that is already correct in the DOM — nothing here
+   renders a number out of CSS, so a webview that drops an animation still shows the right figure.
+   prefers-reduced-motion turns the lot off at the bottom of this file. */
+
+.adm {
+  max-width: 900px;
+  margin: 0 auto;
+  padding-bottom: 40px;
+
+  /* Chart colours, moved here from globals.css with their values unchanged: they were validated
+     against each mode's surface (ordinal ramp, monotone lightness, the pale end still clearing the
+     card; single-series fill inside the mode's lightness band at >=3:1). They answer to the chart,
+     not to the UI accent, which is why they are their own tokens. light-dark() collapses what used
+     to be three blocks — :root, [data-theme=light] and the OS media query — into one, and works
+     because globals.css sets color-scheme in all three. */
+  --a-fill: light-dark(#c05a38, #d2734f);
+  --a-s1: light-dark(#eba086, #f2ad95);
+  --a-s2: light-dark(#d97a57, #e08a6a);
+  --a-s3: light-dark(#c05a38, #c96442);
+  --a-s4: light-dark(#8f3f22, #9c4a2b);
+}
+.adm h1, .adm h2 { margin: 0; font-family: var(--font-display); font-weight: 400; text-wrap: balance; }
+.adm p { margin: 0; }
+.adm :focus-visible { outline: 2px solid var(--accent-color); outline-offset: 3px; }
+
+/* ── The head. One display moment, then straight into the numbers. ── */
+.a-head { text-align: center; padding: 2px 0 20px; }
+.a-eyebrow { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-tertiary); font-weight: 700; margin-bottom: 12px; }
+.a-head h1 { font-size: clamp(32px, 9vw, 52px); line-height: 1.05; letter-spacing: -.03em; font-weight: 300; font-variation-settings: 'opsz' 96, 'SOFT' 50; color: var(--text-primary); }
+.a-lede { margin: 12px auto 0; max-width: 30rem; font-size: 14px; line-height: 1.6; color: var(--text-secondary); }
+
+/* ── The window picker. It WRAPS rather than scrolling sideways: five windows at 390px do not fit
+      on one line, and a sideways scroller hides "All time" behind an edge nobody swipes. ── */
+.a-range { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.a-range button {
+  flex: 0 0 auto; min-height: 44px; padding: 8px 15px; border-radius: 999px;
+  border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary);
+  font: inherit; font-size: 0.82rem; font-weight: 700; white-space: nowrap; cursor: pointer;
+  transition: background .2s, color .2s, border-color .2s;
+}
+.a-range button:hover { color: var(--text-primary); border-color: var(--accent-color); }
+.a-range button[aria-pressed="true"] { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
+
+/* ── The 24px card recipe, shared by every block below. ── */
+.a-card { border-radius: 24px; background: var(--bg-secondary); border: 1px solid var(--border-color); box-shadow: var(--card-shadow); padding: 18px 16px; }
+.a-card + .a-card, .a-kpis + .a-card, .a-card + .a-kpis { margin-top: 12px; }
+.a-card > h2 { font-family: inherit; font-weight: 800; font-size: 1rem; letter-spacing: -.01em; color: var(--text-primary); }
+.a-sub { margin-top: 5px; font-size: 0.8rem; line-height: 1.55; color: var(--text-secondary); }
+.a-sub strong { color: var(--text-primary); font-weight: 800; font-variant-numeric: tabular-nums; }
+.a-empty { margin-top: 14px; font-size: 0.85rem; color: var(--text-tertiary); }
+
+/* ── Hero: the one headline figure, with the verified share drawn as a dial beside it. The
+      numeral is set in the display face — the same italic numerals as the workspace index — so
+      the page opens with a figure rather than with a bold sans number in a box. ── */
+.a-hero { display: flex; align-items: center; gap: 18px; border-radius: 24px; padding: 20px 18px; background: var(--bg-secondary); border: 1px solid var(--border-color); box-shadow: var(--card-shadow); margin-bottom: 12px; }
+.a-hero-text { flex: 1; min-width: 0; }
+.a-hero-label { display: block; font-size: 0.7rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-tertiary); }
+.a-hero-value { display: block; font-family: var(--font-display); font-weight: 300; font-size: clamp(48px, 15vw, 76px); line-height: 1; letter-spacing: -.03em; font-variation-settings: 'opsz' 144, 'SOFT' 50; color: var(--text-primary); margin: 4px 0 6px; }
+.a-hero-sub { display: block; font-size: 0.8rem; line-height: 1.5; color: var(--text-secondary); }
+.a-dial { flex-shrink: 0; width: 88px; height: 88px; }
+.a-dial svg { display: block; width: 100%; height: 100%; transform: rotate(-90deg); }
+.a-dial .track { fill: none; stroke: var(--bg-tertiary); stroke-width: 8; }
+.a-dial .val { fill: none; stroke: var(--a-fill); stroke-width: 8; stroke-linecap: round; stroke-dasharray: var(--c); stroke-dashoffset: calc(var(--c) * (1 - var(--p))); }
+.a-dial figcaption { margin-top: 2px; text-align: center; font-size: 0.62rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); }
+
+/* ── Four tiles. Two up on a phone, four across from 700px. ── */
+.a-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.a-kpi { border-radius: 20px; padding: 14px 15px; background: var(--bg-secondary); border: 1px solid var(--border-color); box-shadow: var(--card-shadow); }
+.a-kpi-value { display: block; font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 30px; line-height: 1; letter-spacing: -.02em; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+.a-kpi-value.zero { color: var(--text-tertiary); opacity: .55; }
+.a-kpi-label { display: block; margin-top: 8px; font-size: 0.72rem; line-height: 1.35; font-weight: 700; color: var(--text-secondary); }
+
+/* ── Signups: one bar per bucket, growing out of the baseline. ── */
+.a-cols { display: flex; align-items: flex-end; gap: 4px; height: 136px; margin-top: 16px; padding-bottom: 18px; border-bottom: 1px solid var(--border-color); position: relative; }
+.a-col-slot { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; position: relative; }
+.a-col { display: block; width: 100%; max-width: 24px; background: var(--a-fill); border-radius: 4px 4px 0 0; }
+.a-col-value { font-size: 0.68rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 3px; font-variant-numeric: tabular-nums; }
+.a-col-tick { position: absolute; bottom: -18px; font-size: 0.63rem; color: var(--text-tertiary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ── Meeting → task: the signature block. A descent, not four loose bars — the stages are a real
+      sequence and the loss between them is the whole point, so the rail carries the drop. ── */
+.a-descent { --a-rail: 20px; margin-top: 16px; }
+.a-stage { position: relative; display: grid; grid-template-columns: var(--a-rail) 1fr; gap: 12px; padding-bottom: 16px; }
+.a-stage:last-child { padding-bottom: 0; }
+.a-stage:not(:last-child)::before {
+  content: ''; position: absolute; left: calc(var(--a-rail) / 2); top: var(--a-rail); bottom: 0;
+  width: 1.5px; transform: translateX(-50%);
+  background: linear-gradient(color-mix(in srgb, var(--accent-color) 35%, transparent), var(--border-color));
+}
+.a-node { width: var(--a-rail); height: var(--a-rail); border-radius: 50%; background: var(--bg-secondary); border: 1.5px solid color-mix(in srgb, var(--accent-color) 45%, transparent); position: relative; z-index: 1; }
+.a-node.s1 { background: var(--a-s1); border-color: var(--a-s1); }
+.a-node.s2 { background: var(--a-s2); border-color: var(--a-s2); }
+.a-node.s3 { background: var(--a-s3); border-color: var(--a-s3); }
+.a-node.s4 { background: var(--a-s4); border-color: var(--a-s4); }
+.a-stage-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.a-stage-label { font-size: 0.84rem; font-weight: 700; color: var(--text-primary); }
+.a-stage-value { font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 22px; line-height: 1; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.a-stage-track { display: block; height: 10px; margin-top: 7px; border-radius: 5px; background: var(--bg-tertiary); overflow: hidden; }
+.a-stage-bar { display: block; height: 100%; max-width: 100%; border-radius: 5px; }
+.a-stage-bar.s1 { background: var(--a-s1); } .a-stage-bar.s2 { background: var(--a-s2); }
+.a-stage-bar.s3 { background: var(--a-s3); } .a-stage-bar.s4 { background: var(--a-s4); }
+.a-drop { display: block; margin-top: 7px; font-size: 0.72rem; font-weight: 700; color: var(--text-tertiary); }
+
+/* ── What's being used: a ranked list, longest bar first. ── */
+.a-ranked { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.a-ranked-row { display: grid; grid-template-columns: 92px 1fr 54px; align-items: center; gap: 10px; }
+/* min-width:0 + the clip is load-bearing: "Documents" is wider than the label column at 390px and
+   without it the word ran straight over the track. */
+.a-ranked-label { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 0.8rem; font-weight: 700; color: var(--text-secondary); }
+.a-ranked-label svg { flex-shrink: 0; color: var(--text-tertiary); }
+/* The word is its own element so the clip has something to ellipsize: text-overflow does not
+   apply to a bare text node inside a flex container, and "Documents" ran over the track. */
+.a-ranked-label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-ranked-track { display: block; height: 10px; border-radius: 5px; background: var(--bg-tertiary); overflow: hidden; }
+.a-ranked-bar { display: block; height: 100%; background: var(--a-fill); border-radius: 5px; }
+.a-ranked-value { font-size: 0.82rem; font-weight: 800; color: var(--text-primary); text-align: right; font-variant-numeric: tabular-nums; }
+.a-ranked-delta { display: block; font-size: 0.68rem; font-weight: 700; color: var(--accent-text); }
+@media (max-width: 400px) { .a-ranked-row { grid-template-columns: 100px 1fr 46px; gap: 8px; } .a-ranked-label { font-size: 0.76rem; } }
+
+/* ── The allowlist. One cell per person and the whole cell is the switch: orange means the
+      upgraded engine is on, grey means it is off. The state is also written on the cell, because
+      a control whose only state is its colour has no state for anyone who cannot see the hue. ── */
+.a-search { display: flex; gap: 8px; margin: 14px 0 12px; }
+.a-search .field { flex: 1; min-height: 44px; }
+.a-search button { flex-shrink: 0; min-height: 44px; padding: 8px 18px; border: 0; border-radius: 999px; background: var(--accent-strong); color: #fff; font: inherit; font-size: 0.82rem; font-weight: 700; cursor: pointer; }
+.a-search button:hover { background: var(--accent-hover); }
+
+.a-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.a-cell {
+  display: flex; flex-direction: column; gap: 4px; min-height: 96px; padding: 12px 13px;
+  border: 1px solid var(--border-color); border-radius: 18px; background: var(--bg-tertiary);
+  color: var(--text-primary); font: inherit; text-align: left; cursor: pointer;
+  transition: background .25s, border-color .25s, transform .12s ease-out;
+}
+.a-cell:hover { border-color: var(--accent-color); }
+.a-cell:active { transform: scale(.985); }
+.a-cell[aria-pressed="true"] { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
+.a-cell[disabled] { cursor: progress; opacity: .6; }
+.a-cell-name { font-size: 0.92rem; font-weight: 800; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-cell-mail { font-size: 0.68rem; font-weight: 600; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-cell[aria-pressed="true"] .a-cell-mail { color: rgba(255,255,255,.78); }
+.a-cell-marks { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; padding-top: 6px; }
+.a-mark { padding: 2px 7px; border-radius: 999px; background: var(--bg-secondary); border: 1px solid var(--border-color); font-size: 0.6rem; font-weight: 800; letter-spacing: .02em; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.a-cell[aria-pressed="true"] .a-mark { background: rgba(0,0,0,.18); border-color: rgba(255,255,255,.24); color: #fff; }
+.a-mark.state { color: var(--text-secondary); }
+.a-cell[aria-pressed="true"] .a-mark.state { background: #fff; border-color: #fff; color: var(--accent-strong); }
+
+/* ── Feedback. Same card, same rhythm — but the report itself stays plain text at reading size,
+      because a bug report that has been designed is a bug report that is harder to read. ── */
+.a-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.a-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; background: var(--bg-tertiary); border: 1px solid var(--border-color); font-size: 0.78rem; font-weight: 700; color: var(--text-secondary); }
+.a-chip svg { flex-shrink: 0; }
+.a-chip.bug svg { color: var(--danger-color); }
+.a-chip.idea svg { color: var(--warn-color); }
+.a-chip.other svg { color: var(--text-tertiary); }
+
+.a-notes { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.a-note { border-radius: 20px; background: var(--bg-secondary); border: 1px solid var(--border-color); box-shadow: var(--card-shadow); padding: 14px 15px; }
+.a-note-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 0.68rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); }
+.a-note-kind { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; background: var(--bg-tertiary); }
+.a-note-kind.bug { color: var(--danger-color); background: var(--danger-soft); }
+.a-note-kind.idea { color: var(--warn-color); background: color-mix(in srgb, var(--warn-color) 12%, transparent); }
+.a-note-when { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 700; }
+.a-note-body { font-size: 0.95rem; line-height: 1.65; color: var(--text-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.a-note-shot { display: block; margin-top: 12px; }
+.a-note-shot img { display: block; max-width: 100%; max-height: 260px; border-radius: 14px; border: 1px solid var(--border-color); }
+.a-note-from { margin-top: 10px; font-size: 0.72rem; font-weight: 600; color: var(--text-tertiary); overflow-wrap: anywhere; }
+
+.a-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; margin-top: 30px; font-size: 13px; color: var(--text-tertiary); }
+.a-foot a { color: var(--text-secondary); font-weight: 700; text-decoration: none; }
+.a-foot a:hover { color: var(--accent-text); }
+
+/* ── Motion. Bars grow out of their own baseline, cards arrive in reading order. Every animated
+      element already holds its true geometry inline — the animation only reveals it. ── */
+@media (prefers-reduced-motion: no-preference) {
+  .a-rise { opacity: 0; animation: a-rise .5s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i, 0) * 70ms); }
+  @keyframes a-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+  .a-col { transform: scaleY(0); transform-origin: bottom; animation: a-grow-y .55s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(.15s + var(--i, 0) * 40ms); }
+  @keyframes a-grow-y { to { transform: scaleY(1); } }
+
+  .a-stage-bar, .a-ranked-bar { transform: scaleX(0); transform-origin: left; animation: a-grow-x .7s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(.2s + var(--i, 0) * 90ms); }
+  @keyframes a-grow-x { to { transform: scaleX(1); } }
+
+  .a-node { transform: scale(0); animation: a-pop .4s cubic-bezier(.3,1.4,.4,1) both; animation-delay: calc(.2s + var(--i, 0) * 90ms); }
+  @keyframes a-pop { to { transform: scale(1); } }
+
+  .a-dial .val { stroke-dashoffset: var(--c); animation: a-dial 1.1s cubic-bezier(.2,.8,.2,1) .25s both; }
+  @keyframes a-dial { to { stroke-dashoffset: calc(var(--c) * (1 - var(--p))); } }
+
+  /* The one borrowed flourish: the light sweep the landing hero runs across its headline. */
+  /* The ink is the background-COLOR and the sweep is the image over it. currentColor cannot be
+     used here the way landing.css does: `color` is transparent for the clip to work, so
+     currentColor would resolve to transparent and the numeral would vanish. */
+  .a-hero-value {
+    background-color: var(--text-primary);
+    background-image: linear-gradient(110deg, transparent 0%, transparent 42%, var(--accent-color) 50%, transparent 58%, transparent 100%);
+    background-size: 260% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent; -webkit-text-fill-color: transparent;
+    animation: a-sweep 8s ease-in-out 1.2s infinite;
+  }
+  @keyframes a-sweep { 0%, 100% { background-position: 120% 0; } 50% { background-position: -20% 0; } }
+
+  .a-cell { animation: a-rise .4s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i, 0) * 30ms); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .a-cell, .a-card, .a-range button { transition: none; }
+  .a-cell:active { transform: none; }
+}
+
+/* ── Desktop follows: four tiles across, roomier cards, more people per row. ── */
+@media (min-width: 700px) {
+  .a-head { padding-bottom: 30px; }
+  .a-lede { font-size: 16px; }
+  .a-card { padding: 24px 22px; }
+  .a-hero { padding: 26px 24px; gap: 28px; }
+  .a-dial { width: 108px; height: 108px; }
+  .a-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .a-kpi { padding: 18px 18px; }
+  .a-kpi-value { font-size: 34px; }
+  .a-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .a-cols { height: 168px; }
+  .a-descent { --a-rail: 24px; }
+  .a-note { padding: 18px 20px; }
+}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { Bug, Lightbulb, MessageSquare, Link as LinkIcon, StickyNote, CheckSquare, Mic, Library, FolderOpen, Users } from 'lucide-react';
@@ -8,13 +8,19 @@ import { getAdminStats, listUsersForSarvam, setSarvamAccess } from '@/actions/ad
 import { getSuggestions } from '@/actions/suggestion';
 import { formatInZone } from '@/lib/time';
 import { useFeedback } from '@/components/ui/Feedback';
+import '@/styles/admin.css';
 
 /**
  * How the app is doing. Admin only — the server actions are the gate, this page just renders what
  * they hand back, exactly like /feedback-inbox.
  *
  * COUNTS ONLY. /terms tells users we do not read their content, and this is the page where that
- * would quietly stop being true. Nothing here shows a title, a note body or a transcript.
+ * would quietly stop being true. Nothing here shows a title, a note body or a transcript. The one
+ * exception is the allowlist below, which names people because you cannot grant a person access
+ * without seeing which person.
+ *
+ * Styling lives in src/styles/admin.css, scoped under .adm. Motion is CSS only: no dependency
+ * ships to the Android webview for a bar that grows.
  */
 
 const ICON = { bug: Bug, idea: Lightbulb, other: MessageSquare } as const;
@@ -41,6 +47,9 @@ const compact = (n: number) =>
 
 const pct = (part: number, whole: number) => (whole ? Math.round((part / whole) * 100) : 0);
 
+/** Stagger index for the CSS reveals — one variable, read by every animation in admin.css. */
+const step = (i: number) => ({ '--i': i } as CSSProperties);
+
 type UsageKey = 'links' | 'notes' | 'tasks' | 'moms' | 'docs' | 'projects' | 'contacts';
 const USAGE: [UsageKey, string, typeof LinkIcon][] = [
   ['links', 'Links', LinkIcon],
@@ -66,6 +75,12 @@ type SarvamRow = { id: string; email: string; name: string; ownKey: boolean; acc
  * In-app payment does not exist yet, so this is the whole billing system: money changes hands
  * outside the app and an admin flips a switch. It runs on the FOUNDER'S key, which is why the
  * card says so out loud — every account switched on here spends his balance, not theirs.
+ *
+ * A grid, not a list with switches: the question this card answers is "who is on?", and a wall of
+ * cells answers it at a glance where a column of rows makes you read every one. The whole cell is
+ * the control — orange is on, grey is off — so the target is 96px tall instead of a 20px switch,
+ * which matters because this is used on a phone. The state is written on the cell as well as
+ * coloured, because a control whose only state is its hue has no state for a lot of people.
  *
  * The one place /admin shows individual people. Address and name only, never their content.
  */
@@ -101,39 +116,52 @@ function SarvamAccessCard() {
     toast(res.access ? `${row.email} now has the upgraded engine` : `${row.email} is back on the free engine`, 'success');
   };
 
+  const on = (rows || []).filter(r => r.access).length;
+
   return (
-    <section className="card viz-card" id="sarvam-access">
-      <h2 className="viz-title">Upgraded Hindi access</h2>
-      <p className="viz-sub">
+    <section className="a-card" id="sarvam-access">
+      <h2>Upgraded Hindi access</h2>
+      <p className="a-sub">
         For people who have paid you outside the app — in-app payments come later. Switching
         someone on spends <strong>your</strong> Sarvam balance. Anyone who adds their own key in
         Profile is billed by Sarvam directly and needs nothing here.
       </p>
+      {rows !== null && rows.length > 0 && (
+        <p className="a-sub"><strong>{on}</strong> of {rows.length} shown {on === 1 ? 'is' : 'are'} on the upgraded engine.</p>
+      )}
 
-      <form onSubmit={e => { e.preventDefault(); load(q); }} style={{ display: 'flex', gap: '8px', margin: '12px 0' }}>
+      <form className="a-search" onSubmit={e => { e.preventDefault(); load(q); }}>
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by email or name"
-          className="field" style={{ flex: 1 }} />
-        <button type="submit" className="btn-primary" style={{ padding: '8px 18px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem' }}>Search</button>
+          className="field" aria-label="Search people by email or name" />
+        <button type="submit">Search</button>
       </form>
 
-      {rows === null ? <p className="viz-empty">Loading…</p>
-        : rows.length === 0 ? <p className="viz-empty">Nobody matches that.</p>
+      {rows === null ? <p className="a-empty">Loading…</p>
+        : rows.length === 0 ? <p className="a-empty">Nobody matches that.</p>
         : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {rows.map(r => (
-              <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 0', borderTop: '1px solid var(--border-color)' }}>
-                <span style={{ flex: '1 1 220px', minWidth: 0 }}>
-                  <span style={{ display: 'block', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.email}</span>
-                  <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>
-                    {[r.name, r.ownKey && 'has their own key', r.envListed && 'on the env list',
-                      r.access && r.grantedBy && `granted by ${r.grantedBy}`].filter(Boolean).join(' · ') || '—'}
-                  </span>
+          <div className="a-grid" role="group" aria-label="Who has upgraded Hindi access">
+            {rows.map((r, i) => (
+              <button
+                key={r.id}
+                type="button"
+                className="a-cell"
+                // Capped: the list runs to 50, and 50 × 30ms is a second and a half of cells
+                // fading in on a wall you are trying to read at a glance.
+                style={step(Math.min(i, 11))}
+                aria-pressed={r.access}
+                disabled={busy === r.id}
+                onClick={() => toggle(r)}
+                title={r.ownKey ? 'They already pay Sarvam themselves' : r.access ? 'Tap to revoke' : 'Tap to grant'}
+              >
+                <span className="a-cell-name">{r.name || r.email.split('@')[0]}</span>
+                <span className="a-cell-mail">{r.email}</span>
+                <span className="a-cell-marks">
+                  <span className="a-mark state">{r.access ? 'Upgraded' : 'Free engine'}</span>
+                  {r.ownKey && <span className="a-mark">Own key</span>}
+                  {r.envListed && <span className="a-mark">Env list</span>}
+                  {r.access && r.grantedBy && <span className="a-mark">By {r.grantedBy.split('@')[0]}</span>}
                 </span>
-                <label className="switch" title={r.ownKey ? 'They already pay Sarvam themselves' : r.access ? 'Revoke' : 'Grant'}>
-                  <input type="checkbox" checked={r.access} disabled={busy === r.id} onChange={() => toggle(r)} />
-                  <span className="slider round"></span>
-                </label>
-              </div>
+              </button>
             ))}
           </div>
         )}
@@ -170,6 +198,7 @@ export default function AdminPage() {
   const busiestDay = Math.max(1, ...people.signups.map(d => d.n));
   const usageMax = Math.max(1, ...USAGE.map(([k]) => usage[k]));
   const totalItems = USAGE.reduce((n, [k]) => n + usage[k], 0);
+  const verifiedShare = people.total ? people.verified / people.total : 0;
 
   /* Meetings -> action items is an EXPANSION, not a funnel stage: one meeting yields several
      items, so 18 items from 16 meetings is 113% of the step above — a meaningless sentence and,
@@ -184,181 +213,195 @@ export default function AdminPage() {
   const perMeeting = loop.meetings ? (loop.extracted / loop.meetings).toFixed(1) : '0';
 
   return (
-    <div className="container viz" style={{ padding: '24px 16px 120px' }}>
-      <header style={{ marginBottom: '18px' }}>
-        <h1 className="page-title">Admin</h1>
-        <p className="page-subtitle">Aggregate numbers only — never anyone&rsquo;s content.</p>
+    <div className="container adm" style={{ padding: '24px 16px 120px' }}>
+      <header className="a-head">
+        <p className="a-eyebrow">Founders only · counts, never content</p>
+        <h1>How the app is doing</h1>
+        <p className="a-lede">
+          Counts only. The allowlist is the one place a person is named.
+        </p>
       </header>
 
       {/* Window picker — drives the time-based numbers; all-time totals keep an in-range companion */}
-      <div className="viz-chips" role="group" aria-label="Time range" style={{ marginBottom: '18px' }}>
+      <div className="a-range" role="group" aria-label="Time range">
         {RANGES.map(r => (
-          <button
-            key={r.key}
-            className={`viz-chip${range === r.key ? ' on' : ''}`}
-            aria-pressed={range === r.key}
-            onClick={() => setRange(r.key)}
-            style={{ cursor: 'pointer', font: 'inherit' }}
-          >
+          <button key={r.key} type="button" aria-pressed={range === r.key} onClick={() => setRange(r.key)}>
             {r.label}
           </button>
         ))}
       </div>
 
-      {/* Hero: exactly one per view */}
-      <section className="card viz-hero">
-        <span className="viz-hero-label">People on the app</span>
-        <span className="viz-hero-value">{compact(people.total)}</span>
-        <span className="viz-hero-sub">
-          {people.verified} confirmed their email · {pct(people.verified, people.total)}%
-        </span>
-      </section>
-
-      <section className="viz-kpis">
-        {[
-          { label: `New ${RANGE_WORD[range]}`, value: compact(people.newInRange) },
-          { label: `Saved something ${RANGE_WORD[range]}`, value: compact(people.createdSomethingInRange) },
-          { label: 'Things saved, all time', value: compact(totalItems) },
-          { label: `Feedback ${RANGE_WORD[range]}`, value: compact(fb.inRange) },
-        ].map(k => (
-          <div key={k.label} className="card viz-kpi">
-            <span className="viz-kpi-value">{k.value}</span>
-            <span className="viz-kpi-label">{k.label}</span>
+      {/* Keyed on the range so a new window replays the reveal — the numbers changing under a
+          static page is the one thing that makes a dashboard feel dead. */}
+      <div key={range}>
+        {/* Hero: exactly one per view. The dial is the verified share of the same number. */}
+        <section className="a-hero a-rise" style={step(0)}>
+          <div className="a-hero-text">
+            <span className="a-hero-label">People on the app</span>
+            <span className="a-hero-value">{compact(people.total)}</span>
+            <span className="a-hero-sub">{people.verified} confirmed their email</span>
           </div>
-        ))}
-      </section>
+          <figure className="a-dial">
+            <svg viewBox="0 0 96 96" aria-hidden="true" style={{ '--c': 251.3, '--p': verifiedShare } as CSSProperties}>
+              <circle className="track" cx="48" cy="48" r="40" />
+              <circle className="val" cx="48" cy="48" r="40" />
+            </svg>
+            <figcaption>{pct(people.verified, people.total)}% verified</figcaption>
+          </figure>
+        </section>
 
-      {/* ---------- Signups over the chosen window ---------- */}
-      <section className="card viz-card">
-        <h2 className="viz-title">Signups</h2>
-        <p className="viz-sub">{RANGES.find(r => r.key === range)?.label} · {people.signups.reduce((n, d) => n + d.n, 0)} total{stats.range.unit === 'month' ? ' · by month' : ''}</p>
-
-        <div className="viz-cols" role="img" aria-label={`Signups per ${stats.range.unit} for ${RANGE_WORD[range]}. ${people.signups.map(d => `${d.day}: ${d.n}`).join(', ')}`}>
-          {people.signups.map((d, i) => (
-            <div key={d.day} className="viz-col-slot" title={`${d.day} · ${d.n} signup${d.n === 1 ? '' : 's'}`}>
-              {d.n > 0 && d.n === busiestDay && <span className="viz-col-value">{d.n}</span>}
-              <span className="viz-col" style={{ height: `${Math.max(2, (d.n / busiestDay) * 100)}%` }} />
-              {(i === 0 || i === people.signups.length - 1) && (
-                <span className="viz-col-tick">{stats.range.unit === 'month' ? `${d.day.slice(5, 7)}/${d.day.slice(2, 4)}` : `${d.day.slice(8)}/${d.day.slice(5, 7)}`}</span>
-              )}
+        <section className="a-kpis">
+          {[
+            { label: `New ${RANGE_WORD[range]}`, value: people.newInRange },
+            { label: `Saved something ${RANGE_WORD[range]}`, value: people.createdSomethingInRange },
+            { label: 'Things saved, all time', value: totalItems },
+            { label: `Feedback ${RANGE_WORD[range]}`, value: fb.inRange },
+          ].map((k, i) => (
+            <div key={k.label} className="a-kpi a-rise" style={step(i + 1)}>
+              <span className={`a-kpi-value${k.value === 0 ? ' zero' : ''}`}>{compact(k.value)}</span>
+              <span className="a-kpi-label">{k.label}</span>
             </div>
           ))}
-        </div>
-      </section>
+        </section>
 
-      {/* ---------- The loop the whole product rests on ---------- */}
-      <section className="card viz-card">
-        <h2 className="viz-title">Meeting → task</h2>
-        <p className="viz-sub">
-          Whether a recorded meeting actually turns into work someone finishes. The drop between
-          stages is the number that matters.
-        </p>
+        {/* ---------- Signups over the chosen window ---------- */}
+        <section className="a-card a-rise" style={step(5)}>
+          <h2>Signups</h2>
+          <p className="a-sub">{RANGES.find(r => r.key === range)?.label} · {people.signups.reduce((n, d) => n + d.n, 0)} total{stats.range.unit === 'month' ? ' · by month' : ''}</p>
 
-        {loop.meetings > 0 && (
-          <p className="viz-context">
-            <strong>{compact(loop.meetings)}</strong> meetings recorded ·{' '}
-            <strong>{perMeeting}</strong> action items found per meeting
+          <div className="a-cols" role="img" aria-label={`Signups per ${stats.range.unit} for ${RANGE_WORD[range]}. ${people.signups.map(d => `${d.day}: ${d.n}`).join(', ')}`}>
+            {people.signups.map((d, i) => (
+              <div key={d.day} className="a-col-slot" title={`${d.day} · ${d.n} signup${d.n === 1 ? '' : 's'}`}>
+                {d.n > 0 && d.n === busiestDay && <span className="a-col-value">{d.n}</span>}
+                <span className="a-col" style={{ height: `${Math.max(2, (d.n / busiestDay) * 100)}%`, ...step(i) }} />
+                {(i === 0 || i === people.signups.length - 1) && (
+                  <span className="a-col-tick">{stats.range.unit === 'month' ? `${d.day.slice(5, 7)}/${d.day.slice(2, 4)}` : `${d.day.slice(8)}/${d.day.slice(5, 7)}`}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ---------- The loop the whole product rests on ---------- */}
+        <section className="a-card a-rise" style={step(6)}>
+          <h2>Meeting → task</h2>
+          <p className="a-sub">
+            Whether a recorded meeting actually turns into work someone finishes. The drop between
+            stages is the number that matters.
           </p>
-        )}
+          {loop.meetings > 0 && (
+            <p className="a-sub">
+              <strong>{compact(loop.meetings)}</strong> meetings recorded ·{' '}
+              <strong>{perMeeting}</strong> action items found per meeting
+            </p>
+          )}
 
-        {loop.meetings === 0 ? (
-          <p className="viz-empty">No meetings recorded yet.</p>
-        ) : (
-          <div className="viz-funnel">
-            {stages.map((s, i) => {
-              const prev = i > 0 ? stages[i - 1].n : null;
-              return (
-                <div key={s.label} className="viz-funnel-row">
-                  <div className="viz-funnel-head">
-                    <span className="viz-funnel-label">{s.label}</span>
-                    <span className="viz-funnel-value">{compact(s.n)}</span>
+          {loop.meetings === 0 ? (
+            <p className="a-empty">No meetings recorded yet.</p>
+          ) : (
+            <div className="a-descent">
+              {stages.map((s, i) => {
+                const prev = i > 0 ? stages[i - 1].n : null;
+                return (
+                  <div key={s.label} className="a-stage">
+                    {/* s1..s4 are the only ordinal tokens admin.css defines: a fifth stage would
+                        ask for .s5, a class with no rule, and render as an invisible bar. */}
+                    <span className={`a-node s${i + 1}`} style={step(i)} />
+                    <div>
+                      <span className="a-stage-head">
+                        <span className="a-stage-label">{s.label}</span>
+                        <span className="a-stage-value">{compact(s.n)}</span>
+                      </span>
+                      <span className="a-stage-track">
+                        <span
+                          className={`a-stage-bar s${i + 1}`}
+                          // Clamped both ways: a stage can never render wider than the track, and
+                          // a non-zero stage never renders as nothing.
+                          style={{ width: `${s.n === 0 ? 0 : Math.min(100, Math.max(1.5, (s.n / Math.max(1, stages[0].n)) * 100))}%`, ...step(i) }}
+                          title={`${s.label}: ${s.n}`}
+                        />
+                      </span>
+                      {prev !== null && (
+                        <span className="a-drop">
+                          {prev === 0 ? '—'
+                            : s.n === 0 ? 'None yet'
+                            : `${pct(s.n, prev)}% of the step above`}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <span
-                    // s1..s4 are the only ordinal tokens globals.css defines. This was s${i+2},
-                    // which fitted three stages exactly — a fourth would have asked for .s5, a
-                    // class with no rule, and rendered as an invisible bar.
-                    className={`viz-funnel-bar s${i + 1}`}
-                    // Clamped both ways: a stage can never render wider than the card, and a
-                    // non-zero stage never renders as nothing.
-                    style={{ width: `${s.n === 0 ? 0 : Math.min(100, Math.max(1.5, (s.n / Math.max(1, stages[0].n)) * 100))}%` }}
-                    title={`${s.label}: ${s.n}`}
-                  />
-                  {prev !== null && (
-                    <span className="viz-funnel-drop">
-                      {prev === 0 ? '—'
-                        : s.n === 0 ? 'None yet'
-                        : `${pct(s.n, prev)}% of the step above`}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* ---------- What people actually touch ---------- */}
-      <section className="card viz-card">
-        <h2 className="viz-title">What&rsquo;s being used</h2>
-        <p className="viz-sub">All time, with what was added {RANGE_WORD[range]} in brackets.</p>
-
-        <div className="viz-ranked">
-          {[...USAGE].sort((a, b) => usage[b[0]] - usage[a[0]]).map(([key, label, Icon]) => (
-            <div key={key} className="viz-ranked-row" title={`${label}: ${usage[key]} all time, ${usage.inRange[key]} ${RANGE_WORD[range]}`}>
-              <span className="viz-ranked-label"><Icon size={14} strokeWidth={2.2} /> {label}</span>
-              <span className="viz-ranked-track">
-                <span className="viz-ranked-bar" style={{ width: `${Math.max(1.5, (usage[key] / usageMax) * 100)}%` }} />
-              </span>
-              <span className="viz-ranked-value">{compact(usage[key])}{usage.inRange[key] > 0 && <span className="viz-ranked-delta"> +{compact(usage.inRange[key])}</span>}</span>
+                );
+              })}
             </div>
-          ))}
-        </div>
-      </section>
+          )}
+        </section>
 
-      <SarvamAccessCard />
+        {/* ---------- What people actually touch ---------- */}
+        <section className="a-card a-rise" style={step(7)}>
+          <h2>What&rsquo;s being used</h2>
+          <p className="a-sub">All time, with what was added {RANGE_WORD[range]} underneath.</p>
 
-      {/* ---------- Feedback ---------- */}
-      <section className="card viz-card">
-        <h2 className="viz-title">Help us improve</h2>
-        <p className="viz-sub">{fb.total} {fb.total === 1 ? 'submission' : 'submissions'} · {fb.inRange} {RANGE_WORD[range]}</p>
+          <div className="a-ranked">
+            {[...USAGE].sort((a, b) => usage[b[0]] - usage[a[0]]).map(([key, label, Icon], i) => (
+              <div key={key} className="a-ranked-row" title={`${label}: ${usage[key]} all time, ${usage.inRange[key]} ${RANGE_WORD[range]}`}>
+                <span className="a-ranked-label"><Icon size={14} strokeWidth={2.2} /><span>{label}</span></span>
+                <span className="a-ranked-track">
+                  <span className="a-ranked-bar" style={{ width: `${Math.max(1.5, (usage[key] / usageMax) * 100)}%`, ...step(i) }} />
+                </span>
+                <span className="a-ranked-value">
+                  {compact(usage[key])}
+                  {usage.inRange[key] > 0 && <span className="a-ranked-delta">+{compact(usage.inRange[key])}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
 
-        <div className="viz-chips">
+      <div style={{ marginTop: '12px' }}><SarvamAccessCard /></div>
+
+      {/* ---------- Feedback. Designed like the rest of the page down to the card, and then
+           deliberately left alone inside it: the report itself is plain text at reading size. --- */}
+      <section className="a-card" style={{ marginTop: '12px' }}>
+        <h2>Help us improve</h2>
+        <p className="a-sub">{fb.total} {fb.total === 1 ? 'submission' : 'submissions'} · {fb.inRange} {RANGE_WORD[range]}</p>
+
+        <div className="a-chips">
           {([['bug', 'Bugs', fb.bug], ['idea', 'Ideas', fb.idea], ['other', 'Other', fb.other]] as const).map(([kind, label, n]) => {
             const Icon = ICON[kind];
-            return (
-              <span key={kind} className="viz-chip"><Icon size={14} /> {n} {label}</span>
-            );
+            return <span key={kind} className={`a-chip ${kind}`}><Icon size={14} /> {n} {label}</span>;
           })}
         </div>
+
+        {feedback.length === 0
+          ? <p className="a-empty">Nothing has come in yet.</p>
+          : (
+            <div className="a-notes">
+              {feedback.map(r => {
+                const kind = (r.kind in ICON ? r.kind : 'other') as keyof typeof ICON;
+                const Icon = ICON[kind];
+                return (
+                  <article key={r._id} className="a-note">
+                    <div className="a-note-top">
+                      <span className={`a-note-kind ${kind}`}><Icon size={13} /> {r.kind}</span>
+                      <span className="a-note-when">{formatInZone(r.createdAt)}</span>
+                    </div>
+                    <p className="a-note-body">{r.message}</p>
+                    {r.shot?.url && (
+                      <a className="a-note-shot" href={r.shot.url} target="_blank" rel="noreferrer">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={r.shot.url} alt="Screenshot attached to this report" />
+                      </a>
+                    )}
+                    <div className="a-note-from">{r.email || 'unknown'}{r.page ? ` · ${r.page}` : ''}</div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
       </section>
 
-      {!!feedback.length && (
-        <div style={{ display: 'grid', gap: '12px', marginTop: '14px' }}>
-          {feedback.map(r => {
-            const Icon = ICON[r.kind as keyof typeof ICON] || MessageSquare;
-            return (
-              <div key={r._id} className="card">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                  <Icon size={14} /> {r.kind}
-                  <span style={{ marginLeft: 'auto', textTransform: 'none', letterSpacing: 0 }}>{formatInZone(r.createdAt)}</span>
-                </div>
-                <p style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap', marginBottom: '10px' }}>{r.message}</p>
-                {r.shot?.url && (
-                  <a href={r.shot.url} target="_blank" rel="noreferrer">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={r.shot.url} alt="Screenshot" style={{ maxWidth: '100%', maxHeight: '240px', borderRadius: '12px', border: '1px solid var(--border-color)', marginBottom: '10px' }} />
-                  </a>
-                )}
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                  {r.email || 'unknown'}{r.page ? ` · ${r.page}` : ''}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <p className="auth-foot" style={{ marginTop: '22px' }}>
+      <p className="a-foot">
         <Link href="/feedback-inbox">Feedback on its own page</Link> · <Link href="/">Back to the app</Link>
       </p>
     </div>
