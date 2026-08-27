@@ -223,8 +223,9 @@ export default function Tour() {
           )}
         </p>
         <div className="tour-bubble-foot">
-          {!isLast && <button className="tour-btn ghost" onClick={next}>Skip</button>}
-          {!isLast && <button className="tour-btn ghost" onClick={finish} style={{ marginLeft: 'auto' }}>Done</button>}
+          {/* Skip leaves the tour. It used to call next(), which made it a second Next sitting
+              beside the real one — two buttons, one job, and no way out except the X. */}
+          {!isLast && <button className="tour-btn ghost" onClick={finish} style={{ marginRight: 'auto' }}>Skip tour</button>}
           {isLast
             ? <button className="tour-btn primary" onClick={finish} style={{ marginLeft: 'auto' }}><Check size={15} /> Done</button>
             : <button className="tour-btn primary" onClick={next}>Next <ArrowRight size={15} /></button>}
