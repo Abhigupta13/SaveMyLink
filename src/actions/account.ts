@@ -29,6 +29,7 @@ import { JarvisSession } from '@/lib/models/JarvisSession';
 import { Project } from '@/lib/models/Project';
 import { deleteUpload } from '@/lib/storage';
 import { chooseHandover, isPurgeDue, type HandoverCandidate } from '@/lib/accountDeletion';
+import { dropAssignee } from '@/lib/dropAssignee';
 
 /** Best-effort S3 cleanup: a missing object must never stall the deletion. */
 async function deleteKeys(keys: (string | undefined | null)[]) {
@@ -93,6 +94,10 @@ async function handOverOwnedGroups(userId: string, email: string) {
     project.memberEmails = (project.memberEmails || []).filter(e => e && e !== email);
     project.viewerEmails = (project.viewerEmails || []).filter(e => e && e !== email);
     await project.save();
+    // Off the group, off its tasks — the same rule removeMember follows. The work stays with the
+    // heir; only the leaver's claim on it goes, so nothing points at an account that is being
+    // erased. No trail: Event.deleteMany({ actorId }) below would delete it moments later.
+    await dropAssignee(project._id, email, null);
   }
 }
 
@@ -107,12 +112,20 @@ export async function eraseAccount(userId: string, email: string, role: string) 
   // 1. Groups they created: hand over to the oldest survivor, or delete if sole member.
   await handOverOwnedGroups(userId, lower);
 
-  // 2. Groups they were only ON: drop them from every list, leaving all shared work in place.
-  //    Their assignments stay (like removeMember) — the retained name/email keeps them readable.
+  // 2. Groups they were only ON: drop them from every list, leaving all shared work in place —
+  //    but not their claim on it, exactly like removeMember. A task left pointing at a deleted
+  //    account is held by nobody and says so to nobody; if a co-assignee remains they inherit it
+  //    as primary, and if not it lands in the group's "Needs an owner" band. Ids first, because
+  //    the $pull is what makes them unfindable afterwards.
+  const on = await Project.find({
+    ownerId: { $ne: new Types.ObjectId(userId) },
+    $or: [{ ownerEmails: lower }, { memberEmails: lower }, { viewerEmails: lower }],
+  }).select('_id').lean<{ _id: Types.ObjectId }[]>();
   await Project.updateMany(
-    { ownerId: { $ne: new Types.ObjectId(userId) }, $or: [{ ownerEmails: lower }, { memberEmails: lower }, { viewerEmails: lower }] },
+    { _id: { $in: on.map(p => p._id) } },
     { $pull: { ownerEmails: lower, memberEmails: lower, viewerEmails: lower } },
   );
+  for (const p of on) await dropAssignee(p._id, lower, null);
 
   // 3. Their own PERSONAL content. Project-scoped work they authored stays with the surviving
   //    group — that is the whole point of the handover. Gather S3 keys before deleting the rows.

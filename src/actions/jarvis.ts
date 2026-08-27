@@ -21,6 +21,7 @@ import { dayKey, spendQuestion, capMessage, SHARED_OUT_MESSAGE, JARVIS_DAILY_LIM
 import { isHowTo, HOW_IT_WORKS, EXTRA_PAGES } from "@/lib/manual";
 import { NAV } from "@/lib/nav";
 import { memberCount } from "@/lib/visibility";
+import { dropAssignee } from "@/lib/dropAssignee";
 import { extractUrl, hostnameOf } from "@/lib/url";
 import { Category } from "@/lib/models/Category";
 import { createLink } from "@/actions/link";
@@ -339,17 +340,19 @@ async function applyActions(actions: any[], env: {
             project.memberEmails.push(add); changes.push(`added ${add}`);
           }
           const drop = str(a.removeMember).toLowerCase();
-          if (drop && isOwner && drop !== email && project.memberEmails.includes(drop)) {
+          const removed = drop && isOwner && drop !== email && project.memberEmails.includes(drop);
+          if (removed) {
             project.memberEmails = project.memberEmails.filter(e => e !== drop);
-            // Their tasks keep their assignee, same as removeMember in actions/project.ts — the
-            // group page surfaces them under "Needs an owner". This path used to blank them, so
-            // "remove X from the project" through Jarvis quietly orphaned their work.
             changes.push(`removed ${drop}`);
           }
 
           if (!changes.length) continue;
           if (hold(a, project._id)) continue;
           await project.save();
+          // Same rule as removeMember in actions/project.ts, and for the same reason: an assignee
+          // still reads the task. Only after the save, so a removal that never landed cannot
+          // strip anybody's work.
+          if (removed) await dropAssignee(project._id, drop, userId);
           created.push({ id: String(project._id), type: 'project', title: project.name, detail: `Updated · ${[...new Set(changes)].join(', ')}` });
         } else if (a?.type === 'create_task' && a.title) {
           const named = a.projectName ? projects.find((p: any) => p.name?.toLowerCase() === String(a.projectName).toLowerCase()) : null;

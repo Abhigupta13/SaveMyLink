@@ -11,7 +11,7 @@ import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, fo
 import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
 import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite, withinProject, canAccessDoc } from '../src/lib/scope.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
-import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf, assigneeEmailsOf } from '../src/lib/taskAccess.ts';
+import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf, assigneeEmailsOf, assigneesAfterLeaving } from '../src/lib/taskAccess.ts';
 import { allowedAssignees, MAX_ASSIGNEES } from '../src/lib/validation.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
 import { projectNameMap, sharedLabel, needsShareNotice, memberCount } from '../src/lib/visibility.ts';
@@ -511,6 +511,22 @@ assert.equal(needsOwner({ assigneeEmail: 'boss@x.com', assigneeEmails: ['boss@x.
   'and the primary holds it when the co-assignee left');
 assert.equal(needsOwner({ assigneeEmail: 'gone@x.com', assigneeEmails: ['gone@x.com', 'also-gone@x.com'] }, MEMBERS), true,
   'only when every last one of them has left does it need an owner');
+
+// assigneesAfterLeaving: which is why the band above can no longer be the compensating control.
+// Removing someone from a group removes them from its tasks, so the list they leave behind is
+// what gets written back — [0] is the new primary, and empty means genuinely unassigned.
+const twoUp = { assigneeEmail: 'boss@x.com', assigneeEmails: ['boss@x.com', 'me@x.com'] };
+assert.deepEqual(assigneesAfterLeaving(twoUp, 'BOSS@x.com'), ['me@x.com'],
+  'the primary leaving promotes the next assignee, case-insensitively');
+assert.deepEqual(assigneesAfterLeaving(twoUp, 'me@x.com'), ['boss@x.com'],
+  'a co-assignee leaving does not disturb the primary');
+assert.deepEqual(assigneesAfterLeaving({ assigneeEmail: 'gone@x.com' }, 'gone@x.com'), [],
+  'the only assignee leaving unassigns the task rather than orphaning it on a stranger');
+assert.equal(needsOwner({ assigneeEmails: assigneesAfterLeaving({ assigneeEmail: 'gone@x.com' }, 'gone@x.com') }, MEMBERS), true,
+  'and that is exactly the state the "Needs an owner" band fires on');
+assert.deepEqual(assigneesAfterLeaving(twoUp, 'nobody@x.com'), ['boss@x.com', 'me@x.com'],
+  'a name that was never on it changes nothing');
+assert.deepEqual(assigneesAfterLeaving({}, 'gone@x.com'), [], 'an unassigned task stays unassigned');
 
 // ---------------------------------------------------------------------------
 // The activity trail's vocabulary.

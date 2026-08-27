@@ -130,6 +130,23 @@ export function canSignOff(task: TaskLike, isOwner: boolean): boolean {
  * tasks the extractor could not attribute to anyone, are exactly the work that gets dropped —
  * and hiding them because they predate the fix is how the band would launch already lying.
  */
+/**
+ * Who is left on a task once somebody leaves the group — in order, so `[0]` is the new primary.
+ *
+ * The order IS the rule. `assigneeEmailsOf` puts the primary first, so dropping one name promotes
+ * the next: shared work stays held by whoever remains and nothing about the task is lost. An empty
+ * result means the departed person was the only assignee, which leaves the task genuinely
+ * unassigned — the state `needsOwner` below is looking for, so it surfaces under "Needs an owner"
+ * rather than sitting in a list pointed at somebody who is gone.
+ *
+ * Removal is not a reshuffle: the caller writes this list back verbatim. It must never invent an
+ * assignee, and it must never keep the leaver, which is the read leak this exists to close.
+ */
+export function assigneesAfterLeaving(task: TaskLike, email: string): string[] {
+  const gone = lower(email);
+  return assigneeEmailsOf(task).filter(e => e !== gone);
+}
+
 export function needsOwner(task: TaskLike, memberEmails: (string | null | undefined)[]): boolean {
   if (task.completed) return false;
   const assigned = assigneeEmailsOf(task);

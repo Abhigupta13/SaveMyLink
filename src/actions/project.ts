@@ -13,6 +13,7 @@ import { ownerFilter, myProjectFilter } from "@/lib/projectAccess";
 import { appUrl } from "@/lib/url";
 import { isProjectCreator, type OwnableProject } from "@/lib/scope";
 import { Event, recordEvent } from "@/lib/models/Event";
+import { dropAssignee } from "@/lib/dropAssignee";
 import { sinceDays } from "@/lib/activity";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
@@ -193,11 +194,14 @@ export async function removeMember(projectId: string, email: string) {
     // client left in viewerEmails would keep reading a group nobody thinks they are on.
     await Project.updateOne(filter, { $pull: { memberEmails: normalized, ownerEmails: normalized, viewerEmails: normalized } });
 
-    // Their assignments STAY, name and all. Blanking the assignee used to make the work
-    // indistinguishable from a task nobody had ever been given — the due date survived but the
-    // history of who owed it did not, and it silently sank into the list. The group page now
-    // surfaces every one of these under "Needs an owner" instead, where it takes one tap to
-    // hand over. Nothing is dropped just because somebody left.
+    // Leaving the group takes their claim on its work with them. Their assignments used to stay,
+    // with the "Needs an owner" band as the compensating control — but that band only fires when
+    // NO assignee is left in the group, so a task shared with a second person never surfaced and
+    // the removed person kept reading its title and description through My Tasks, search, Jarvis
+    // and their phone reminders. The claim is what goes: the task, its due date and its history
+    // stay with the group, and if they were the only assignee it lands in "Needs an owner"
+    // exactly as before, one tap from being handed over.
+    await dropAssignee(project._id, normalized, session.user.id);
 
     await recordEvent({ projectId, actorId: session.user.id, verb: 'member_removed', subject: normalized });
 
