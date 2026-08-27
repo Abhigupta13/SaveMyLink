@@ -24,6 +24,7 @@ import { memberCount } from "@/lib/visibility";
 import { extractUrl, hostnameOf } from "@/lib/url";
 import { Category } from "@/lib/models/Category";
 import { createLink } from "@/actions/link";
+import { createTask, updateTask, toggleTask } from "@/actions/task";
 import { User } from "@/lib/models/User";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
@@ -232,12 +233,12 @@ async function applyActions(actions: any[], env: {
     for (const a of (actions || []).slice(0, 5)) {
       try {
         if (a?.type === 'update_task' && a.id) {
-          const set = patch(a, { title: str, description: str, completed: (v: any) => v === true || v === 'true' });
+          const set = patch(a, { title: str, description: str });
           if (a.dueAt !== undefined) {
             // The model writes a bare wall clock ("2026-08-26T17:00") in the user's zone.
             // Parsed here it would take the server's zone instead — 17:00 becoming 22:30 in India.
             const due = a.dueAt === null || /^(none|null|clear)$/i.test(str(a.dueAt)) ? null : zonedToUtc(a.dueAt, tz);
-            set.dueAt = due || null;
+            set.dueAt = due ? due.toISOString() : null;
           }
           // Append instead of replace, so a long description is never lost to a rewrite
           const add = str(a.appendDescription);
@@ -250,11 +251,31 @@ async function applyActions(actions: any[], env: {
           if (!mayWrite(task.projectId)) continue;   // visible in a view-only group is not editable
           if (hold(a, task.projectId)) continue;
           if (add) set.description = [str(set.description ?? task.description), add].filter(Boolean).join('\n');
-          if (!Object.keys(set).length) continue;
-          Object.assign(task, set);
-          await task.save();
-          created.push({ id: String(task._id), type: 'task', title: task.title, detail: `Updated${task.dueAt ? ` · due ${d(task.dueAt)}` : ''}`, urgent: !task.completed && !!task.dueAt && task.dueAt.getTime() - Date.now() < 48 * 3600e3 });
-          createdTasks.push({ _id: String(task._id), title: task.title, dueAt: task.dueAt ? task.dueAt.toISOString() : null, completed: task.completed });
+          const want = a.completed === undefined || a.completed === null ? undefined : a.completed === true || a.completed === 'true';
+          const flip = want !== undefined && want !== !!task.completed;
+          if (!Object.keys(set).length && !flip) continue;
+          /* The write itself goes through the SAME two actions the checkbox and the edit sheet on
+             /tasks call. mayWrite above only asks "am I a writer in this group", which let a plain
+             member complete, reopen, retitle or rewrite a teammate's task through Jarvis while the
+             checkbox correctly refused her — and Object.assign here skipped the rule that a reopen
+             drops the sign-off, so "signed off" stopped being a subset of "completed" and the
+             admin funnel counted approvals for work that was open again.
+             Both actions re-check the session themselves, exactly like createLink below. */
+          let saved: any = null;
+          if (Object.keys(set).length) {
+            const res = await updateTask(String(task._id), set);
+            if (!res.success) continue;
+            saved = res.task;
+          }
+          if (flip) {
+            const res = await toggleTask(String(task._id));
+            if (!res.success) continue;
+            saved = res.task;
+          }
+          if (!saved) continue;
+          const dueAt = saved.dueAt ? new Date(saved.dueAt) : null;
+          created.push({ id: String(saved._id), type: 'task', title: saved.title, detail: `Updated${dueAt ? ` · due ${d(dueAt)}` : ''}`, urgent: !saved.completed && !!dueAt && dueAt.getTime() - Date.now() < 48 * 3600e3 });
+          createdTasks.push({ _id: String(saved._id), title: saved.title, dueAt: dueAt ? dueAt.toISOString() : null, completed: saved.completed });
         } else if (a?.type === 'update_note' && a.id) {
           const note = await Note.findOne({ _id: a.id, userId });
           if (!note) continue;
@@ -336,22 +357,21 @@ async function applyActions(actions: any[], env: {
           // the client's project" into a personal task is a worse answer than not doing it.
           if (named && !writable.has(String(named._id))) continue;
           if (named && hold(a, named._id)) continue;
-          const project = named;
-          let assigneeId;
-          if (project && a.assigneeEmail) {
-            const u = await User.findOne({ email: String(a.assigneeEmail).toLowerCase() }).select('_id');
-            assigneeId = u?._id;
-          }
-          const dueAt = zonedToUtc(a.dueAt, tz) || undefined;
-          const task = await Task.create({
-            title: String(a.title), userId,
+          const due = zonedToUtc(a.dueAt, tz);
+          /* The same action the composer on /tasks calls. The Task.create that used to live here
+             took the model's assigneeEmail on trust — any address at all, member or not — which is
+             the create half of the hole allowedAssignees closes on the update half. */
+          const res = await createTask(String(a.title), {
             description: a.description ? String(a.description) : undefined,
-            dueAt,
-            projectId: project?._id, assigneeId,
-            assigneeEmail: project && a.assigneeEmail ? String(a.assigneeEmail).toLowerCase() : undefined,
+            dueAt: due ? due.toISOString() : undefined,
+            projectId: named ? String(named._id) : undefined,
+            assigneeEmail: a.assigneeEmail ? String(a.assigneeEmail) : undefined,
           });
-          created.push({ id: String(task._id), type: 'task', title: task.title, detail: task.dueAt ? `Created · due ${d(task.dueAt)}` : 'Created', urgent: !!task.dueAt && task.dueAt.getTime() - Date.now() < 48 * 3600e3 });
-          createdTasks.push({ _id: String(task._id), title: task.title, dueAt: task.dueAt ? task.dueAt.toISOString() : null });
+          if (!res.success || !res.task) continue;
+          const task = res.task;
+          const dueAt = task.dueAt ? new Date(task.dueAt) : null;
+          created.push({ id: String(task._id), type: 'task', title: task.title, detail: dueAt ? `Created · due ${d(dueAt)}` : 'Created', urgent: !!dueAt && dueAt.getTime() - Date.now() < 48 * 3600e3 });
+          createdTasks.push({ _id: String(task._id), title: task.title, dueAt: dueAt ? dueAt.toISOString() : null });
         } else if (a?.type === 'create_note' && (a.text || a.title)) {
           const note = await Note.create({ userId, title: a.title ? String(a.title) : undefined, body: String(a.text || '') });
           created.push({ id: String(note._id), type: 'note', title: note.title || String(a.text).slice(0, 60), detail: 'Saved to Notes' });

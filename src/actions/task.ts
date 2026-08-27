@@ -4,8 +4,9 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject } from "@/lib/projectAccess";
+import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject, projectPeople } from "@/lib/projectAccess";
 import { canWorkOn, canSignOff, assigneeEmailsOf } from "@/lib/taskAccess";
+import { allowedAssignees } from "@/lib/validation";
 import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
 import { Types } from "mongoose";
@@ -34,16 +35,12 @@ async function claimAssignments(userId: string, email?: string | null) {
 }
 
 /**
- * The assignee list a write should store, from whatever the caller sent. The primary leads it —
- * `assigneeEmail === assigneeEmails[0]` is the invariant everything else reads through.
- *
- * Capped, because this arrives from the browser: an unbounded list would be an unbounded $in and
- * an unbounded document, chosen by whoever is calling the action.
+ * The assignee list a write should store: whatever the caller sent, narrowed to real addresses
+ * belonging to people who are actually in the group. The rule itself is `allowedAssignees` in
+ * lib/validation, where scripts/self-check.mjs can hold it to account without a database.
  */
-const MAX_ASSIGNEES = 20;
-function assigneeList(primary?: string | null, list?: (string | null | undefined)[] | null): string[] {
-  return [...new Set([primary, ...(list || [])].map(lower).filter(Boolean))].slice(0, MAX_ASSIGNEES);
-}
+const assigneeList = async (projectId: unknown, primary?: string | null, list?: (string | null | undefined)[] | null) =>
+  allowedAssignees(primary, list, await projectPeople(projectId));
 
 /**
  * Which of those addresses already have accounts. Returned as a map rather than a list because
@@ -134,7 +131,7 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
     if (opts.projectId) {
       const project = await projectForWriter(opts.projectId, session.user.id, session.user.email);
       if (!project) return { success: false, error: 'You cannot add work to this group' };
-      emails = assigneeList(opts.assigneeEmail, opts.assigneeEmails);
+      emails = await assigneeList(project._id, opts.assigneeEmail, opts.assigneeEmails);
       byEmail = await resolveAssignees(emails);   // unresolved → kept as email, claimed when they sign up
     }
 
@@ -185,6 +182,11 @@ export async function updateTask(id: string, data: { title?: string; description
     if (data.title !== undefined) task.title = data.title;
     if (data.description !== undefined) task.description = data.description;
     if (data.dueAt !== undefined) task.dueAt = data.dueAt ? new Date(data.dueAt) : undefined;
+    // WHERE the task ends up is settled first, because it decides who may be on it. The other
+    // order shipped: the move-to-personal branch cleared the assignees and the assignee block ran
+    // after and put them straight back from client input. A member who was an assignee could take
+    // the owner's task out of the group, keep write on it through the assignee branch of
+    // canWorkOn, and leave the owner unable to see or delete it.
     if (data.projectId !== undefined) {
       if (data.projectId) {
         const project = await projectForWriter(data.projectId, session.user.id, session.user.email);
@@ -192,11 +194,13 @@ export async function updateTask(id: string, data: { title?: string; description
         task.projectId = project._id as any;
       } else {
         task.projectId = undefined;
-        task.set({ assigneeId: undefined, assigneeEmail: undefined, assigneeIds: [], assigneeEmails: [] }); // personal tasks have no assignee
       }
     }
-    if (data.assigneeEmail !== undefined || data.assigneeEmails !== undefined) {
-      const emails = assigneeList(data.assigneeEmail, data.assigneeEmails);
+    if (!task.projectId) {
+      // Personal tasks have no assignee, and no assignee input survives the move out.
+      task.set({ assigneeId: undefined, assigneeEmail: undefined, assigneeIds: [], assigneeEmails: [] });
+    } else if (data.assigneeEmail !== undefined || data.assigneeEmails !== undefined) {
+      const emails = await assigneeList(task.projectId, data.assigneeEmail, data.assigneeEmails);
       const byEmail = await resolveAssignees(emails);
       task.set({
         assigneeId: byEmail.get(emails[0]),

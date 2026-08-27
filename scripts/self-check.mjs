@@ -12,6 +12,7 @@ import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src
 import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite, withinProject, canAccessDoc } from '../src/lib/scope.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf, assigneeEmailsOf } from '../src/lib/taskAccess.ts';
+import { allowedAssignees, MAX_ASSIGNEES } from '../src/lib/validation.ts';
 import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/activity.ts';
 import { projectNameMap, sharedLabel, needsShareNotice, memberCount } from '../src/lib/visibility.ts';
 import { resolveRange, MAX_SPAN_DAYS } from '../src/lib/adminRange.ts';
@@ -1013,6 +1014,87 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   // The consequence the bug actually had: writing into your own group.
   assert.equal(canWrite(asObjectIdLike, 'me@x.com', 'u1'), true, 'the creator may write to a group read with .lean()');
   assert.equal(canWrite(asObjectIdLike, 'stranger@x.com', 'u2'), false, 'and a stranger still may not');
+}
+
+// ----------------------------------------------------------------------------------------------
+// Who may be PUT on a task. assigneeEmails arrives from a browser and lands in the named person's
+// My Tasks, their search, the weekly digest, their phone reminders and — through Jarvis — an LLM
+// prompt holding write primitives. Unchecked, it is not an assignment: it is a delivery mechanism
+// for whatever the caller typed into the title, aimed at twenty strangers at once.
+{
+  const GROUP = ['Owner@x.com', 'member@x.com', 'client@x.com'];   // owner ∪ members ∪ viewers
+
+  assert.deepEqual(allowedAssignees('member@x.com', [], GROUP), ['member@x.com']);
+  assert.deepEqual(allowedAssignees('MEMBER@X.com', null, GROUP), ['member@x.com'], 'lowercased on both sides');
+  assert.deepEqual(allowedAssignees(' member@x.com ', [], GROUP), ['member@x.com'], 'trimmed, not refused for it');
+  assert.deepEqual(allowedAssignees('owner@x.com', ['client@x.com'], GROUP), ['owner@x.com', 'client@x.com'],
+    'the primary leads, so assigneeEmail === assigneeEmails[0] still holds');
+
+  // Not in the group: dropped in silence, exactly like a chip nobody ticked. Refusing the whole
+  // write instead would turn one stale address into a save that will not go through.
+  assert.deepEqual(allowedAssignees('stranger@x.com', [], GROUP), [], 'a non-member cannot be given work');
+  assert.deepEqual(allowedAssignees('member@x.com', ['stranger@x.com'], GROUP), ['member@x.com'],
+    'one outsider in the list does not travel, and does not break the rest');
+  assert.deepEqual(allowedAssignees('member@x.com', [], []), [], 'an empty roster admits nobody');
+  assert.deepEqual(allowedAssignees(null, undefined, GROUP), [], 'nothing sent is nobody assigned');
+
+  // Not an address: refused before it can be stored, mailed, or matched on at signup.
+  for (const junk of ['not-an-email', 'a@b', 'a@b.c', 'two words@x.com', 'a@b.com<script>'])
+    assert.deepEqual(allowedAssignees(junk, [], [...GROUP, junk]), [],
+      `not an address, even when the roster somehow contains it: "${junk}"`);
+
+  // The cap is what stops one action writing an unbounded $in and an unbounded document.
+  const crowd = Array.from({ length: 30 }, (_, i) => `p${i}@x.com`);
+  assert.equal(allowedAssignees(crowd[0], crowd, crowd).length, MAX_ASSIGNEES, 'the cap holds against a full roster');
+  assert.deepEqual(allowedAssignees('member@x.com', ['MEMBER@x.com', 'member@x.com'], GROUP), ['member@x.com'],
+    'nobody is listed twice, whatever the casing');
+}
+
+// ----------------------------------------------------------------------------------------------
+// Jarvis and the checkbox must answer to the SAME authority.
+//
+// The gate on the Jarvis path was a scoped find plus "am I a writer in this group", which never
+// consulted canWorkOn — so a plain member could ask Jarvis to complete, reopen, retitle or rewrite
+// a teammate's task while the checkbox on /tasks correctly refused her. And its Object.assign
+// skipped the rule that reopening drops the sign-off, which is what keeps "signed off" a subset of
+// "completed" on the funnel. Both are structural, so they are asserted structurally.
+{
+  const jarvis = readFileSync(new URL('../src/actions/jarvis.ts', import.meta.url), 'utf8');
+  const task = readFileSync(new URL('../src/actions/task.ts', import.meta.url), 'utf8');
+  const between = (src, from, to) => src.slice(src.indexOf(from), src.indexOf(to));
+
+  const patch = between(jarvis, "a?.type === 'update_task'", "a?.type === 'update_note'");
+  assert.ok(patch.length > 500, 'found the Jarvis update_task branch');
+  assert.ok(patch.includes('await updateTask('), 'the field patch goes through updateTask');
+  assert.ok(patch.includes('await toggleTask('), 'and a completion change through toggleTask');
+  assert.ok(!/Object\.assign\(task,/.test(patch), 'Jarvis never assigns a task field itself');
+  assert.ok(!/task\.save\(\)/.test(patch), 'and never saves one behind those gates');
+
+  const make = between(jarvis, "a?.type === 'create_task'", "a?.type === 'create_note'");
+  assert.ok(make.includes('await createTask('), 'and it creates through createTask, which checks the assignee');
+  assert.ok(!/Task\.create\(/.test(jarvis), 'jarvis.ts writes no task rows of its own at all');
+
+  // The authority both of those inherit.
+  assert.equal((task.match(/canWorkOn\(task,/g) || []).length, 2, 'updateTask and toggleTask each ask canWorkOn');
+  assert.ok(task.includes('if (!task.completed) task.set({ signedOffBy: undefined, signedOffAt: undefined })'),
+    'reopening drops the sign-off, on the one path everything now reopens through');
+}
+
+// ----------------------------------------------------------------------------------------------
+// Moving a task OUT of a group cannot smuggle assignees with it. The clear used to run inside the
+// projectId branch and the assignee block ran after it, re-setting them from client input: a
+// member who was an assignee could take the owner's task private, keep write on it through the
+// assignee branch of canWorkOn, and leave the owner unable to see or delete it.
+{
+  const task = readFileSync(new URL('../src/actions/task.ts', import.meta.url), 'utf8');
+  assert.ok(task.indexOf('if (!task.projectId) {') > task.indexOf('You cannot move work into that group'),
+    'where the task lands is settled before who is on it');
+  assert.ok(/if \(!task\.projectId\) \{[\s\S]{0,400}?\} else if \(data\.assigneeEmail !== undefined/.test(task),
+    'assignee input is ignored outright when the task is being made personal');
+  // One list builder, and it is the pure rule narrowed by the real group roster.
+  assert.equal((task.match(/await assigneeList\(/g) || []).length, 2, 'createTask and updateTask share it');
+  assert.ok(task.includes('allowedAssignees(primary, list, await projectPeople(projectId))'),
+    'nothing else decides who may be assigned');
 }
 
 console.log('self-check: all assertions passed');

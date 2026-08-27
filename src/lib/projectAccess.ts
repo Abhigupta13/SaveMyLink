@@ -101,6 +101,23 @@ export async function canAccess(doc: { projectId?: unknown; userId?: unknown }, 
     : false);
 }
 
+/**
+ * Everyone actually in a group: the creator, co-owners, members and viewers — the same set the
+ * assignee picker offers on /tasks and the group page. `allowedAssignees` checks against this, so
+ * a writer cannot use an assignee list to push a task (and its title, and its description) into
+ * the work queue of somebody who is not on the project.
+ */
+export async function projectPeople(projectId: unknown): Promise<string[]> {
+  if (!projectId) return [];
+  const project = await Project.findById(projectId)
+    .select('ownerId ownerEmails memberEmails viewerEmails')
+    .populate('ownerId', 'email')
+    .lean<{ ownerId?: { email?: string | null } | null; ownerEmails?: string[]; memberEmails?: string[]; viewerEmails?: string[] } | null>();
+  if (!project) return [];
+  return [project.ownerId?.email, ...(project.ownerEmails || []), ...(project.memberEmails || []), ...(project.viewerEmails || [])]
+    .filter((e): e is string => !!e);
+}
+
 /** Mine, or in one of my projects. The standard read scope for project-aware records. */
 export async function mineOrMyProjects(userId: string, email: string | null | undefined, ownerField = 'userId') {
   const ids = await myProjectIds(userId, email);
