@@ -2195,6 +2195,18 @@ body {
 .chip.overdue { background: color-mix(in srgb, var(--danger-color) 12%, transparent); color: var(--danger-color); }
 .chip.today { background: color-mix(in srgb, var(--warn-color) 14%, transparent); color: var(--warn-color); }
 .chip.me { background: var(--accent-soft); color: var(--accent-text); }
+/* A task can be on several people. The "+2" is the rest of them, named in the tooltip. */
+.chip.more { background: var(--bg-tertiary); color: var(--text-tertiary); cursor: help; }
+
+/* AssigneePicker — tap targets, not a native multi-select. A `<select multiple>` needs a
+   long-press or a ctrl-click to add a second name, which is a gesture a thumb does not have. */
+.pick-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.quick-add-meta .pick-row { flex: 1 1 100%; }   /* its own line under the date, not squeezed beside it */
+.pick { display: inline-flex; align-items: center; gap: 5px; min-height: 40px; padding: 0 14px; border-radius: 12px;
+  border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary);
+  font-size: 0.82rem; font-weight: 700; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick.on { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); }
+.pick:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
 .avatar-xs { width: 20px; height: 20px; border-radius: 50%; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.65rem; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
 .task-del { opacity: 0; margin-left: auto; background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 1.1rem; padding: 0 4px; line-height: 1; }
 .task-row:hover .task-del { opacity: 1; }

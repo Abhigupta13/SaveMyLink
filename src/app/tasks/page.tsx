@@ -8,11 +8,13 @@ import { Plus, Trash2, X, Check, ArrowRight, BadgeCheck } from 'lucide-react';
 import { getTasks, getMyOpenTasks, createTask, toggleTask, deleteTask, updateTask } from '@/actions/task';
 import { getProjects, createProject, deleteProject, renameProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
+import AssigneePicker from '@/components/AssigneePicker';
 import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useShareNotice } from '@/components/ShareNotice';
 import { formatTime, formatDay } from '@/lib/time';
 import { isProjectOwner, canWrite } from '@/lib/scope';
+import { assigneeEmailsOf } from '@/lib/taskAccess';
 
 type Group = { key: string; label: string; tasks: any[]; cls?: string };
 
@@ -63,11 +65,12 @@ export default function TasksPage() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
-  const [assignee, setAssignee] = useState('');
+  const [assignee, setAssignee] = useState<string[]>([]);   // several people, one shared task
   const [loading, setLoading] = useState(true);
   const [showDone, setShowDone] = useState(false);
   const [editing, setEditing] = useState<any | null>(null); // task being edited
-  const [draft, setDraft] = useState({ title: '', description: '', dueAt: '', assigneeEmail: '', projectId: '' });
+  const [draft, setDraft] = useState<{ title: string; description: string; dueAt: string; assigneeEmails: string[]; projectId: string }>(
+    { title: '', description: '', dueAt: '', assigneeEmails: [], projectId: '' });
 
   const toLocalInput = (iso?: string | null) => {
     if (!iso) return '';
@@ -82,7 +85,7 @@ export default function TasksPage() {
       title: task.title || '',
       description: task.description || '',
       dueAt: toLocalInput(task.dueAt),
-      assigneeEmail: task.assigneeId?.email || task.assigneeEmail || '',
+      assigneeEmails: assigneeEmailsOf(task),
       projectId: task.projectId ? String(task.projectId) : '',
     });
   };
@@ -94,7 +97,7 @@ export default function TasksPage() {
       title: draft.title.trim() || editing.title,
       description: draft.description.trim(),
       dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null,
-      assigneeEmail: draft.projectId ? (draft.assigneeEmail || null) : null,
+      assigneeEmails: draft.projectId ? draft.assigneeEmails : [],
       projectId: draft.projectId || null,
     });
     if (res.success) {
@@ -143,7 +146,7 @@ export default function TasksPage() {
 
   const switchProject = (project: any | null) => {
     setActiveProject(project);
-    setAssignee('');
+    setAssignee([]);
     setLoading(true);
     fetchTasks(project?._id);
   };
@@ -158,7 +161,7 @@ export default function TasksPage() {
     const res = await createTask(t, {
       dueAt: due ? new Date(due).toISOString() : undefined,
       projectId: activeProject?._id,
-      assigneeEmail: activeProject ? (assignee || myEmail) : undefined,
+      assigneeEmails: activeProject ? (assignee.length ? assignee : [myEmail]) : undefined,
     });
     if (res.success) { setDue(''); fetchTasks(activeProject?._id); refreshReminders(); }
     else { setTasks(prev => prev.filter(x => x._id !== tempId)); toast(res.error || 'Something went wrong', 'error'); }
@@ -209,15 +212,30 @@ export default function TasksPage() {
     );
   }
 
+  /**
+   * The named chip, plus a "+2" for the rest. A shared task shows one name and a count rather than
+   * a row of chips that wraps to three lines on a phone — the others are in the tooltip, and in the
+   * edit sheet if you actually need them.
+   *
+   * If I am one of the assignees the chip is *me*, whether or not I am the primary. Showing a
+   * colleague's name on work I am holding reads as somebody else's task, which is the one thing
+   * this row must never say.
+   */
+  const mineFirst = (list: string[]) =>
+    list.includes(myEmail) ? [myEmail, ...list.filter(e => e !== myEmail)] : list;
+
   const assigneeLabel = (t: any) => {
-    const email = t.assigneeId?.email || t.assigneeEmail;
+    const [email, ...rest] = mineFirst(assigneeEmailsOf(t));
     if (!email) return null;
     const isMe = email === myEmail;
     return (
-      <span className={`chip ${isMe ? 'me' : ''}`} title={email} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-        <span className="avatar-xs" style={{ width: '14px', height: '14px', fontSize: '0.55rem' }}>{email[0].toUpperCase()}</span>
-        {isMe ? 'me' : email.split('@')[0]}
-      </span>
+      <>
+        <span className={`chip ${isMe ? 'me' : ''}`} title={email} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <span className="avatar-xs" style={{ width: '14px', height: '14px', fontSize: '0.55rem' }}>{email[0].toUpperCase()}</span>
+          {isMe ? 'me' : email.split('@')[0]}
+        </span>
+        {rest.length > 0 && <span className="chip more" title={`Also ${rest.join(', ')}`}>+{rest.length}</span>}
+      </>
     );
   };
 
@@ -282,22 +300,21 @@ export default function TasksPage() {
               <input className="field" type="datetime-local" value={draft.dueAt} onChange={e => setDraft(d => ({ ...d, dueAt: e.target.value }))}
                 style={{ color: draft.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
               <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Project</label>
-              <select className="field" value={draft.projectId} onChange={e => setDraft(d => ({ ...d, projectId: e.target.value, assigneeEmail: '' }))}>
+              <select className="field" value={draft.projectId} onChange={e => setDraft(d => ({ ...d, projectId: e.target.value, assigneeEmails: [] }))}>
                 <option value="">Personal (no project)</option>
                 {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
               </select>
               {draft.projectId && (
                 <>
-                  <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Assigned to</label>
-                  <select className="field" value={draft.assigneeEmail} onChange={e => setDraft(d => ({ ...d, assigneeEmail: e.target.value }))}>
-                    <option value="">Unassigned</option>
-                    {[...new Set([myEmail,
+                  <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                    Assigned to <span style={{ fontWeight: 600, color: 'var(--text-tertiary)' }}>— anyone tapped can tick it off</span>
+                  </label>
+                  <AssigneePicker myEmail={myEmail} value={draft.assigneeEmails}
+                    onChange={next => setDraft(d => ({ ...d, assigneeEmails: next }))}
+                    options={[...new Set([myEmail,
                       ...(projects.find(p => p._id === draft.projectId)?.ownerId?.email ? [projects.find(p => p._id === draft.projectId).ownerId.email] : []),
                       ...(projects.find(p => p._id === draft.projectId)?.memberEmails || []),
-                      draft.assigneeEmail].filter(Boolean))].map(email => (
-                      <option key={email} value={email}>{email === myEmail ? 'me' : email}</option>
-                    ))}
-                  </select>
+                      ...draft.assigneeEmails].filter(Boolean))]} />
                 </>
               )}
               <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '6px' }}>
@@ -325,12 +342,9 @@ export default function TasksPage() {
         </div>
         <div className="quick-add-meta">
           <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic" style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
-          {activeProject && (
-            <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)}>
-              <option value="">Assign to me</option>
-              {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{email}</option>)}
-            </select>
-          )}
+          {/* Nobody tapped means it is yours, which is what adding a task to your own group
+              usually means — the same default the single-select had. */}
+          {activeProject && <AssigneePicker options={memberOptions} value={assignee} onChange={setAssignee} myEmail={myEmail} />}
         </div>
       </form>
 

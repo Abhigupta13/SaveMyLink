@@ -16,7 +16,8 @@ import MomSection from '@/components/MomSection';
 import { useFeedback } from '@/components/ui/Feedback';
 import { formatTime, formatDay, formatDate } from '@/lib/time';
 import { isProjectOwner, isProjectCreator, isProjectViewer, canWrite } from '@/lib/scope';
-import { needsOwner, assigneeEmailOf } from '@/lib/taskAccess';
+import { needsOwner, assigneeEmailOf, assigneeEmailsOf } from '@/lib/taskAccess';
+import AssigneePicker from '@/components/AssigneePicker';
 import { phrase, DEFAULT_DAYS, fromMeeting } from '@/lib/activity';
 import '@/styles/workspace.css';
 
@@ -78,7 +79,7 @@ export default function ProjectWorkspace() {
 
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
-  const [assignee, setAssignee] = useState('');
+  const [assignee, setAssignee] = useState<string[]>([]);   // several people, one shared task
   const [inviting, setInviting] = useState(false);
   const [notesDraft, setNotesDraft] = useState('');
   const [noteDraft, setNoteDraft] = useState({ title: '', body: '' });
@@ -88,7 +89,8 @@ export default function ProjectWorkspace() {
   const [renameOpen, setRenameOpen] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
-  const [draft, setDraft] = useState({ title: '', description: '', dueAt: '', assigneeEmail: '' });
+  const [draft, setDraft] = useState<{ title: string; description: string; dueAt: string; assigneeEmails: string[] }>(
+    { title: '', description: '', dueAt: '', assigneeEmails: [] });
 
   const myEmail = (session?.user?.email || '').toLowerCase();
   const isOwner = isProjectOwner(project, myEmail);
@@ -237,9 +239,9 @@ export default function ProjectWorkspace() {
     const res = await createTask(title, {
       dueAt: due ? new Date(due).toISOString() : undefined,
       projectId,
-      assigneeEmail: assignee || myEmail,
+      assigneeEmails: assignee.length ? assignee : [myEmail],
     });
-    if (res.success) { setTitle(''); setDue(''); fetchTasks(); fetchEvents(); }
+    if (res.success) { setTitle(''); setDue(''); setAssignee([]); fetchTasks(); fetchEvents(); }
     else toast(res.error || 'Something went wrong', 'error');
   };
 
@@ -269,7 +271,7 @@ export default function ProjectWorkspace() {
       title: task.title || '',
       description: task.description || '',
       dueAt: toLocalInput(task.dueAt),
-      assigneeEmail: task.assigneeId?.email || task.assigneeEmail || '',
+      assigneeEmails: assigneeEmailsOf(task),
     });
   };
 
@@ -279,7 +281,7 @@ export default function ProjectWorkspace() {
       title: draft.title.trim() || editing.title,
       description: draft.description.trim(),
       dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null,
-      assigneeEmail: draft.assigneeEmail || null,
+      assigneeEmails: draft.assigneeEmails,
     });
     if (res.success) { setEditing(null); fetchTasks(); fetchEvents(); }
     else toast(res.error || 'Something went wrong', 'error');
@@ -366,7 +368,7 @@ export default function ProjectWorkspace() {
   // The viewer's own work, soonest first — which puts what is already late at the top, and work
   // with no date at the bottom where it belongs.
   const mine = open
-    .filter(t => assigneeEmailOf(t) === myEmail)
+    .filter(t => assigneeEmailsOf(t).includes(myEmail))
     .sort((a, b) => (a.dueAt ? new Date(a.dueAt).getTime() : Infinity) - (b.dueAt ? new Date(b.dueAt).getTime() : Infinity));
   const toReview = moms.filter(m => !m.tasksConfirmed).length;
 
@@ -392,7 +394,12 @@ export default function ProjectWorkspace() {
   /** One row, wherever a task is shown — Yours on the summary, All tasks behind its card. */
   const taskRow = (t: any) => {
     const isOverdue = t.dueAt && !t.completed && new Date(t.dueAt).getTime() < Date.now();
-    const who = assigneeEmailOf(t);
+    // One named chip plus a "+2" for anyone else on it. One shared task, so this is one row with a
+    // count — not one row per person, and not three chips that wrap the meta line on a phone.
+    // My own name leads when I am on it: a colleague's name on work I am holding reads as somebody
+    // else's task, which is the one thing this row must never say.
+    const all = assigneeEmailsOf(t);
+    const [who, ...alsoWho] = all.includes(myEmail) ? [myEmail, ...all.filter(e => e !== myEmail)] : all;
     return (
       <div key={t._id} className={`task-row ${t.completed ? 'done' : ''}`}>
         <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)}
@@ -405,6 +412,9 @@ export default function ProjectWorkspace() {
           <div className="task-meta">
             {t.dueAt && <span className={`chip ${isOverdue ? 'overdue' : ''}`}>{fmtDue(t.dueAt)}</span>}
             {who && <span className={`chip ${who === myEmail ? 'me' : ''}`} title={who}>{who === myEmail ? 'me' : shortOf(who)}</span>}
+            {alsoWho.length > 0 && (
+              <span className="chip more" title={`Also ${alsoWho.map(nameOf).join(', ')} — any of them can tick it off`}>+{alsoWho.length}</span>
+            )}
             {t.signedOffAt && (
               <span className="chip signed" title={`Signed off by ${t.signedOffBy?.name || t.signedOffBy?.email || 'an owner'} · ${fmtDate(t.signedOffAt)}`}>
                 <BadgeCheck size={11} /> signed off
@@ -597,10 +607,9 @@ export default function ProjectWorkspace() {
               <div className="quick-add-meta">
                 <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic"
                   style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
-                <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)} aria-label="Assign to">
-                  <option value="">Assign to me</option>
-                  {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{nameOf(email)}</option>)}
-                </select>
+                {/* Tap several and it stays ONE task that any of them can tick. Nobody tapped
+                    means it is yours — the same default the single select had. */}
+                <AssigneePicker options={memberOptions} value={assignee} onChange={setAssignee} myEmail={myEmail} labelOf={nameOf} />
               </div>
             </form>}
           </section>
@@ -660,7 +669,9 @@ export default function ProjectWorkspace() {
               const creator = isProjectCreator(project, email);
               const role = roleOf(email);
               const owner = creator || role === 'owner';
-              const load = open.filter(t => assigneeEmailOf(t) === email).length;
+              // Shared work counts against everyone holding it — that is what "N open" means to
+              // the person reading their own row.
+              const load = open.filter(t => assigneeEmailsOf(t).includes(email)).length;
               /* One control for all three roles instead of a promote button, a demote button and
                  a third for viewers. The creator is permanent, so their row offers nothing, and
                  you cannot change your own — the server refuses both. */
@@ -806,13 +817,12 @@ export default function ProjectWorkspace() {
                 <label htmlFor="wk-due" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Due</label>
                 <input id="wk-due" className="field" type="datetime-local" value={draft.dueAt} onChange={e => setDraft(d => ({ ...d, dueAt: e.target.value }))}
                   style={{ color: draft.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
-                <label htmlFor="wk-assignee" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Assigned to</label>
-                <select id="wk-assignee" className="field" value={draft.assigneeEmail} onChange={e => setDraft(d => ({ ...d, assigneeEmail: e.target.value }))}>
-                  <option value="">Unassigned</option>
-                  {[...new Set([...memberOptions, draft.assigneeEmail].filter(Boolean))].map(email => (
-                    <option key={email} value={email}>{email === myEmail ? 'me' : email}</option>
-                  ))}
-                </select>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                  Assigned to <span style={{ fontWeight: 600, color: 'var(--text-tertiary)' }}>— anyone tapped can tick it off</span>
+                </span>
+                <AssigneePicker id="wk-assignee" myEmail={myEmail} labelOf={nameOf} value={draft.assigneeEmails}
+                  onChange={next => setDraft(d => ({ ...d, assigneeEmails: next }))}
+                  options={[...new Set([...memberOptions, ...draft.assigneeEmails].filter(Boolean))]} />
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '6px' }}>
                   {isOwner ? (
                     <button className="icon-btn danger" title="Delete task"
@@ -841,7 +851,7 @@ export default function ProjectWorkspace() {
         <h2>People</h2>
         <ul>
           {memberOptions.map(email => (
-            <li key={email}>{email}{isProjectOwner(project, email) ? ' — owner' : ''} · {open.filter(t => assigneeEmailOf(t) === email).length} open</li>
+            <li key={email}>{email}{isProjectOwner(project, email) ? ' — owner' : ''} · {open.filter(t => assigneeEmailsOf(t).includes(email)).length} open</li>
           ))}
         </ul>
 
