@@ -1,0 +1,113 @@
+/* The group workspace (/projects/[id]), rebuilt phone-first.
+
+   One screen at a time. The recorder is the top of the page, what is unfinished sits under it,
+   and everything else is an index you tap into — an accordion at 390px is a column of shut doors
+   you scroll past to reach the thing you came for.
+
+   Scoped under .wk and every class wk- prefixed, because globals.css already owns generic names
+   like .card, .chip and .row. The idioms here — the eyebrow/lede rhythm, the clamp() +
+   opsz/SOFT display scale, the 24px card, the pill — are COPIED from src/styles/landing.css
+   (as src/styles/guide.css copies them). That file stays scoped under .landing. */
+
+.wk { max-width: 780px; margin: 0 auto; padding-bottom: 40px; }
+.wk :focus-visible { outline: 2px solid var(--accent-color); outline-offset: 3px; }
+
+/* ── Top bar: out of the group on the left, the group's own tools on the right. ── */
+.wk-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; margin-bottom: 6px; }
+.wk-back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding-right: 8px; color: var(--text-secondary); font-size: 0.82rem; font-weight: 700; text-decoration: none; }
+.wk-back:hover { color: var(--accent-text); }
+
+/* A control, not a chip: 44px square whatever the icon inside it measures. */
+.wk-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex-shrink: 0; border: 1px solid var(--border-color); border-radius: 14px; background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; }
+.wk-icon:hover { color: var(--text-primary); border-color: var(--accent-color); }
+
+/* ── Owner tools. A doer opening this menu finds one item; an owner finds five. ── */
+.wk-menu-wrap { position: relative; }
+.wk-menu { position: absolute; top: 50px; right: 0; z-index: 60; min-width: 220px; padding: 6px; border: 1px solid var(--border-color); border-radius: 18px; background: var(--bg-secondary); box-shadow: 0 20px 40px -20px rgba(0,0,0,.45); }
+.wk-menu button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 12px; background: none; color: var(--text-primary); font: inherit; font-size: 0.88rem; font-weight: 700; text-align: left; cursor: pointer; }
+.wk-menu button:hover { background: var(--bg-tertiary); }
+.wk-menu button.danger { color: var(--danger-color); }
+.wk-menu button.danger:hover { background: var(--danger-soft); }
+.wk-menu hr { margin: 6px 8px; border: 0; border-top: 1px solid var(--border-color); }
+
+/* ── The head: the one display moment, kept to two lines so the recorder starts high. ── */
+.wk-head { padding: 2px 0 16px; }
+.wk-eyebrow { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-tertiary); font-weight: 700; margin: 0 0 8px; }
+.wk-head h1 { font-size: clamp(30px, 8.5vw, 46px); line-height: 1.05; letter-spacing: -.03em; font-weight: 300; font-variation-settings: 'opsz' 96, 'SOFT' 50; color: var(--text-primary); }
+.wk-lede { margin: 10px 0 0; font-size: 13.5px; line-height: 1.55; color: var(--text-secondary); font-weight: 600; }
+.wk-lede b { color: var(--text-primary); font-weight: 800; }
+.wk-lede .wk-warn { color: var(--warn-color); font-weight: 800; }
+
+/* ── Needs an owner, compacted to one tappable line so it cannot push the recorder down a
+      screen. The full band lives inside All tasks, which is where this line goes. ── */
+.wk-band { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 46px; margin: 0 0 14px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--warn-color) 35%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--warn-color) 8%, transparent); color: var(--warn-color); font: inherit; font-size: 0.82rem; font-weight: 800; text-align: left; cursor: pointer; }
+.wk-band span { flex: 1; min-width: 0; }
+.wk-band svg { flex-shrink: 0; }
+
+/* ── Yours: the viewer's own work, overdue first. The one list on the summary screen. ── */
+.wk-block { margin-top: 22px; }
+.wk-block-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.wk-quiet { margin: 0; padding: 14px 16px; border: 1px dashed var(--border-color); border-radius: 18px; color: var(--text-secondary); font-size: 0.85rem; font-weight: 600; line-height: 1.5; }
+
+/* ── The index. Seven doors, each with its count. The numeral is set in the display face and
+      italic — the same numerals as the numbered stops on /your-data — so the grid reads as an
+      index page rather than a settings list. ── */
+.wk-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 26px; }
+.wk-card { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 14px; min-height: 104px; padding: 14px 15px; border: 1px solid var(--border-color); border-radius: 24px; background: var(--bg-secondary); box-shadow: var(--card-shadow); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: transform .15s ease-out, border-color .15s ease-out; }
+.wk-card:hover { border-color: var(--accent-color); }
+.wk-card:active { transform: scale(.985); }
+.wk-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; color: var(--text-tertiary); }
+.wk-card-n { font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 30px; line-height: 1; letter-spacing: -.02em; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+.wk-card-n.zero { color: var(--text-tertiary); opacity: .5; }
+.wk-card-label { display: flex; align-items: center; gap: 6px; font-size: 0.88rem; font-weight: 800; color: var(--text-primary); }
+.wk-card-label svg { flex-shrink: 0; color: var(--text-tertiary); }
+.wk-card-note { margin: 4px 0 0; font-size: 0.72rem; font-weight: 700; color: var(--accent-text); }
+/* Late work is amber wherever it appears on this page — the lede, the band, and here. */
+.wk-card-note.warn { color: var(--warn-color); }
+
+/* ── A drilled-in section. Back, name, count — the same three things every time. ── */
+.wk-panel-head { display: flex; align-items: center; gap: 10px; padding: 2px 0 16px; }
+.wk-panel-head h1 { flex: 1; min-width: 0; font-size: clamp(24px, 7vw, 34px); line-height: 1.1; letter-spacing: -.025em; font-weight: 300; font-variation-settings: 'opsz' 72, 'SOFT' 50; color: var(--text-primary); }
+.wk-panel-head h1:focus { outline: none; }
+.wk-pill { flex-shrink: 0; padding: 4px 12px; border-radius: 999px; background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 0.78rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* The full Needs-an-owner band, inside All tasks. Warn, not danger: nothing is broken,
+   somebody just has to pick this up. */
+.wk-unheld { margin-bottom: 18px; padding: 12px 12px 4px; border: 1px solid color-mix(in srgb, var(--warn-color) 35%, transparent); border-radius: 20px; background: color-mix(in srgb, var(--warn-color) 7%, transparent); }
+.wk-unheld-label { display: flex; align-items: center; gap: 6px; color: var(--warn-color); font-weight: 800; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.wk-unheld-note { margin: 6px 0 10px; color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; }
+
+/* ── What changed: a list you skim, so one quiet line each rather than fifteen bordered boxes. ── */
+.wk-event { padding: 9px 2px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); font-size: 0.85rem; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.wk-event:last-child { border-bottom: none; }
+.wk-event b { color: var(--text-primary); font-weight: 800; }
+.wk-event span { display: block; margin-top: 2px; color: var(--text-tertiary); font-size: 0.72rem; font-weight: 600; }
+.wk-select { flex-shrink: 0; min-height: 44px; padding: 4px 10px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-tertiary); color: var(--text-secondary); font: inherit; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
+
+/* People rows: role, load and pending on one short line, the address a footnote below. */
+.wk-person { gap: 5px; margin-top: 3px; }
+.wk-person > * { max-width: 100%; }
+.wk-person .chip { font-size: 0.68rem; padding: 2px 8px; overflow: hidden; text-overflow: ellipsis; }
+.wk-person-email { margin-top: 3px; font-size: 0.7rem; font-weight: 600; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-role { max-width: 150px; min-height: 44px; font-size: 0.78rem; }
+
+.wk-more { display: inline-flex; align-items: center; min-height: 44px; font-size: 0.82rem; }
+.wk-hide { display: none; }
+.wk-foot { display: inline-block; margin-top: 10px; font-size: 0.8rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wk-card { transition: none; }
+  .wk-card:active { transform: none; }
+}
+
+/* ── Desktop follows. More doors per row, roomier rows; the column stays a column, because the
+      screen is one job at a time here whatever the width. ── */
+@media (min-width: 700px) {
+  .wk-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .wk-card { min-height: 118px; padding: 16px 18px; }
+  .wk-card-n { font-size: 34px; }
+  .wk-head { padding-bottom: 22px; }
+  .wk-lede { font-size: 15px; }
+  .wk .task-row { padding: 15px 18px; border-radius: 18px; margin-bottom: 8px; }
+  .wk .task-title { font-size: 1rem; }
+}

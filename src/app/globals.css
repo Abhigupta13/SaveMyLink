@@ -2616,104 +2616,13 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .project-card-meta { display: flex; gap: 12px; margin-top: 4px; font-size: 0.74rem; color: var(--text-secondary); font-weight: 600; }
 .project-card-meta span { display: inline-flex; align-items: center; gap: 4px; }
 
-/* Project workspace: work in the main column, context in the rail.
-   Scoped to this page — .container itself is still full-width app-wide. */
-.ws-page { max-width: 1560px; margin: 0 auto; }
-.ws-grid { display: grid; gap: 24px; align-items: start; }
-.ws-main, .ws-rail { min-width: 0; }
-@media (min-width: 1024px) { .ws-grid { grid-template-columns: minmax(0, 1fr) 320px; gap: 40px; } }
-@media (min-width: 1500px) { .ws-grid { grid-template-columns: minmax(0, 1fr) 380px; gap: 48px; } }
+/* The group workspace itself lives in src/styles/workspace.css, scoped under .wk — the two-column
+   grid, the eight always-open sections and their headers went with the phone-first rebuild.
+   These two chips stay here: they are worn by rows the whole app renders, not by that page. */
 
-/* On a phone the two columns become one, and stacking them in source order buries What
-   changed under every meeting and every note. It belongs next to the tasks — those two
-   together are the whole reason to open a group on a phone. `display: contents` drops the
-   column boxes so the sections become siblings and `order` can interleave them; the
-   .ws-main / .ws-rail descendant rules above are unaffected. */
-@media (max-width: 1023px) {
-  .ws-grid { display: flex; flex-direction: column; gap: 0; }
-  .ws-main, .ws-rail { display: contents; }
-  .ws-s-unheld   { order: 1; }
-  /* Meetings carries the record dot, and with the header's duplicate Record button gone that dot
-     is the only way in. On a phone it has to be above the fold, not below every open task. */
-  .ws-s-meetings { order: 2; }
-  .ws-s-tasks    { order: 3; }
-  .ws-s-activity { order: 4; }
-  .ws-s-notes    { order: 5; }
-  .ws-s-people   { order: 6; }
-  .ws-s-files    { order: 7; }
-  .ws-s-about    { order: 8; }
-}
-
-/* Rows are short labels, not prose, so the extra width buys scannability —
-   spend it on bigger type and roomier hit targets rather than longer lines. */
-@media (min-width: 1024px) {
-  .ws-main .task-title { font-size: 1.05rem; }
-  .ws-main .task-desc { font-size: 0.88rem; }
-  .ws-main .task-row { padding: 15px 18px; border-radius: 16px; margin-bottom: 8px; }
-  .ws-main .chip { font-size: 0.75rem; padding: 4px 10px; }
-  .ws-main .ws-head-btn { font-size: 0.8rem; }
-  .ws-rail .ws-head-btn { font-size: 0.8rem; }
-}
-/* the rail is reference material, so it reads one step quieter than the main column */
-.ws-rail .ws-section { margin-bottom: 18px; }
-.ws-rail .task-row { padding: 11px 13px; border-radius: 13px; margin-bottom: 6px; }
-.ws-rail .task-title { font-size: 0.92rem; }
-.ws-rail .avatar-xs { width: 24px !important; height: 24px !important; font-size: 0.68rem !important; }
-.ws-rail textarea.field { font-size: 0.85rem; }
-
-.ws-section { margin-bottom: 22px; }
-.ws-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.ws-head-btn { flex: 1; display: flex; align-items: center; gap: 6px; background: none; border: none; padding: 0; cursor: pointer; color: var(--text-secondary); font-weight: 800; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; }
-/* Name on the left, print and delete on the right. The Record button that used to live here is
-   gone — it only scrolled to the meetings section, which has its own record dot. */
-.ws-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 18px; }
-@media (max-width: 700px) {
-  .ws-header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: start; }
-}
-.ws-title { width: 100%; background: none; border: none; outline: none; padding: 0; color: var(--text-primary); font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; }
-.ws-title:focus { border-bottom: 2px solid var(--accent-color); }
-.ws-title:disabled { opacity: 1; }
-/* Provenance, not a stat — a step quieter than .page-subtitle so it never competes with it. */
-.ws-created { margin-top: 2px; color: var(--text-tertiary); font-size: 0.75rem; font-weight: 600; }
-
-/* ---------- Needs an owner ----------
-   Warn, not danger: nothing is broken, somebody just has to pick this up. Follows the same
-   colour-mix-over-transparent recipe as .chip.overdue so it reads correctly in both themes
-   without a second token, and the tint sits behind the existing .task-row rows unchanged. */
-.ws-unheld { border: 1px solid color-mix(in srgb, var(--warn-color) 35%, transparent); border-radius: 14px; padding: 12px 12px 4px; background: color-mix(in srgb, var(--warn-color) 7%, transparent); }
-.ws-unheld-label { flex: 1; display: flex; align-items: center; gap: 6px; color: var(--warn-color); font-weight: 800; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; }
-.ws-unheld-note { margin: -4px 0 8px; color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; }
 /* A statement of fact about someone's access, not a warning — same weight as the owner chip. */
 .chip.viewer { background: color-mix(in srgb, var(--text-tertiary) 16%, transparent); color: var(--text-secondary); }
 .chip.signed { display: inline-flex; align-items: center; gap: 4px; background: color-mix(in srgb, var(--success-color) 14%, transparent); color: var(--success-color); }
-
-/* ---------- People rows ----------
-   The role stays directly under the name — a full-width stack put it there and it should
-   stay — but one fact per line made every member four lines tall, and People is reference,
-   not the daily loop. Role, load and pending share one short line; the address, which you
-   look up once, drops below in footnote type. Chips are flex items, so max-width and
-   ellipsis bite on a long name. */
-.task-meta.ws-person { gap: 5px; margin-top: 3px; }
-.task-meta.ws-person > * { max-width: 100%; }
-.task-meta.ws-person .chip { font-size: 0.65rem; padding: 2px 7px; overflow: hidden; text-overflow: ellipsis; }
-.ws-person-email {
-  margin-top: 2px; font-size: 0.68rem; font-weight: 600; color: var(--text-tertiary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-/* Sized like the chips beside it, but it is a control and keeps a control's target:
-   comfortably over the 24px minimum with a mouse, a full 44px thumb target once the
-   rail folds into the phone column. */
-.ws-days.ws-role { max-width: 132px; min-height: 28px; padding: 2px 7px; font-size: 0.68rem; }
-@media (max-width: 1023px) { .ws-days.ws-role { min-height: 44px; font-size: 0.8rem; padding: 4px 8px; } }
-
-/* ---------- What changed ----------
-   Deliberately not a card per row: this is a list you skim, and fifteen bordered boxes in a
-   narrow rail is a wall. One quiet line each, the name carrying the only emphasis. */
-.ws-event { padding: 6px 2px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); font-size: 0.82rem; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
-.ws-event:last-child { border-bottom: none; }
-.ws-event-who { color: var(--text-primary); font-weight: 800; }
-.ws-event-when { display: block; margin-top: 1px; color: var(--text-tertiary); font-size: 0.72rem; font-weight: 600; }
-.ws-days { flex-shrink: 0; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 8px; padding: 3px 6px; color: var(--text-secondary); font-size: 0.72rem; font-weight: 700; cursor: pointer; }
 
 /* ---------- Print / "Download as PDF" ---------- */
 .print-only { display: none; }

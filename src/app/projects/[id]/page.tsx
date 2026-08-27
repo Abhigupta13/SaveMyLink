@@ -1,10 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText, AlertTriangle, BadgeCheck } from 'lucide-react';
+import {
+  ArrowLeft, MoreVertical, AlertTriangle, ChevronRight, Trash2, X, Check, Download, Pencil,
+  UserPlus, Users, StickyNote, FileText, BadgeCheck, Mic, CheckSquare, History, BookOpen,
+} from 'lucide-react';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask } from '@/actions/task';
 import { getProjectWorkspace, addMember, removeMember, setProjectRole, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
 import { getNotes, createNote, deleteNote } from '@/actions/note';
@@ -15,6 +18,7 @@ import { formatTime, formatDay, formatDate } from '@/lib/time';
 import { isProjectOwner, isProjectCreator, isProjectViewer, canWrite } from '@/lib/scope';
 import { needsOwner, assigneeEmailOf } from '@/lib/taskAccess';
 import { phrase, DEFAULT_DAYS, fromMeeting } from '@/lib/activity';
+import '@/styles/workspace.css';
 
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
@@ -41,7 +45,13 @@ function fmtWhen(iso: string) {
 /** The trail is the one list on this page with a stable, known shape — it is written by one helper. */
 type ActivityEvent = { _id: string; verb: string; subject?: string; at: string; actorId?: { email?: string; name?: string } };
 
-type Section = 'tasks' | 'meetings' | 'notes' | 'files' | 'about' | 'people' | 'activity';
+/**
+ * The seven places a group's work lives. Each is a screen you open, not a panel you unfold:
+ * at 390px an accordion is a column of shut doors you scroll past to reach the one you want,
+ * and People and What changed were the two that were always in the way.
+ */
+type Section = 'meetings' | 'tasks' | 'notes' | 'people' | 'activity' | 'files' | 'about';
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export default function ProjectWorkspace() {
   const { toast, confirm } = useFeedback();
@@ -59,9 +69,12 @@ export default function ProjectWorkspace() {
   const [days, setDays] = useState(DEFAULT_DAYS);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  // Open by default: the daily loop — what is owed, what was said, what changed. Closed: the
-  // things you set up once and then read past every single day.
-  const [openSections, setOpenSections] = useState<Record<Section, boolean>>({ tasks: true, meetings: true, notes: true, files: false, about: false, people: false, activity: true });
+
+  const [section, setSection] = useState<Section | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLHeadingElement>(null);
+  const summaryScroll = useRef(0);
 
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
@@ -72,6 +85,7 @@ export default function ProjectWorkspace() {
   const [savingNote, setSavingNote] = useState(false);
   const [notesSaved, setNotesSaved] = useState(true);
   const [renaming, setRenaming] = useState('');
+  const [renameOpen, setRenameOpen] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
   const [draft, setDraft] = useState({ title: '', description: '', dueAt: '', assigneeEmail: '' });
@@ -137,9 +151,9 @@ export default function ProjectWorkspace() {
   }, [projectId, days]);
 
   /**
-   * One call for the whole page. It used to be six in series from the browser, two of which
-   * fetched every note and every document in every group I am in so this page could throw
-   * away the ones that were not its own.
+   * One call for the whole page. It used to make six from the browser, two of which fetched every
+   * note and every document in every group I am in so this page could throw away the ones that
+   * were not its own.
    */
   const load = useCallback(async () => {
     const res = await getProjectWorkspace(projectId, days);
@@ -156,9 +170,8 @@ export default function ProjectWorkspace() {
     setLoading(false);
   }, [projectId, days]);
 
-  // `days` is a dependency, so changing the trail's window re-runs this — the same as before,
-  // when load() depended on a fetchEvents that depended on days. A second effect for it would
-  // fetch the trail twice on mount.
+  // `days` is a dependency, so changing the trail's window re-runs this — a second effect for it
+  // would fetch the trail twice on mount.
   // ponytail: the whole page reloads to move one dropdown. One call now instead of six, so it is
   // cheap enough to leave; split it out if the trail's window turns into something people play with.
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
@@ -169,8 +182,8 @@ export default function ProjectWorkspace() {
    * no timer hitting the database while the page sits open in the background.
    *
    * visibilitychange only. `focus` fires on top of it for the same return-to-tab, and also every
-   * time the window regains focus from a dialog or a devtools pane, so the two together reloaded
-   * the whole page repeatedly while nothing had changed.
+   * time the window regains focus from a dialog, so the two together reloaded the whole page
+   * repeatedly while nothing had changed.
    * ponytail: still not live; add polling or sockets if people are ever in here simultaneously.
    */
   useEffect(() => {
@@ -179,6 +192,43 @@ export default function ProjectWorkspace() {
     document.addEventListener('visibilitychange', refresh);
     return () => document.removeEventListener('visibilitychange', refresh);
   }, [status, load]);
+
+  /**
+   * Opening a section is a real history entry, so the Android back gesture — the only "back" that
+   * exists in the webview — closes the section instead of leaving the group. The URL is left alone
+   * on purpose: the state rides on the entry, and a phone that lands here from a notification
+   * should still open on the recorder. Next.js supports the native history API directly.
+   */
+  const openSection = (s: Section) => {
+    summaryScroll.current = window.scrollY;
+    window.history.pushState({ wk: s }, '');
+    setSection(s);
+    setMenuOpen(false);
+    window.scrollTo(0, 0);
+  };
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const to = ((e.state as { wk?: Section } | null)?.wk) ?? null;
+      setSection(to);
+      // Coming back to the summary lands you where you left it, not at the top of the page.
+      const y = to ? 0 : summaryScroll.current;
+      requestAnimationFrame(() => window.scrollTo(0, y));
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  // A screen reader is otherwise still parked on the card you tapped, reading the old screen.
+  useEffect(() => { if (section) headRef.current?.focus(); }, [section]);
+
+  // Menus close on Escape and on a tap anywhere else — no hover, nothing that needs a mouse.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const away = (e: Event) => { if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('pointerdown', away); document.removeEventListener('keydown', esc); };
+  }, [menuOpen]);
 
   // ---------- tasks ----------
   const handleCreate = async (e: React.FormEvent) => {
@@ -238,7 +288,8 @@ export default function ProjectWorkspace() {
   // ---------- project ----------
   const handleRename = async () => {
     const name = renaming.trim();
-    if (!name || name === project.name) return;
+    setRenameOpen(false);
+    if (!name || name === project.name) return setRenaming(project.name);
     const res = await renameProject(projectId, name);
     if (res.success) { setProject((p: any) => ({ ...p, name })); fetchEvents(); }
     else { toast(res.error || 'Something went wrong', 'error'); setRenaming(project.name); }
@@ -299,6 +350,7 @@ export default function ProjectWorkspace() {
   };
 
   const handleDeleteProject = async () => {
+    setMenuOpen(false);
     if (!await confirm({ title: `Delete "${project.name}"?`, message: 'The project and its tasks and meetings go with it.', danger: true, confirmLabel: 'Delete' })) return;
     const res = await deleteProject(projectId);
     if (res.success) router.push('/projects');
@@ -311,7 +363,12 @@ export default function ProjectWorkspace() {
   // Open work nobody in the group is holding: assigned to someone who has left, or never
   // assigned at all. Both are the same failure — a promise made in a meeting with no name on it.
   const unheld = open.filter(t => needsOwner(t, memberOptions));
-  const toggleSection = (s: Section) => setOpenSections(o => ({ ...o, [s]: !o[s] }));
+  // The viewer's own work, soonest first — which puts what is already late at the top, and work
+  // with no date at the bottom where it belongs.
+  const mine = open
+    .filter(t => assigneeEmailOf(t) === myEmail)
+    .sort((a, b) => (a.dueAt ? new Date(a.dueAt).getTime() : Infinity) - (b.dueAt ? new Date(b.dueAt).getTime() : Infinity));
+  const toReview = moms.filter(m => !m.tasksConfirmed).length;
 
   if (status === 'unauthenticated') {
     return (
@@ -332,386 +389,425 @@ export default function ProjectWorkspace() {
     );
   }
 
-  const sectionHead = (key: Section, label: string, count: number, extra?: React.ReactNode) => (
-    <div className="ws-head">
-      <button className="ws-head-btn" onClick={() => toggleSection(key)}>
-        <ChevronDown size={16} style={{ transform: openSections[key] ? 'none' : 'rotate(-90deg)', transition: 'transform 0.15s' }} />
-        {label} <span className="count">{count}</span>
-      </button>
-      {extra}
-    </div>
-  );
+  /** One row, wherever a task is shown — Yours on the summary, All tasks behind its card. */
+  const taskRow = (t: any) => {
+    const isOverdue = t.dueAt && !t.completed && new Date(t.dueAt).getTime() < Date.now();
+    const who = assigneeEmailOf(t);
+    return (
+      <div key={t._id} className={`task-row ${t.completed ? 'done' : ''}`}>
+        <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)}
+          disabled={!canEdit} aria-label={t.completed ? `Mark "${t.title}" not done` : `Mark "${t.title}" done`}>
+          {t.completed && <svg width="12" height="9" viewBox="0 0 14 10" fill="none"><path d="M1.5 5L5.5 9L12.5 1.5" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+        </button>
+        <div style={{ flex: 1, minWidth: 0, cursor: canEdit ? 'pointer' : 'default' }} onClick={() => canEdit && openEdit(t)}>
+          <div className="task-title">{t.title}</div>
+          {t.description && <div className="task-desc">{t.description}</div>}
+          <div className="task-meta">
+            {t.dueAt && <span className={`chip ${isOverdue ? 'overdue' : ''}`}>{fmtDue(t.dueAt)}</span>}
+            {who && <span className={`chip ${who === myEmail ? 'me' : ''}`} title={who}>{who === myEmail ? 'me' : shortOf(who)}</span>}
+            {t.signedOffAt && (
+              <span className="chip signed" title={`Signed off by ${t.signedOffBy?.name || t.signedOffBy?.email || 'an owner'} · ${fmtDate(t.signedOffAt)}`}>
+                <BadgeCheck size={11} /> signed off
+              </span>
+            )}
+          </div>
+        </div>
+        {/* Ticking is the assignee's; signing off is the owner's. Offered only once the work is
+            actually done — approving unfinished work is what would make the number on /admin
+            stop meaning anything. */}
+        {isOwner && t.completed && (
+          <button className="subtle-link" style={{ flexShrink: 0 }} onClick={() => handleSignOff(t._id)}>
+            {t.signedOffAt ? 'Undo sign-off' : 'Sign off'}
+          </button>
+        )}
+        {isOwner && <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>}
+      </div>
+    );
+  };
+
+  const cards: { key: Section; label: string; count: number; Icon: typeof Mic; note?: string; warn?: boolean }[] = [
+    { key: 'meetings', label: 'Meetings', count: moms.length, Icon: Mic, note: toReview ? `${toReview} to review` : undefined },
+    { key: 'tasks', label: 'All tasks', count: open.length, Icon: CheckSquare, note: overdue.length ? `${overdue.length} overdue` : undefined, warn: true },
+    { key: 'notes', label: 'Notes', count: notes.length, Icon: StickyNote },
+    { key: 'people', label: 'People', count: memberOptions.length, Icon: Users },
+    { key: 'activity', label: 'What changed', count: events.length, Icon: History },
+    { key: 'files', label: 'Files', count: files.length, Icon: FileText },
+    { key: 'about', label: 'About', count: notesDraft ? 1 : 0, Icon: BookOpen },
+  ];
+  const here = cards.find(c => c.key === section);
+  // The recorder is the top of this page, and it is also the top of Meetings. Everywhere else it
+  // is hidden rather than unmounted, so drilling in mid-recording does not stop the recording.
+  const showRecorder = section === null || section === 'meetings';
 
   return (
     <>
-      <div className="container ws-page print-hide" style={{ padding: '24px 16px 120px' }}>
-        <Link href="/projects" className="subtle-link" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
-          <ArrowLeft size={15} /> Projects
-        </Link>
+      <div className="container wk print-hide" style={{ padding: '16px 16px 120px' }}>
 
-        <header className="ws-header">
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <input className="ws-title" value={renaming} onChange={e => setRenaming(e.target.value)} onBlur={handleRename}
-              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-              disabled={!isOwner} title={isOwner ? 'Click to rename' : 'Only an owner can rename'} />
-            <p className="page-subtitle">
-              {[overdue.length && `${overdue.length} overdue`, `${open.length} open`, `${moms.length} meeting${moms.length === 1 ? '' : 's'}`, `${memberOptions.length} member${memberOptions.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}
-            </p>
-            {/* Who started this group, stated once. It is the only thing the old "creator" chip
-                actually told you, and it belongs with the group, not beside a person's name. */}
-            {project.ownerId?.email && (
-              <p className="ws-created">
-                Created by {project.ownerId.email === myEmail ? 'you' : nameOf(project.ownerId.email)} · {fmtDate(project.createdAt)}
-              </p>
+        <div className="wk-bar">
+          <Link href="/projects" className="wk-back"><ArrowLeft size={16} /> Groups</Link>
+          <div className="wk-menu-wrap" ref={menuRef}>
+            <button className="wk-icon" onClick={() => setMenuOpen(v => !v)}
+              aria-label="Group tools" aria-haspopup="menu" aria-expanded={menuOpen}>
+              <MoreVertical size={18} />
+            </button>
+            {/* Owner tools live here so a doer never meets them. Everyone keeps the report —
+                it is a read of what they can already see, and taking it away from members
+                would be a capability lost, not a permission enforced. */}
+            {menuOpen && (
+              <div className="wk-menu" role="menu">
+                {isOwner && (
+                  <>
+                    <button role="menuitem" onClick={() => { setMenuOpen(false); setRenameOpen(true); }}><Pencil size={16} /> Rename group…</button>
+                    <button role="menuitem" onClick={() => openSection('people')}><UserPlus size={16} /> Invite someone</button>
+                    <button role="menuitem" onClick={() => openSection('people')}><Users size={16} /> Members &amp; roles</button>
+                    <hr />
+                  </>
+                )}
+                <button role="menuitem" onClick={() => { setMenuOpen(false); window.print(); }}><Download size={16} /> Download as PDF</button>
+                {/* Creator only — the one action with no undo. */}
+                {isCreator && <button role="menuitem" className="danger" onClick={handleDeleteProject}><Trash2 size={16} /> Delete group</button>}
+              </div>
             )}
           </div>
-          {/* No "Record meeting" button here. It only scrolled to the meetings section, which
-              carries MomSection's own record dot — two record affordances on one screen, and on a
-              phone the header one was the louder of the two. The section itself now sits above
-              Tasks on a phone (globals.css .ws-s-*), so the dot is the first control you reach. */}
-          <button className="icon-btn" onClick={() => window.print()} title="Download as PDF"><Download size={16} /></button>
-          {isCreator && <button className="icon-btn danger" onClick={handleDeleteProject} title="Delete project"><Trash2 size={16} /></button>}
-        </header>
+        </div>
 
-        <div className="ws-grid">
-          <div className="ws-main">
-
-        {/* ---------- Needs an owner ----------
-            Rendered only when there is something to say. An always-present empty band is
-            furniture; this one has to read as an exception, because that is what it is. */}
-        {unheld.length > 0 && (
-          <section className="ws-section ws-unheld ws-s-unheld">
-            <div className="ws-head">
-              <span className="ws-unheld-label">
-                <AlertTriangle size={14} /> Needs an owner <span className="count">{unheld.length}</span>
-              </span>
-            </div>
-            <p className="ws-unheld-note">
-              Nobody in this group is holding this work. Tap one to hand it over.
+        {/* Head: the group's name, and the one line of numbers worth reading before you record. */}
+        {here ? (
+          <div className="wk-panel-head">
+            <button className="wk-icon" onClick={() => window.history.back()} aria-label={`Back to ${project.name}`}><ArrowLeft size={18} /></button>
+            <h1 ref={headRef} tabIndex={-1}>{here.label}</h1>
+            <span className="wk-pill">{here.count}</span>
+          </div>
+        ) : (
+          <header className="wk-head">
+            <p className="wk-eyebrow">Group</p>
+            <h1>{project.name}</h1>
+            <p className="wk-lede">
+              {overdue.length > 0 && <><span className="wk-warn">{plural(overdue.length, 'task')} overdue</span> · </>}
+              <b>{open.length}</b> open · <b>{memberOptions.length}</b> {memberOptions.length === 1 ? 'person' : 'people'}
+              {project.ownerId?.email && <> · started by {project.ownerId.email === myEmail ? 'you' : shortOf(project.ownerId.email)}, {fmtDate(project.createdAt)}</>}
             </p>
-            {unheld.map(t => {
-              const was = assigneeEmailOf(t);
-              return (
-                <div key={t._id} className="task-row" style={{ cursor: canEdit ? 'pointer' : 'default' }} onClick={() => canEdit && openEdit(t)}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="task-title">{t.title}</div>
-                    <div className="task-meta">
-                      {/* Reuses the `overdue` list rather than reading the clock again — the
-                          render must stay pure, and the lists are a handful of rows. */}
-                      {t.dueAt && <span className={`chip ${overdue.includes(t) ? 'overdue' : ''}`}>{fmtDue(t.dueAt)}</span>}
-                      {/* Naming who used to hold it is the point — the old behaviour blanked
-                          this, and the work became indistinguishable from work never given out. */}
-                      <span className="chip" title={was || undefined}>{was ? `was ${shortOf(was)}` : 'never assigned'}</span>
-                    </div>
+          </header>
+        )}
+
+        {/* The recorder, and directly under it the meetings whose items nobody has confirmed yet —
+            unfinished work, so it belongs on the way in rather than behind a card. Its position in
+            the tree never changes, so a recording survives drilling into a section and back. */}
+        <div className={showRecorder ? '' : 'wk-hide'}>
+          <MomSection project={project} projects={projects} myEmail={myEmail} memberOptions={memberOptions}
+            onTasksCreated={load} pendingOnly={section !== 'meetings'}
+            afterRecorder={unheld.length > 0 && (
+              <button className="wk-band" onClick={() => openSection('tasks')}>
+                <AlertTriangle size={15} />
+                <span>{plural(unheld.length, 'task')} nobody is holding</span>
+                <ChevronRight size={16} />
+              </button>
+            )} />
+        </div>
+
+        {/* ---------- The summary: your own work, then a door into everything else ---------- */}
+        {!section && (
+          <>
+            {/* MomSection shows the two newest meetings still waiting on someone; the rest are one
+                tap away rather than stacked here. */}
+            {toReview > 2 && (
+              <button className="subtle-link wk-more" onClick={() => openSection('meetings')}>
+                {toReview - 2} more meeting{toReview - 2 === 1 ? '' : 's'} still to review →
+              </button>
+            )}
+
+            <section className="wk-block">
+              <div className="wk-block-head">
+                <p className="wk-eyebrow" style={{ margin: 0 }}>Yours</p>
+              </div>
+              {mine.length === 0 ? (
+                <p className="wk-quiet">
+                  Nothing is assigned to you here{open.length > 0 ? ` — ${plural(open.length, 'task')} open in the group` : ''}.
+                </p>
+              ) : mine.map(taskRow)}
+            </section>
+
+            <nav className="wk-cards" aria-label="Everything in this group">
+              {cards.map(({ key, label, count, Icon, note, warn }) => (
+                <button key={key} className="wk-card" onClick={() => openSection(key)}>
+                  <div className="wk-card-top">
+                    <span className={`wk-card-n ${count === 0 ? 'zero' : ''}`}>{count}</span>
+                    <ChevronRight size={16} aria-hidden="true" />
                   </div>
-                  {canEdit && <span className="subtle-link" style={{ flexShrink: 0 }}>Reassign</span>}
+                  <div>
+                    <span className="wk-card-label"><Icon size={14} aria-hidden="true" /> {label}</span>
+                    {note && <p className={`wk-card-note ${warn ? 'warn' : ''}`}>{note}</p>}
+                  </div>
+                </button>
+              ))}
+            </nav>
+          </>
+        )}
+
+        {/* ---------- All tasks ---------- */}
+        {section === 'tasks' && (
+          <section>
+            {/* Rendered only when there is something to say. An always-present empty band is
+                furniture; this one has to read as an exception, because that is what it is. */}
+            {unheld.length > 0 && (
+              <div className="wk-unheld">
+                <p className="wk-unheld-label"><AlertTriangle size={14} /> Needs an owner <span className="wk-pill">{unheld.length}</span></p>
+                <p className="wk-unheld-note">Nobody in this group is holding this work. Tap one to hand it over.</p>
+                {unheld.map(t => {
+                  const was = assigneeEmailOf(t);
+                  return (
+                    <div key={t._id} className="task-row" style={{ cursor: canEdit ? 'pointer' : 'default' }} onClick={() => canEdit && openEdit(t)}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="task-title">{t.title}</div>
+                        <div className="task-meta">
+                          {/* Reuses the `overdue` list rather than reading the clock again — the
+                              render must stay pure, and the lists are a handful of rows. */}
+                          {t.dueAt && <span className={`chip ${overdue.includes(t) ? 'overdue' : ''}`}>{fmtDue(t.dueAt)}</span>}
+                          {/* Naming who used to hold it is the point — the old behaviour blanked
+                              this, and the work became indistinguishable from work never given out. */}
+                          <span className="chip" title={was || undefined}>{was ? `was ${shortOf(was)}` : 'never assigned'}</span>
+                        </div>
+                      </div>
+                      {canEdit && <span className="subtle-link" style={{ flexShrink: 0 }}>Reassign</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {tasks.length === 0 ? (
+              <p className="wk-quiet">No tasks yet. Meetings file them here by themselves.</p>
+            ) : [...open, ...(showDone ? done : [])].map(taskRow)}
+
+            {done.length > 0 && (
+              <button className="subtle-link wk-foot" onClick={() => setShowDone(v => !v)}>
+                {showDone ? 'Hide' : 'Show'} {done.length} done
+              </button>
+            )}
+
+            {/* Under the list, not over it. What is owed is what you opened this for; the form is
+                what you reach for after reading it.
+                Hidden rather than shown-and-refused — createTask re-checks with writerScope, so
+                leaving it visible would just be a form that fails. */}
+            {canEdit && <form onSubmit={handleCreate} className="quick-add" style={{ marginTop: '16px' }}>
+              <div className="quick-add-main">
+                <input type="text" placeholder={`Add a task to ${project.name}…`} value={title} onChange={e => setTitle(e.target.value)} />
+                <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
+              </div>
+              <div className="quick-add-meta">
+                <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic"
+                  style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+                <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)} aria-label="Assign to">
+                  <option value="">Assign to me</option>
+                  {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{nameOf(email)}</option>)}
+                </select>
+              </div>
+            </form>}
+          </section>
+        )}
+
+        {/* ---------- Notes ---------- */}
+        {section === 'notes' && (
+          <section>
+            {notes.length === 0 ? (
+              <p className="wk-quiet">No notes yet — meetings file them here automatically.</p>
+            ) : notes.map(n => {
+              const origin = fromMeeting(n);
+              return (
+                <div key={n._id} className="task-row" style={{ alignItems: 'flex-start' }}>
+                  <StickyNote size={15} style={{ flexShrink: 0, marginTop: '3px', color: 'var(--text-tertiary)' }} />
+                  {/* The project travels with the link, so the editor opens on this group */}
+                  <Link href={`/notes?project=${projectId}`} style={{ flex: 1, minWidth: 0, textDecoration: 'none', color: 'inherit' }}>
+                    <div className="task-title">{n.title || 'Untitled note'}</div>
+                    {n.body && <div className="task-desc">{n.body.replace(/\s+/g, ' ').slice(0, 140)}</div>}
+                    <div className="task-meta">
+                      <span className="chip">{n.userId?.name || n.userId?.email || 'me'}</span>
+                      <span className="chip">{fmtDate(n.updatedAt)}</span>
+                      {origin && <span className="chip" title="This note came out of a meeting">{origin}</span>}
+                    </div>
+                  </Link>
+                  {/* canDelete is owner-only for project notes; the server enforces it either way */}
+                  {isOwner && <button className="task-del" onClick={() => handleDeleteNote(n)} title="Delete">×</button>}
+                </div>
+              );
+            })}
+            {/* Still a composer and not a link out: writing a note here used to mean following a
+                link with no project in it, landing in Personal, and filing the note away from the
+                work it was about. */}
+            {canEdit && (
+              <form onSubmit={handleAddNote} className="quick-add" style={{ display: 'block', marginTop: '16px' }}>
+                <div className="quick-add-main">
+                  <input type="text" placeholder={`Note title — ${project.name}`} value={noteDraft.title}
+                    onChange={e => setNoteDraft(d => ({ ...d, title: e.target.value }))} />
+                  <button type="submit" className="btn-primary" disabled={savingNote || (!noteDraft.title.trim() && !noteDraft.body.trim())}
+                    style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: (noteDraft.title.trim() || noteDraft.body.trim()) ? 1 : 0.5 }}>
+                    {savingNote ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+                <textarea className="field" rows={3} placeholder="What happened, what was decided…" value={noteDraft.body}
+                  onChange={e => setNoteDraft(d => ({ ...d, body: e.target.value }))}
+                  style={{ marginTop: '8px', resize: 'vertical', lineHeight: 1.55 }} />
+              </form>
+            )}
+            <Link href={`/notes?project=${projectId}`} className="subtle-link wk-foot">Open the full editor — attachments, pinning →</Link>
+          </section>
+        )}
+
+        {/* ---------- People ---------- */}
+        {section === 'people' && (
+          <section>
+            {memberOptions.map(email => {
+              const creator = isProjectCreator(project, email);
+              const role = roleOf(email);
+              const owner = creator || role === 'owner';
+              const load = open.filter(t => assigneeEmailOf(t) === email).length;
+              /* One control for all three roles instead of a promote button, a demote button and
+                 a third for viewers. The creator is permanent, so their row offers nothing, and
+                 you cannot change your own — the server refuses both. */
+              const canSetRole = isOwner && !creator && email !== myEmail;
+              return (
+                <div key={email} className="task-row">
+                  <span className="avatar-xs" style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}>{nameOf(email)[0].toUpperCase()}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="task-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {email === myEmail ? `${nameOf(email)} (you)` : nameOf(email)}
+                    </div>
+                    <div className="task-meta wk-person">
+                      {/* The role slot: the select where it can be changed, the chip where it
+                          cannot. Both in the same slot, so the eye finds a member's role in the
+                          same place on every row. */}
+                      {canSetRole ? (
+                        <select className="wk-select wk-role" value={role} disabled={busyOwner === email}
+                          onChange={e => handleRole(email, e.target.value as 'owner' | 'member' | 'viewer')} aria-label={`Role for ${nameOf(email)}`}>
+                          <option value="owner">Owner</option>
+                          <option value="member">Member</option>
+                          <option value="viewer">View only</option>
+                        </select>
+                      ) : (
+                        <>
+                          {/* One word for one power. "creator" read as a second, higher rank when
+                              it is only a fact about the past — who made the group. */}
+                          {owner && <span className="chip" title="Can add members, rename, and delete shared work">owner</span>}
+                          {/* Named on the row, because "why can't I type here" is the question a
+                              client asks, and the answer should be visible before they ask it. */}
+                          {role === 'viewer' && <span className="chip viewer" title="Sees everything in this group and changes nothing">view only</span>}
+                        </>
+                      )}
+                      <span className="chip">{load} open</span>
+                      {/* "pending", not "invite sent" — members added before invite emails existed
+                          never got one, and the chip should not claim otherwise */}
+                      {!people.get(email)?.hasAccount && <span className="chip" title="No account yet — they see the project once they sign up with this address">pending</span>}
+                    </div>
+                    {people.get(email)?.name && <div className="wk-person-email" title={email}>{email}</div>}
+                  </div>
+                  {isOwner && !owner && <button className="task-del" onClick={() => handleRemove(email)} title="Remove">×</button>}
+                </div>
+              );
+            })}
+            {/* Owner only — addMember is owner-scoped server-side, so showing this to a member
+                would just fail. Picking beats typing: a typo'd address silently emails a
+                stranger, or nobody. */}
+            {isOwner && <div style={{ marginTop: '14px' }}><PersonPicker exclude={memberOptions} onPick={handleInvite} busy={inviting} /></div>}
+          </section>
+        )}
+
+        {/* ---------- What changed ----------
+            The screen that replaces a manager's chasing: who moved what, without asking anyone.
+            History cannot be backfilled, which is why this starts recording before it is pretty. */}
+        {section === 'activity' && (
+          <section>
+            <div className="wk-block-head" style={{ justifyContent: 'flex-end' }}>
+              <select className="wk-select" value={days} onChange={e => setDays(Number(e.target.value))} aria-label="How far back">
+                <option value={7}>7 days</option>
+                <option value={30}>30 days</option>
+                <option value={90}>90 days</option>
+              </select>
+            </div>
+            {events.length === 0 ? (
+              <p className="wk-quiet">Nothing in the last {days} days.</p>
+            ) : events.map(ev => {
+              const said = phrase(ev.verb, ev.subject);
+              if (!said) return null;   // an event from a newer deploy than this page knows about
+              const who = ev.actorId?.name || ev.actorId?.email || 'Someone';
+              return (
+                <div key={ev._id} className="wk-event">
+                  <b>{ev.actorId?.email === myEmail ? 'You' : who.split(' ')[0]}</b>{' '}
+                  {said}
+                  <span>{fmtWhen(ev.at)}</span>
                 </div>
               );
             })}
           </section>
         )}
 
-        {/* ---------- Tasks ---------- */}
-        <section className="ws-section ws-s-tasks">
-          {sectionHead('tasks', 'Tasks', open.length)}
-          {openSections.tasks && (
-            <>
-              {tasks.length === 0 ? (
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '4px 2px 12px' }}>No tasks yet.</p>
-              ) : (
-                [...open, ...(showDone ? done : [])].map(t => {
-                  const isOverdue = t.dueAt && !t.completed && new Date(t.dueAt).getTime() < Date.now();
-                  const who = t.assigneeId?.email || t.assigneeEmail;
-                  return (
-                    <div key={t._id} className={`task-row ${t.completed ? 'done' : ''}`}>
-                      <button className={`task-check ${t.completed ? 'on' : ''}`} onClick={() => handleToggle(t._id)}
-                        disabled={!canEdit} aria-label="toggle">
-                        {t.completed && <svg width="12" height="9" viewBox="0 0 14 10" fill="none"><path d="M1.5 5L5.5 9L12.5 1.5" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                      </button>
-                      <div style={{ flex: 1, minWidth: 0, cursor: canEdit ? 'pointer' : 'default' }} onClick={() => canEdit && openEdit(t)}>
-                        <div className="task-title">{t.title}</div>
-                        {t.description && <div className="task-desc">{t.description}</div>}
-                        <div className="task-meta">
-                          {t.dueAt && <span className={`chip ${isOverdue ? 'overdue' : ''}`}>{fmtDue(t.dueAt)}</span>}
-                          {who && <span className={`chip ${who === myEmail ? 'me' : ''}`} title={who}>{who === myEmail ? 'me' : shortOf(who)}</span>}
-                          {t.signedOffAt && (
-                            <span className="chip signed" title={`Signed off by ${t.signedOffBy?.name || t.signedOffBy?.email || 'an owner'} · ${fmtDate(t.signedOffAt)}`}>
-                              <BadgeCheck size={11} /> signed off
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      {/* Ticking is the assignee's; signing off is the owner's. Offered only once
-                          the work is actually done — approving unfinished work is what would make
-                          the number on /admin stop meaning anything. */}
-                      {isOwner && t.completed && (
-                        <button className="subtle-link" style={{ flexShrink: 0 }} onClick={() => handleSignOff(t._id)}>
-                          {t.signedOffAt ? 'Undo sign-off' : 'Sign off'}
-                        </button>
-                      )}
-                      {isOwner && <button className="task-del" onClick={() => handleDelete(t._id)} title="Delete">×</button>}
-                    </div>
-                  );
-                })
-              )}
-              {done.length > 0 && (
-                <button className="subtle-link" onClick={() => setShowDone(v => !v)} style={{ marginTop: '8px', fontSize: '0.8rem' }}>
-                  {showDone ? 'Hide' : 'Show'} {done.length} done
-                </button>
-              )}
-
-              {/* Under the list, not over it. What is owed is what you opened the group to read;
-                  the form is what you reach for after reading it, and above the list it pushed
-                  the first task off the fold on a phone.
-                  Hidden rather than shown-and-refused — createTask re-checks with
-                  projectForWriter, so leaving it visible would just be a form that fails. */}
-              {canEdit && <form onSubmit={handleCreate} className="quick-add" style={{ marginTop: '12px' }}>
-                <div className="quick-add-main">
-                  <input type="text" placeholder={`Add a task to ${project.name}…`} value={title} onChange={e => setTitle(e.target.value)} />
-                  <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
-                </div>
-                <div className="quick-add-meta">
-                  <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic"
-                    style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
-                  <select className="field" value={assignee} onChange={e => setAssignee(e.target.value)}>
-                    <option value="">Assign to me</option>
-                    {memberOptions.filter(e => e !== myEmail).map(email => <option key={email} value={email}>{nameOf(email)}</option>)}
-                  </select>
-                </div>
-              </form>}
-            </>
-          )}
-        </section>
-
-        {/* ---------- Meetings ---------- */}
-        <section className="ws-section ws-s-meetings" id="meetings">
-          {sectionHead('meetings', 'Meetings', moms.length)}
-          {openSections.meetings && (
-            <MomSection project={project} projects={projects} myEmail={myEmail} memberOptions={memberOptions}
-              onTasksCreated={load} />
-          )}
-        </section>
-
-        {/* ---------- Notes ---------- */}
-        <section className="ws-section ws-s-notes">
-          {sectionHead('notes', 'Notes', notes.length)}
-          {openSections.notes && (
-            <>
-              {notes.length === 0 ? (
-                <p style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.85rem', padding: '8px 0' }}>
-                  No notes yet — meetings file them here automatically.
-                </p>
-              ) : notes.map(n => {
-                const origin = fromMeeting(n);
-                return (
-                  <div key={n._id} className="task-row" style={{ alignItems: 'flex-start' }}>
-                    <StickyNote size={15} style={{ flexShrink: 0, marginTop: '3px', color: 'var(--text-tertiary)' }} />
-                    {/* The project travels with the link, so the editor opens on this group */}
-                    <Link href={`/notes?project=${projectId}`} style={{ flex: 1, minWidth: 0, textDecoration: 'none', color: 'inherit' }}>
-                      <div className="task-title">{n.title || 'Untitled note'}</div>
-                      {n.body && <div className="task-desc">{n.body.replace(/\s+/g, ' ').slice(0, 140)}</div>}
-                      <div className="task-meta">
-                        <span className="chip">{n.userId?.name || n.userId?.email || 'me'}</span>
-                        <span className="chip">{fmtDate(n.updatedAt)}</span>
-                        {origin && <span className="chip" title="This note came out of a meeting">{origin}</span>}
-                      </div>
-                    </Link>
-                    {/* canDelete is owner-only for project notes; the server enforces it either way */}
-                    {isOwner && <button className="task-del" onClick={() => handleDeleteNote(n)} title="Delete">×</button>}
-                  </div>
-                );
-              })}
-              {/* The composer, under the notes rather than over them — a three-row form ahead of
-                  the list buried what the meeting already filed here. Still a composer and not a
-                  link out: writing a note here used to mean following a link with no project in
-                  it, landing in Personal, and filing the note away from the work it was about. */}
-              {canEdit && (
-                <form onSubmit={handleAddNote} className="quick-add" style={{ display: 'block', marginTop: '12px' }}>
-                  <div className="quick-add-main">
-                    <input type="text" placeholder={`Note title — ${project.name}`} value={noteDraft.title}
-                      onChange={e => setNoteDraft(d => ({ ...d, title: e.target.value }))} />
-                    <button type="submit" className="btn-primary" disabled={savingNote || (!noteDraft.title.trim() && !noteDraft.body.trim())}
-                      style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: (noteDraft.title.trim() || noteDraft.body.trim()) ? 1 : 0.5 }}>
-                      {savingNote ? 'Saving…' : 'Save'}
-                    </button>
-                  </div>
-                  <textarea className="field" rows={3} placeholder="What happened, what was decided…" value={noteDraft.body}
-                    onChange={e => setNoteDraft(d => ({ ...d, body: e.target.value }))}
-                    style={{ marginTop: '8px', resize: 'vertical', lineHeight: 1.55 }} />
-                </form>
-              )}
-
-              <Link href={`/notes?project=${projectId}`} className="subtle-link" style={{ display: 'inline-block', marginTop: '8px', fontSize: '0.8rem' }}>
-                Open the full editor — attachments, pinning →
-              </Link>
-            </>
-          )}
-        </section>
-
-          </div>{/* /ws-main */}
-
-          <aside className="ws-rail">
-        {/* ---------- What changed ----------
-            The screen that replaces a manager's chasing: who moved what, without asking anyone.
-            History cannot be backfilled, which is why this starts recording before it is pretty.
-
-            Top of the rail, above People: this is the thing you come back to the group to read.
-            People is a list you set up once and then scroll past every day after. */}
-        <section className="ws-section ws-s-activity">
-          {sectionHead('activity', 'What changed', events.length,
-            <select className="ws-days" value={days} onChange={e => setDays(Number(e.target.value))} aria-label="How far back">
-              <option value={7}>7 days</option>
-              <option value={30}>30 days</option>
-              <option value={90}>90 days</option>
-            </select>
-          )}
-          {openSections.activity && (
-            events.length === 0 ? (
-              <p style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.85rem', padding: '4px 0' }}>
-                Nothing in the last {days} days.
-              </p>
-            ) : events.map(ev => {
-              const said = phrase(ev.verb, ev.subject);
-              if (!said) return null;   // an event from a newer deploy than this page knows about
-              const who = ev.actorId?.name || ev.actorId?.email || 'Someone';
-              return (
-                <div key={ev._id} className="ws-event">
-                  <span className="ws-event-who">{ev.actorId?.email === myEmail ? 'You' : who.split(' ')[0]}</span>{' '}
-                  {said}
-                  <span className="ws-event-when">{fmtWhen(ev.at)}</span>
-                </div>
-              );
-            })
-          )}
-        </section>
-
-        {/* ---------- People ---------- */}
-        <section className="ws-section ws-s-people">
-          {sectionHead('people', 'People', memberOptions.length)}
-          {openSections.people && (
-            <>
-              {memberOptions.map(email => {
-                const creator = isProjectCreator(project, email);
-                const role = roleOf(email);
-                const owner = creator || role === 'owner';
-                const load = open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length;
-                /* One control for all three roles instead of a promote button, a demote
-                   button and a third for viewers. The creator is permanent, so their row
-                   offers nothing, and you cannot change your own — the server refuses both. */
-                const canSetRole = isOwner && !creator && email !== myEmail;
-                return (
-                  <div key={email} className="task-row">
-                    <span className="avatar-xs" style={{ width: '28px', height: '28px', fontSize: '0.75rem' }}>{nameOf(email)[0].toUpperCase()}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="task-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {email === myEmail ? `${nameOf(email)} (you)` : nameOf(email)}
-                      </div>
-                      {/* Two lines, not four. The role still sits directly under the name, which
-                          was the whole point of un-wrapping these rows — but the load and the
-                          pending flag are short enough to ride beside it rather than each taking
-                          a line of their own, and the address drops to a quieter line below.
-                          The rail is a reference column; it should not be the tallest thing here. */}
-                      <div className="task-meta ws-person">
-                        {/* The role slot: the select where it can be changed, the chip where
-                            it cannot. Both in the same slot, so the eye finds a member's role
-                            in the same place on every row. */}
-                        {canSetRole ? (
-                          <select className="ws-days ws-role" value={role} disabled={busyOwner === email}
-                            onChange={e => handleRole(email, e.target.value as 'owner' | 'member' | 'viewer')} aria-label={`Role for ${nameOf(email)}`}>
-                            <option value="owner">Owner</option>
-                            <option value="member">Member</option>
-                            <option value="viewer">View only</option>
-                          </select>
-                        ) : (
-                          <>
-                            {/* One word for one power. "creator" read as a second, higher rank
-                                when it is only a fact about the past — who made the group, which
-                                the "Created by" note under the title already says. */}
-                            {owner && <span className="chip" title="Can add members, rename, and delete shared work">owner</span>}
-                            {/* Named on the row, because "why can't I type here" is the question a
-                                client asks, and the answer should be visible before they ask it. */}
-                            {role === 'viewer' && <span className="chip viewer" title="Sees everything in this group and changes nothing">view only</span>}
-                          </>
-                        )}
-                        <span className="chip">{load} open</span>
-                        {/* "pending", not "invite sent" — members added before invite emails
-                            existed never got one, and the chip should not claim otherwise */}
-                        {!people.get(email)?.hasAccount && <span className="chip" title="No account yet — they see the project once they sign up with this address">pending</span>}
-                      </div>
-                      {/* The address still matters — it is what an invite was sent to — but it is
-                          the thing on this row you look up once, so it reads as a footnote. */}
-                      {people.get(email)?.name && <div className="ws-person-email" title={email}>{email}</div>}
-                    </div>
-                    {isOwner && !owner && <button className="task-del" onClick={() => handleRemove(email)} title="Remove">×</button>}
-                  </div>
-                );
-              })}
-              {/* Owner only — addMember is owner-scoped server-side, so showing this to a
-                  member would just fail. Picking beats typing: a typo'd address silently
-                  emails a stranger, or nobody. */}
-              {isOwner && (
-                <PersonPicker exclude={memberOptions} onPick={handleInvite} busy={inviting} />
-              )}
-            </>
-          )}
-        </section>
-
         {/* ---------- Files ---------- */}
-        <section className="ws-section ws-s-files">
-          {sectionHead('files', 'Files', files.length)}
-          {openSections.files && (
-            <>
-              {files.length === 0 ? null : files.map(d => (
-                <a key={d._id} href={d.url} target="_blank" rel="noreferrer" className="task-row" style={{ textDecoration: 'none' }}>
-                  <FileText size={15} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="task-title">{d.name}</div>
-                    <div className="task-meta"><span className="chip">{fmtDate(d.createdAt)}</span></div>
-                  </div>
-                </a>
-              ))}
-              <Link href="/d-locker" className="subtle-link" style={{ display: 'inline-block', marginTop: files.length ? '8px' : '0', fontSize: '0.8rem' }}>
-                {files.length ? 'Open the Digi Locker →' : 'Add from the Digi Locker →'}
-              </Link>
-            </>
-          )}
-        </section>
+        {section === 'files' && (
+          <section>
+            {files.length === 0 ? <p className="wk-quiet">No files in this group yet.</p> : files.map(d => (
+              <a key={d._id} href={d.url} target="_blank" rel="noreferrer" className="task-row" style={{ textDecoration: 'none' }}>
+                <FileText size={15} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="task-title">{d.name}</div>
+                  <div className="task-meta"><span className="chip">{fmtDate(d.createdAt)}</span></div>
+                </div>
+              </a>
+            ))}
+            <Link href="/d-locker" className="subtle-link wk-foot">
+              {files.length ? 'Open the Digi Locker →' : 'Add from the Digi Locker →'}
+            </Link>
+          </section>
+        )}
 
-        {/* ---------- About: one shared description of the project, not a note per thought ---------- */}
-        <section className="ws-section ws-s-about">
-          {sectionHead('about', 'About', notesDraft ? 1 : 0)}
-          {openSections.about && (
-            <>
-              <textarea className="field" rows={8} placeholder={canEdit ? 'What this project is — context, decisions, links…' : 'Nothing written yet.'} value={notesDraft}
-                readOnly={!canEdit}
-                onChange={e => { setNotesDraft(e.target.value); setNotesSaved(false); }} style={{ resize: 'vertical', lineHeight: 1.6 }} />
-              <button onClick={handleSaveNotes} disabled={notesSaved || !canEdit} className="btn-primary"
-                style={{ marginTop: '10px', padding: '10px 24px', borderRadius: '12px', fontWeight: 800, opacity: notesSaved ? 0.5 : 1 }}>
+        {/* ---------- About: one shared description of the group, not a note per thought ---------- */}
+        {section === 'about' && (
+          <section>
+            <label htmlFor="wk-about" className="wk-eyebrow" style={{ display: 'block' }}>What this group is</label>
+            <textarea id="wk-about" className="field" rows={10} placeholder={canEdit ? 'Context, decisions, links…' : 'Nothing written yet.'} value={notesDraft}
+              readOnly={!canEdit}
+              onChange={e => { setNotesDraft(e.target.value); setNotesSaved(false); }} style={{ resize: 'vertical', lineHeight: 1.6 }} />
+            {canEdit && (
+              <button onClick={handleSaveNotes} disabled={notesSaved} className="btn-primary"
+                style={{ marginTop: '12px', padding: '12px 26px', borderRadius: '14px', fontWeight: 800, opacity: notesSaved ? 0.5 : 1 }}>
                 {notesSaved ? 'Saved' : 'Save'}
               </button>
-            </>
-          )}
-        </section>
+            )}
+          </section>
+        )}
 
-          </aside>
-        </div>{/* /ws-grid */}
+        {renameOpen && (
+          <div className="modal-overlay" onClick={() => { setRenameOpen(false); setRenaming(project.name); }}>
+            <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+              <div className="modal-header">
+                <h2 className="modal-title">Rename group</h2>
+                <button className="modal-close" onClick={() => { setRenameOpen(false); setRenaming(project.name); }} aria-label="Close"><X size={22} /></button>
+              </div>
+              <input className="field" value={renaming} autoFocus aria-label="Group name"
+                onChange={e => setRenaming(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleRename(); }} />
+              <button className="btn-primary" onClick={handleRename} disabled={!renaming.trim()}
+                style={{ marginTop: '12px', padding: '12px 26px', borderRadius: '14px', fontWeight: 800, width: '100%' }}>
+                Rename
+              </button>
+            </div>
+          </div>
+        )}
 
         {editing && (
           <div className="modal-overlay" onClick={() => setEditing(null)}>
             <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '460px' }}>
               <div className="modal-header">
                 <h2 className="modal-title">Edit task</h2>
-                <button className="modal-close" onClick={() => setEditing(null)}><X size={22} /></button>
+                <button className="modal-close" onClick={() => setEditing(null)} aria-label="Close"><X size={22} /></button>
               </div>
               <div style={{ display: 'grid', gap: '10px' }}>
-                <input className="field" value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} placeholder="Task" autoFocus />
+                <input className="field" value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} placeholder="Task" aria-label="Task" autoFocus />
                 <textarea className="field" rows={4} value={draft.description} onChange={e => setDraft(d => ({ ...d, description: e.target.value }))}
-                  placeholder="Description — details, checklist, links…" style={{ resize: 'vertical', lineHeight: 1.5 }} />
-                <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Due</label>
-                <input className="field" type="datetime-local" value={draft.dueAt} onChange={e => setDraft(d => ({ ...d, dueAt: e.target.value }))}
+                  placeholder="Description — details, checklist, links…" aria-label="Description" style={{ resize: 'vertical', lineHeight: 1.5 }} />
+                <label htmlFor="wk-due" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Due</label>
+                <input id="wk-due" className="field" type="datetime-local" value={draft.dueAt} onChange={e => setDraft(d => ({ ...d, dueAt: e.target.value }))}
                   style={{ color: draft.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
-                <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Assigned to</label>
-                <select className="field" value={draft.assigneeEmail} onChange={e => setDraft(d => ({ ...d, assigneeEmail: e.target.value }))}>
+                <label htmlFor="wk-assignee" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Assigned to</label>
+                <select id="wk-assignee" className="field" value={draft.assigneeEmail} onChange={e => setDraft(d => ({ ...d, assigneeEmail: e.target.value }))}>
                   <option value="">Unassigned</option>
                   {[...new Set([...memberOptions, draft.assigneeEmail].filter(Boolean))].map(email => (
                     <option key={email} value={email}>{email === myEmail ? 'me' : email}</option>
@@ -738,14 +834,14 @@ export default function ProjectWorkspace() {
       <div className="print-only">
         <h1>{project.name}</h1>
         <p className="print-sub">
-          {memberOptions.length} member{memberOptions.length === 1 ? '' : 's'} · {open.length} open · {done.length} done · {moms.length} meeting{moms.length === 1 ? '' : 's'}
+          {plural(memberOptions.length, 'member')} · {open.length} open · {done.length} done · {plural(moms.length, 'meeting')}
           <br />Exported {fmtDate(new Date().toISOString())}
         </p>
 
         <h2>People</h2>
         <ul>
           {memberOptions.map(email => (
-            <li key={email}>{email}{isProjectOwner(project, email) ? ' — owner' : ''} · {open.filter(t => (t.assigneeId?.email || t.assigneeEmail) === email).length} open</li>
+            <li key={email}>{email}{isProjectOwner(project, email) ? ' — owner' : ''} · {open.filter(t => assigneeEmailOf(t) === email).length} open</li>
           ))}
         </ul>
 
@@ -761,7 +857,7 @@ export default function ProjectWorkspace() {
                     {t.description && <div className="print-desc">{t.description}</div>}
                   </td>
                   <td>{t.dueAt ? fmtDue(t.dueAt) : '—'}</td>
-                  <td>{(t.assigneeId?.email || t.assigneeEmail || '—').split('@')[0]}</td>
+                  <td>{(assigneeEmailOf(t) || '—').split('@')[0]}</td>
                 </tr>
               ))}
             </tbody>
