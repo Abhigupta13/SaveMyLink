@@ -112,7 +112,7 @@ function SarvamAccessCard() {
     setBusy('');
     if (!res.success) { toast(res.error || 'Could not change that', 'error'); return; }
     // Trust the server's answer rather than re-fetching: the row is the only thing that changed
-    setRows(rs => (rs || []).map(r => r.id === row.id ? { ...r, access: res.access } : r));
+    setRows(rs => (rs || []).map(r => r.id === row.id ? { ...r, access: res.access, grantedBy: res.by } : r));
     toast(res.access ? `${row.email} now has the upgraded engine` : `${row.email} is back on the free engine`, 'success');
   };
 

@@ -97,7 +97,10 @@ export async function setSarvamAccess(userId: string, on: boolean) {
       : { $set: { sarvamAccess: false, sarvamAccessBy: session.user.email, sarvamAccessAt: new Date() } });
     if (!res.matchedCount) return { success: false as const, error: 'Unknown account' };
 
-    return { success: true as const, access: on };
+    // The granter comes back with the answer. The grid draws "by <whoever>" from the row it
+    // already holds, and without this it kept showing whoever touched the account LAST TIME —
+    // a stale name on the one card whose whole job is recording who spent the money.
+    return { success: true as const, access: on, by: session.user.email || '' };
   } catch (error) {
     console.error('Failed to set Sarvam access:', error);
     return { success: false as const, error: 'Could not change that' };
