@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePathname, useRouter } from 'next/navigation';
-import { X, ArrowRight, Check } from 'lucide-react';
+import { X, ArrowRight, Check, Loader2 } from 'lucide-react';
 import { tourStatus, markTourDone } from '@/actions/intro';
 
 /**
@@ -37,6 +37,10 @@ const PAD = 8;      // breathing room around the highlighted element
 const GAP = 14;     // gap between the hole and the bubble
 const MARGIN = 16;  // keep the bubble this far from the screen edge
 const STORE = 'tourStep';
+// How long a step waits for its screen, and then for its target, before giving up and explaining
+// itself from the middle of the screen. Two budgets, not one: the effect re-runs when the route
+// lands, so a slow page and a slow target each get their own — and neither can hang the tour.
+const WAIT_MS = 2500;
 
 export default function Tour() {
   const router = useRouter();
@@ -45,6 +49,15 @@ export default function Tour() {
   const [index, setIndex] = useState(0);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  // False from the moment Next is pressed until this step's screen AND its target have actually
+  // arrived. Until then the bubble says it is waiting instead of describing a screen that is not
+  // there yet — the phone bug: router.push resolves over the network, the old page stays on
+  // screen, and the tour was already talking about the next one.
+  const [ready, setReady] = useState(false);
+  // The index whose screen has actually landed. Lets a late arrival finish the job — the route
+  // can outrun WAIT_MS, settle centred, and still pick its spotlight up when it turns up —
+  // without throwing the bubble back into "One moment" under a user already reading the step.
+  const shownRef = useRef(-1);
   const bubbleRef = useRef<HTMLDivElement>(null);
   const reduce = typeof window !== 'undefined'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -52,7 +65,7 @@ export default function Tour() {
   const step = STEPS[index];
   const isLast = index === STEPS.length - 1;
 
-  const start = useCallback((from = 0) => { setIndex(from); setActive(true); }, []);
+  const start = useCallback((from = 0) => { shownRef.current = -1; setIndex(from); setActive(true); }, []);
 
   const finish = useCallback(() => {
     setActive(false);
@@ -95,26 +108,38 @@ export default function Tour() {
     return true;
   }, [index]);
 
-  // Navigate to the step's page, wait for its target to exist, then lock onto it.
+  // Navigate to the step's page, wait for BOTH the page and its target to arrive, then lock on.
+  // The poll reads window.location rather than the `pathname` hook: router.push only commits the
+  // URL once the route's payload is in, and that commit is the honest signal that the DOM under
+  // us has been swapped. Nothing is shown until then, so the spotlight can never land on the
+  // previous screen. Give-up is a centred bubble, never a hang.
   useEffect(() => {
     if (!active) return;
     const s = STEPS[index];
-    setRect(null);   // drop the previous target's hole immediately so it can't linger mid-move
-    if (pathname !== s.route) { router.push(s.route); return; }   // re-runs when pathname lands
-    if (s.selector === null) return;
+    if (shownRef.current !== index) {
+      setRect(null);   // drop the previous target's hole immediately so it can't linger mid-move
+      setReady(false);
+    }
+    if (pathname !== s.route) router.push(s.route);   // effect re-runs when pathname lands
 
-    let cancelled = false, tries = 0;
+    let cancelled = false;
+    const deadline = Date.now() + WAIT_MS;
+    const settle = (el: HTMLElement | null) => {
+      shownRef.current = index;
+      if (el) el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+      setRect(el ? el.getBoundingClientRect() : null);
+      setReady(true);
+    };
     const tick = () => {
       if (cancelled) return;
-      const el = document.querySelector(s.selector!) as HTMLElement | null;
-      if (el) {
-        el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-        setRect(el.getBoundingClientRect());
-      } else if (tries++ < 40) {
-        setTimeout(tick, 100);   // client page still fetching — keep looking for ~4s
-      } else {
-        setRect(null);           // genuinely absent (empty account) — carry on centred
+      if (window.location.pathname === s.route) {
+        if (s.selector === null) { settle(null); return; }   // deliberately centred step
+        const el = document.querySelector(s.selector) as HTMLElement | null;
+        if (el) { settle(el); return; }
       }
+      // Still travelling, or the target has not mounted yet. Keep looking, then explain the
+      // step centred rather than leaving the bubble spinning (empty account, slow 4G, both).
+      if (Date.now() < deadline) setTimeout(tick, 80); else settle(null);
     };
     tick();
     return () => { cancelled = true; };
@@ -122,7 +147,7 @@ export default function Tour() {
 
   // Keep the hole glued to the element as it scrolls or the viewport resizes.
   useEffect(() => {
-    if (!active) return;
+    if (!active || !ready) return;   // mid-move the selector may still match the OLD page's DOM
     let raf = 0;
     const onMove = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => measure()); };
     window.addEventListener('scroll', onMove, true);
@@ -132,7 +157,7 @@ export default function Tour() {
       window.removeEventListener('scroll', onMove, true);
       window.removeEventListener('resize', onMove);
     };
-  }, [active, measure]);
+  }, [active, ready, measure]);
 
   // Place the bubble: below the target if it fits, else above, else clamped on-screen.
   useLayoutEffect(() => {
@@ -189,8 +214,14 @@ export default function Tour() {
           <span className="tour-count">{index + 1} / {STEPS.length}</span>
           <button className="icon-btn" onClick={finish} aria-label="End tour"><X size={16} /></button>
         </div>
-        <h2 id="tour-title" className="tour-bubble-title">{step.title}</h2>
-        <p id="tour-body" className="tour-bubble-body">{step.body}</p>
+        {/* Waiting reads as a step of its own, not as a broken one: the bubble keeps its frame,
+            its counter and its buttons, and only the two lines that would be a lie change. */}
+        <h2 id="tour-title" className="tour-bubble-title">{ready ? step.title : 'One moment'}</h2>
+        <p id="tour-body" className="tour-bubble-body" aria-live="polite">
+          {ready ? step.body : (
+            <span className="tour-wait"><Loader2 size={14} aria-hidden="true" /> Opening the screen this step is about…</span>
+          )}
+        </p>
         <div className="tour-bubble-foot">
           {!isLast && <button className="tour-btn ghost" onClick={next}>Skip</button>}
           {!isLast && <button className="tour-btn ghost" onClick={finish} style={{ marginLeft: 'auto' }}>Done</button>}
