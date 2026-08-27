@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText, AlertTriangle, BadgeCheck, Mic } from 'lucide-react';
+import { ArrowLeft, Trash2, X, Check, Download, Pencil, ChevronDown, StickyNote, FileText, AlertTriangle, BadgeCheck } from 'lucide-react';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask } from '@/actions/task';
 import { getProjectWorkspace, addMember, removeMember, setProjectRole, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
 import { getNotes, createNote, deleteNote } from '@/actions/note';
@@ -365,19 +365,10 @@ export default function ProjectWorkspace() {
               </p>
             )}
           </div>
-          {/* The one thing this app is for, offered where a first-time member looks. An anchor,
-              not a control: MomSection owns recording, and this only has to get you to it —
-              opening the section first, because scrolling to a collapsed heading shows nothing. */}
-          {canEdit && (
-            <a href="#meetings" className="btn-primary ws-record"
-              onClick={e => {
-                e.preventDefault();
-                setOpenSections(o => ({ ...o, meetings: true }));
-                document.getElementById('meetings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}>
-              <Mic size={15} /> Record meeting
-            </a>
-          )}
+          {/* No "Record meeting" button here. It only scrolled to the meetings section, which
+              carries MomSection's own record dot — two record affordances on one screen, and on a
+              phone the header one was the louder of the two. The section itself now sits above
+              Tasks on a phone (globals.css .ws-s-*), so the dot is the first control you reach. */}
           <button className="icon-btn" onClick={() => window.print()} title="Download as PDF"><Download size={16} /></button>
           {isCreator && <button className="icon-btn danger" onClick={handleDeleteProject} title="Delete project"><Trash2 size={16} /></button>}
         </header>
