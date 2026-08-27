@@ -219,6 +219,17 @@ ownership); `memberSession` defaults to the strict write gate so the safe settin
 get by forgetting; sign-off requires `completed` and un-ticking clears it, so the admin funnel
 cannot show signed-off unfinished work.
 
+**Leaving a group takes your claim on its work with you** (Round E, finding 3). Removal used to
+leave assignments intact, with the "Needs an owner" band as the compensating control — but once a
+task could have several assignees, that band only fires when *nobody* left is a member, so a task
+shared with a second person never surfaced and the removed person kept reading its title and
+description through My Tasks, search, Jarvis and their phone reminders. Being an assignee IS read
+access. The founder's call: removing someone from a group removes them from its tasks. Promote,
+don't orphan — the next assignee becomes primary; if they were the only one, the task goes
+unassigned and lands in the band exactly as before. The task, its due date, its author and its
+history all stay. Every exit routes through one function (`lib/dropAssignee`): the owner removing
+someone, the same thing asked of Jarvis, and **account deletion**, which had the identical hole.
+
 **MOM was tested end to end** with a real LLM call in Round E. This regenerated the Mowgli meeting's
 summary text — transcript and original tasks intact, wording changed.
 
