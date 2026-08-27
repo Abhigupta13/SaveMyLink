@@ -38,7 +38,16 @@ function SigninInner() {
     email: validateEmail(email),
     password: !password ? 'Please enter your password' : '',
   });
-  const blur = (f: string) => { setTouched(t => ({ ...t, [f]: true })); setErrors(check()); };
+  /* Leaving a field you never filled is not a mistake yet. The email box is autofocused, so
+     clicking "Continue with Google" blurs it and used to answer with "Please enter your email"
+     while the redirect was already running. An empty field stays quiet until submit; a filled one
+     is still checked on the way out, which is where format mistakes want catching. */
+  const blur = (f: string) => {
+    const value = f === 'email' ? email : password;
+    if (!value) { setTouched(t => ({ ...t, [f]: false })); return; }
+    setTouched(t => ({ ...t, [f]: true }));
+    setErrors(check());
+  };
   const err = (f: string) => (touched[f] ? errors[f] : '') || '';
 
   const handleSubmit = async (e: React.FormEvent) => {

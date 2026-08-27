@@ -46,7 +46,12 @@ function SignupForm() {
     confirm: confirm !== password ? 'Passwords do not match' : '',
   });
 
+  /* Same rule as sign-in: an empty field you are leaving is not a mistake yet, or clicking
+     "Sign up with Google" answers with "Please enter your name" while the redirect is running.
+     A filled field is still checked on the way out. */
   const blur = (field: string) => {
+    const value = ({ name, email, password, confirm } as Record<string, string>)[field] ?? '';
+    if (!value) { setTouched(t => ({ ...t, [field]: false })); return; }
     setTouched(t => ({ ...t, [field]: true }));
     setErrors(check());
   };
