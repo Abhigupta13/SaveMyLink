@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles, Languages } from 'lucide-react';
+import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles, Languages, BellRing } from 'lucide-react';
 import { getContacts } from '@/actions/contact';
-import { getMyOpenTasks } from '@/actions/task';
+import { getMyOpenTasks, getReminderDefault, setReminderDefault } from '@/actions/task';
+import ReminderPicker from '@/components/ReminderPicker';
+import { DEFAULT_CHOICE, type ReminderChoice } from '@/lib/reminderRule';
 import { getProjects } from '@/actions/project';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useUser } from '@/components/UserContext';
@@ -23,6 +25,7 @@ export default function ProfilePage() {
   const [stats, setStats] = useState<{ tasks: number; projects: number; contacts: number } | null>(null);
   const [admin, setAdmin] = useState(false);
   const [askFirst, setAskFirst] = useState(true);   // Jarvis confirms before writing into a group
+  const [remind, setRemind] = useState<ReminderChoice>(DEFAULT_CHOICE);   // what every new task starts on
   const user = session?.user;
   const initial = (user?.name || user?.email || 'U')[0].toUpperCase();
 
@@ -40,6 +43,7 @@ export default function ProfilePage() {
   useEffect(() => {
     if (status !== 'authenticated') return;
     getJarvisConfirm().then(r => setAskFirst(r.on)).catch(() => {});
+    getReminderDefault().then(r => setRemind((r.choice as ReminderChoice) || DEFAULT_CHOICE)).catch(() => {});
   }, [status]);
 
   // Only decides whether the row is drawn; /admin's own actions are what actually gate the data
@@ -134,6 +138,28 @@ export default function ProfilePage() {
           }} />
           <span className="slider round"></span>
         </label>
+      </div>
+
+      {/* The global default, set once. Every "Remind me" picker in the app starts here, and every
+          task written before this setting existed answers to it too — which is why changing it
+          does NOT re-aim tasks that already carry a choice of their own. */}
+      <div className="card" style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span className="row-icon"><BellRing size={18} strokeWidth={2.2} /></span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontWeight: 700 }}>Remind me about tasks</span>
+            <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              What every new task starts on. You can change it on any one task.
+            </span>
+          </span>
+        </span>
+        <ReminderPicker id="default-remind" value={remind} onChange={async next => {
+          const was = remind;
+          setRemind(next);
+          const r = await setReminderDefault(next);
+          if (!r.success) { setRemind(was); toast('Could not save that', 'error'); return; }
+          toast('Saved', 'success');
+        }} />
       </div>
 
       {/* One line, not three paragraphs: the how-and-what-it-costs explainer lives on /sarvam-key,

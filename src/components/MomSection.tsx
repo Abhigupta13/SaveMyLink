@@ -8,6 +8,9 @@ import { useFeedback } from '@/components/ui/Feedback';
 import { useShareNotice } from '@/components/ShareNotice';
 import { isProjectOwner, canWrite } from '@/lib/scope';
 import { formatDay, formatDate } from '@/lib/time';
+import { getReminderDefault } from '@/actions/task';
+import ReminderPicker from '@/components/ReminderPicker';
+import type { ReminderChoice } from '@/lib/reminderRule';
 
 interface MomSectionProps {
   projects?: any[]; // all projects, so items can be routed to any of them
@@ -55,7 +58,11 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const [elapsed, setElapsed] = useState(0);
   const [pipeline, setPipeline] = useState(''); // status text while upload/transcribe/extract runs
   type Kind = 'task' | 'note' | 'brief';
-  type Draft = { kind: Kind; title: string; detail?: string; assigneeEmail: string; dueAt: string; projectId: string; missing: string[] };
+  type Draft = { kind: Kind; title: string; detail?: string; assigneeEmail: string; dueAt: string; projectId: string; missing: string[]; reminder: ReminderChoice | null };
+  // The person's profile default, shown in each row's picker until they change that row. Seeded as
+  // null rather than copied into every draft, so the drafts can be built before this call lands.
+  const [reminderDefault, setReminderDefault] = useState<ReminderChoice | null>(null);
+  useEffect(() => { getReminderDefault().then(r => setReminderDefault((r.choice as ReminderChoice) || null)).catch(() => {}); }, []);
   // What an extracted item becomes. Three named choices, all visible at once — the old single
   // icon cycled task → note → brief and explained itself in a `title` tooltip, which on a phone
   // is no explanation at all.
@@ -111,6 +118,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
               dueAt: toLocalInput(c.dueAt),
               projectId: c.projectId ? String(c.projectId) : '',
               missing: c.missing || [],
+              reminder: null,   // null = my default; the row's own picker overrides it
             }));
           }
         }
@@ -295,6 +303,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       assigneeEmail: d.assigneeEmail || undefined,
       dueAt: d.dueAt ? new Date(d.dueAt).toISOString() : undefined,
       projectId: d.projectId,   // '' is a real choice (Personal) — never collapse it to undefined
+      reminder: d.reminder || undefined,   // undefined = resolve my profile default server-side
     }));
     // Once for the batch, per distinct group the items are going into
     for (const pid of new Set(items.map(i => i.projectId).filter(Boolean))) {
@@ -602,6 +611,12 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                                     title={needs('due') ? 'No deadline was mentioned — set one' : 'Deadline from the recording'}
                                     className={gapCls('due', !d.dueAt)}
                                     style={{ flex: '1 1 150px', color: d.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+                                  {/* Only once this item has a deadline. Its own line rather than a
+                                      fourth control squeezed into the row — the chase is the point
+                                      of turning a meeting into a task, so it is worth reading. */}
+                                  {d.dueAt && <ReminderPicker inline value={d.reminder ?? reminderDefault}
+                                    onChange={next => updateDraft(mom._id, i, { reminder: next })}
+                                    style={{ flex: '1 1 100%' }} />}
                                 </>
                               )}
                             </div>

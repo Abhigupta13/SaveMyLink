@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document as MongooseDocument } from 'mongoose';
 import { defineModel } from './registry';
+import { REMINDER_VALUES, type ReminderChoice } from '../reminderRule';
 
 export interface ITask extends MongooseDocument {
   title: string;
@@ -16,6 +17,7 @@ export interface ITask extends MongooseDocument {
   linkId?: mongoose.Types.ObjectId;
   signedOffBy?: mongoose.Types.ObjectId;
   signedOffAt?: Date;
+  reminder?: ReminderChoice;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,6 +46,11 @@ const TaskSchema = new Schema<ITask>({
   // sparse index on signedOffAt if that ever shows up in profiling.
   signedOffBy: { type: Schema.Types.ObjectId, ref: 'User' },
   signedOffAt: { type: Date },
+  // When this task's reminder fires — see lib/reminderRule, which owns the maths. Absent on every
+  // row written before the setting existed, and that absence is the fallback: the user's profile
+  // default, then the 85% schedule. No index: nothing ever filters on it, it is read only on rows
+  // already fetched by _id or by the "my open tasks" query.
+  reminder: { type: String, enum: REMINDER_VALUES },
 }, {
   timestamps: true
 });

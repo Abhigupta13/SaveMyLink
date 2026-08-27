@@ -7,12 +7,19 @@ import { User } from "@/lib/models/User";
 import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject, projectPeople } from "@/lib/projectAccess";
 import { canWorkOn, canSignOff, assigneeEmailsOf } from "@/lib/taskAccess";
 import { allowedAssignees } from "@/lib/validation";
+import { asChoice, type ReminderChoice } from "@/lib/reminderRule";
 import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
 import { Types } from "mongoose";
 import { revalidatePath } from "next/cache";
 
 const lower = (v: unknown) => String(v ?? '').trim().toLowerCase();
+
+/** The profile default, read straight off the session's own user. Never a client-supplied id. */
+async function myReminderDefault(userId: string): Promise<ReminderChoice | undefined> {
+  const me = await User.findById(userId).select('reminderDefault').lean<{ reminderDefault?: string } | null>();
+  return asChoice(me?.reminderDefault);
+}
 
 /**
  * The primary claim stays 1:1 — assigneeEmail is one address and assigneeId is that person.
@@ -101,8 +108,16 @@ export async function getMyOpenTasks() {
       // assigneeIds as well as assigneeId, or a co-assignee's shared work would be missing from
       // My Tasks — and from the phone reminders, which each device schedules off this list.
       $or: [{ userId: session.user.id, projectId: null }, { assigneeId: session.user.id }, { assigneeIds: session.user.id }],
-    }).select('_id title dueAt completed projectId').lean(); // projectId drives the per-scope counts on /tasks
-    return { success: true, tasks: JSON.parse(JSON.stringify(tasks)) };
+      // createdAt + reminder because the phone computes its own fire times off them; projectId
+      // drives the per-scope counts on /tasks.
+    }).select('_id title dueAt completed projectId createdAt reminder').lean();
+    return {
+      success: true,
+      tasks: JSON.parse(JSON.stringify(tasks)),
+      // What a row with no reminder of its own falls back to. Sent once for the whole list rather
+      // than resolved per task, so an old row and a new one answer to the same setting.
+      reminderDefault: await myReminderDefault(session.user.id),
+    };
   } catch (error) {
     console.error('Failed to get open tasks:', error);
     return { success: false, error: 'Failed to fetch tasks' };
@@ -117,6 +132,7 @@ interface TaskOpts {
   assigneeEmails?: string[];   // several people, one shared task — any of them ticks it
   momId?: string;
   linkId?: string;
+  reminder?: string;   // one of REMINDER_VALUES; anything else falls back to the profile default
 }
 
 export async function createTask(title: string, opts: TaskOpts = {}) {
@@ -147,6 +163,10 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
       assigneeEmails: emails,
       momId: opts.momId || undefined,
       linkId: opts.linkId || undefined,
+      // Resolved once, here, and stored — so the schedule a task was given is the schedule it
+      // keeps. Changing the profile default later re-aims the next task, not every old one.
+      // A caller that never asks (Jarvis) simply inherits the default.
+      reminder: asChoice(opts.reminder) ?? await myReminderDefault(session.user.id),
     });
 
     await recordEvent({ projectId: task.projectId, actorId: session.user.id, verb: 'task_created', subject: task.title });
@@ -159,7 +179,7 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
   }
 }
 
-export async function updateTask(id: string, data: { title?: string; description?: string; dueAt?: string | null; assigneeEmail?: string | null; assigneeEmails?: string[] | null; projectId?: string | null }) {
+export async function updateTask(id: string, data: { title?: string; description?: string; dueAt?: string | null; assigneeEmail?: string | null; assigneeEmails?: string[] | null; projectId?: string | null; reminder?: string | null }) {
   try {
     await connectToDatabase();
     const session = await getServerSession(authOptions);
@@ -182,6 +202,9 @@ export async function updateTask(id: string, data: { title?: string; description
     if (data.title !== undefined) task.title = data.title;
     if (data.description !== undefined) task.description = data.description;
     if (data.dueAt !== undefined) task.dueAt = data.dueAt ? new Date(data.dueAt) : undefined;
+    // Moving the due date does NOT re-anchor the 85% point — reminderRule measures it from
+    // createdAt, which no edit touches. Only the choice itself changes here.
+    if (data.reminder !== undefined) task.reminder = asChoice(data.reminder);
     // WHERE the task ends up is settled first, because it decides who may be on it. The other
     // order shipped: the move-to-personal branch cleared the assignees and the assignee block ran
     // after and put them straight back from client input. A member who was an assignee could take
@@ -317,6 +340,27 @@ export async function signOffTask(id: string) {
     console.error('Failed to sign off task:', error);
     return { success: false, error: 'Failed to sign off' };
   }
+}
+
+/**
+ * The profile default, for the pickers to pre-fill from. The session IS the identity — there is
+ * no userId argument on either of these, so neither can be pointed at somebody else's row.
+ */
+export async function getReminderDefault() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { choice: undefined as ReminderChoice | undefined };
+  await connectToDatabase();
+  return { choice: await myReminderDefault(session.user.id) };
+}
+
+export async function setReminderDefault(choice: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return { success: false };
+  const clean = asChoice(choice);
+  if (!clean) return { success: false };
+  await connectToDatabase();
+  await User.updateOne({ _id: session.user.id }, { reminderDefault: clean });
+  return { success: true };
 }
 
 export async function deleteTask(id: string) {

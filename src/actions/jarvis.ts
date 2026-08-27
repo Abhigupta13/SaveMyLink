@@ -200,7 +200,15 @@ async function applyActions(actions: any[], env: {
     };
     const created: JarvisItem[] = [];
     let nav = '';                     // a page the user asked to be taken to; the client pushes it
-    const createdTasks: { _id: string; title: string; dueAt?: string | null; completed?: boolean }[] = [];
+    // Handed to the widget so the phone can schedule this task's reminders straight away.
+    // createdAt and reminder travel with it: lib/reminderRule measures the 85% point from the
+    // original creation instant, and Jarvis never asks for a choice — createTask has already
+    // stamped it with the user's profile default.
+    // ponytail: a task written BEFORE this setting existed still has no stamp, so if Jarvis edits
+    // one the widget schedules it on the 85% default rather than that person's chosen default —
+    // one notification, on legacy rows only, repaired by reconcile() the next time /tasks opens.
+    // Thread reminderDefault through applyActions' env if that ever actually bites.
+    const createdTasks: { _id: string; title: string; dueAt?: string | null; completed?: boolean; createdAt?: string | null; reminder?: string | null }[] = [];
     const str = (v: any) => String(v ?? '').trim();
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const CONTACT_FIELDS = { name: str, phone: str, email: (v: any) => str(v).toLowerCase(), company: str, note: str };
@@ -276,7 +284,7 @@ async function applyActions(actions: any[], env: {
           if (!saved) continue;
           const dueAt = saved.dueAt ? new Date(saved.dueAt) : null;
           created.push({ id: String(saved._id), type: 'task', title: saved.title, detail: `Updated${dueAt ? ` · due ${d(dueAt)}` : ''}`, urgent: !saved.completed && !!dueAt && dueAt.getTime() - Date.now() < 48 * 3600e3 });
-          createdTasks.push({ _id: String(saved._id), title: saved.title, dueAt: dueAt ? dueAt.toISOString() : null, completed: saved.completed });
+          createdTasks.push({ _id: String(saved._id), title: saved.title, dueAt: dueAt ? dueAt.toISOString() : null, completed: saved.completed, createdAt: saved.createdAt ?? null, reminder: saved.reminder ?? null });
         } else if (a?.type === 'update_note' && a.id) {
           const note = await Note.findOne({ _id: a.id, userId });
           if (!note) continue;
@@ -385,7 +393,7 @@ async function applyActions(actions: any[], env: {
           const task = res.task;
           const dueAt = task.dueAt ? new Date(task.dueAt) : null;
           created.push({ id: String(task._id), type: 'task', title: task.title, detail: dueAt ? `Created · due ${d(dueAt)}` : 'Created', urgent: !!dueAt && dueAt.getTime() - Date.now() < 48 * 3600e3 });
-          createdTasks.push({ _id: String(task._id), title: task.title, dueAt: dueAt ? dueAt.toISOString() : null });
+          createdTasks.push({ _id: String(task._id), title: task.title, dueAt: dueAt ? dueAt.toISOString() : null, createdAt: task.createdAt ?? null, reminder: task.reminder ?? null });
         } else if (a?.type === 'create_note' && (a.text || a.title)) {
           const note = await Note.create({ userId, title: a.title ? String(a.title) : undefined, body: String(a.text || '') });
           created.push({ id: String(note._id), type: 'note', title: note.title || String(a.text).slice(0, 60), detail: 'Saved to Notes' });

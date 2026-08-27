@@ -23,6 +23,10 @@ import { retrieve, terms } from '../src/lib/retrieval.ts';
 import { spendQuestion, dayKey, capMessage, SHARED_OUT_MESSAGE } from '../src/lib/jarvisLimit.ts';
 import { isHowTo, EXTRA_PAGES, HOW_IT_WORKS } from '../src/lib/manual.ts';
 import { pickVoice } from '../src/lib/voice.ts';
+import {
+  reminderTimes, reminderChoice, countdownLabel, REMINDER_OPTIONS, REMINDER_VALUES,
+  DEFAULT_CHOICE, SMART_FRACTION, SLOTS, NAG_DAYS, NAG_HOUR, PRE_SLOT, DUE_SLOT, NAG_SLOT_START,
+} from '../src/lib/reminderRule.ts';
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -1111,6 +1115,220 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   assert.equal((task.match(/await assigneeList\(/g) || []).length, 2, 'createTask and updateTask share it');
   assert.ok(task.includes('allowedAssignees(primary, list, await projectPeople(projectId))'),
     'nothing else decides who may be assigned');
+}
+
+// ----------------------------------------------------------------------------------------------
+// One tap, one microphone. Both recorders set their "I am recording" React state AFTER awaiting
+// getUserMedia, so during that gap — on Android WebView, the OS permission dialog — the button is
+// still live and a second tap opened a second MediaRecorder writing into the SAME chunks array.
+// The blob was then two overlapping webm streams and the transcript repeated whole sentences
+// (measured in real Chrome with a fake mic: 25s of speech in, a 43.5s blob out). The claim has to
+// be a ref taken BEFORE the await, because state is not set until after it — which is exactly what
+// this asserts, in the only place a Node script can see it.
+for (const [file, fn] of [['../src/components/MomSection.tsx', 'startRecording'],
+                          ['../src/components/JarvisWidget.tsx', 'recordOnce']]) {
+  const src = readFileSync(new URL(file, import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf(`const ${fn} = `));
+  const claim = body.indexOf('micBusy.current = true');
+  const mic = body.indexOf('getUserMedia');
+  assert.ok(claim > -1 && claim < mic, `${fn} claims the mic before it awaits getUserMedia`);
+  assert.ok(body.indexOf('if (micBusy.current) return') < claim, `${fn} refuses a second start`);
+  // Released on both ways out, or the recorder is dead until a reload.
+  assert.ok(/onstop = async \(\) => \{\s*micBusy\.current = false/.test(body), `${fn} releases it on stop`);
+  assert.ok(/catch[\s\S]{0,20}\{\s*micBusy\.current = false/.test(body), `${fn} releases it when the mic is refused`);
+}
+
+// ----------------------------------------------------------------------------------------------
+// WHEN a reminder fires. The whole product promise is "the app is the chaser", so the one thing
+// that must never be true is a schedule that quietly fires nothing — or fires in the past, which
+// on Android either goes off instantly or is dropped, and both read as broken.
+//
+// The 85% rule is the only piece of arithmetic in the feature, and it is the piece nobody can
+// check by looking at a screen: you would have to wait eight and a half days.
+{
+  const MIN = 60e3, HOUR = 3600e3, DAY = 24 * HOUR;
+  const at = (times, kind) => times.filter(t => t.kind === kind).map(t => t.at);
+  const one = (times, kind) => { const m = at(times, kind); assert.equal(m.length, 1, `exactly one ${kind}`); return m[0]; };
+
+  // --- the choices themselves ---------------------------------------------------------------
+  assert.deepEqual(REMINDER_VALUES, ['smart', 'day', 'hour', 'deadline', 'none'], 'five named choices, in order');
+  assert.equal(REMINDER_OPTIONS.length, REMINDER_VALUES.length);
+  for (const o of REMINDER_OPTIONS) assert.ok(o.label && o.inline, `${o.value} is named in both a modal and a crowded row`);
+  assert.equal(DEFAULT_CHOICE, 'smart', 'absent everywhere means the 85% schedule');
+
+  // Absent on the task falls back to the user, absent on both to the default — and anything
+  // unrecognised (a hand-edited row, an LLM inventing a value) falls THROUGH, never to 'none'.
+  assert.equal(reminderChoice('hour', 'day'), 'hour', "the task's own choice wins");
+  assert.equal(reminderChoice(null, 'day'), 'day', 'no choice on the task uses the profile default');
+  assert.equal(reminderChoice(undefined, undefined), 'smart', 'neither set is the default schedule');
+  assert.equal(reminderChoice('', ''), 'smart', 'blank is not a choice');
+  for (const junk of ['never', 'NONE', 0, false, {}, ['none']])
+    assert.equal(reminderChoice(junk, 'day'), 'day', `junk never becomes a schedule: ${JSON.stringify(junk)}`);
+  assert.equal(reminderChoice('never', 'never'), 'smart', 'junk on both sides still schedules something');
+
+  // --- the 85% point, which is the whole feature -----------------------------------------------
+  {
+    // Written ten days before it is due: the nudge lands on day 8.5, exactly as the founder put it.
+    const created = Date.parse('2026-08-01T09:00:00Z');
+    const due = created + 10 * DAY;
+    const t = reminderTimes({ createdAt: created, dueAt: due, reminder: 'smart' }, null, created + MIN);
+    assert.equal(one(t, 'pre'), created + 8.5 * DAY, 'ten days ahead nudges at 8.5 days');
+    assert.equal(one(t, 'pre'), created + (due - created) * SMART_FRACTION);
+  }
+  {
+    // Due in an hour: ~51 minutes. The old fixed "24h before / 1h before" said nothing at all here —
+    // the 24h point was already gone and the 1h point was the moment of writing.
+    const created = Date.parse('2026-08-01T09:00:00Z');
+    const t = reminderTimes({ createdAt: created, dueAt: created + HOUR, reminder: 'smart' }, null, created);
+    assert.equal(Math.round((one(t, 'pre') - created) / MIN), 51, 'due in an hour nudges at 51 minutes');
+  }
+  {
+    // The fixed offsets still mean exactly what they say.
+    const created = Date.parse('2026-08-01T09:00:00Z');
+    const due = created + 10 * DAY;
+    assert.equal(one(reminderTimes({ createdAt: created, dueAt: due, reminder: 'day' }, null, created), 'pre'), due - DAY);
+    assert.equal(one(reminderTimes({ createdAt: created, dueAt: due, reminder: 'hour' }, null, created), 'pre'), due - HOUR);
+    assert.deepEqual(at(reminderTimes({ createdAt: created, dueAt: due, reminder: 'deadline' }, null, created), 'pre'), [],
+      'at-the-deadline means no nudge before it');
+    // ...and the profile default reaches a task that has none of its own.
+    assert.equal(one(reminderTimes({ createdAt: created, dueAt: due }, 'hour', created), 'pre'), due - HOUR,
+      'a row written before this feature existed answers to the profile default');
+  }
+
+  // --- what NEVER changes: the deadline, and the morning chase ----------------------------------
+  {
+    const created = Date.parse('2026-08-01T09:00:00Z');
+    const due = created + 10 * DAY;
+    for (const choice of ['smart', 'day', 'hour', 'deadline']) {
+      const t = reminderTimes({ createdAt: created, dueAt: due, reminder: choice }, null, created);
+      assert.equal(one(t, 'due'), due, `${choice} still pings AT the deadline`);
+      assert.equal(at(t, 'nag').length, NAG_DAYS, `${choice} keeps the full ${NAG_DAYS}-day chase`);
+      for (const ms of at(t, 'nag')) assert.equal(new Date(ms).getHours(), NAG_HOUR, 'the chase is at 9 in the morning, locally');
+      // Strictly increasing, one a day, all of them after the deadline.
+      const nags = at(t, 'nag');
+      for (let i = 1; i < nags.length; i++) assert.ok(nags[i] > nags[i - 1], 'the chase moves forwards');
+      assert.ok(nags[0] > due, 'nothing chases you before the deadline has passed');
+    }
+    // "No reminder" is the only way to switch the chase off, and it switches everything off.
+    assert.deepEqual(reminderTimes({ createdAt: created, dueAt: due, reminder: 'none' }, null, created), []);
+    assert.deepEqual(reminderTimes({ createdAt: created, dueAt: due, reminder: 'day' }, 'none', created).length, 9,
+      'a per-task choice overrides a profile default of none');
+  }
+
+  // --- edge cases, every one of which is a notification fired at the wrong instant ---------------
+  {
+    const created = Date.parse('2026-08-01T09:00:00Z');
+
+    // No due date: nothing to be late for, so nothing at all — unchanged from before this feature.
+    for (const c of REMINDER_VALUES)
+      assert.deepEqual(reminderTimes({ createdAt: created, dueAt: null, reminder: c }, null, created), [], `no deadline, no reminders (${c})`);
+    assert.deepEqual(reminderTimes({ createdAt: created, dueAt: 'not a date', reminder: 'smart' }, null, created), []);
+
+    // Already ticked off: the chaser stops chasing.
+    assert.deepEqual(reminderTimes({ createdAt: created, dueAt: created + DAY, completed: true }, null, created), []);
+
+    // Due minutes after it was written, and the 85% point is already behind us. NOT scheduled —
+    // a past notification either fires immediately or is silently dropped.
+    {
+      const t = reminderTimes({ createdAt: created, dueAt: created + 10 * MIN, reminder: 'smart' }, null, created + 9 * MIN);
+      assert.deepEqual(at(t, 'pre'), [], 'an 85% point already gone is not scheduled in the past');
+      assert.equal(one(t, 'due'), created + 10 * MIN, 'the deadline itself is still ahead, so it stands');
+    }
+    // Same shape for the fixed offsets: "a day before" on a task due in ten minutes.
+    assert.deepEqual(at(reminderTimes({ createdAt: created, dueAt: created + 10 * MIN, reminder: 'day' }, null, created), 'pre'), [],
+      'a day before a deadline ten minutes away is last week — nothing is scheduled');
+
+    // A deadline that has already gone: no nudge, no deadline ping, only the chase still to come.
+    {
+      const due = created - 2 * DAY;
+      const t = reminderTimes({ createdAt: created - 5 * DAY, dueAt: due, reminder: 'smart' }, null, created);
+      assert.deepEqual(at(t, 'pre'), [], 'nothing before a deadline that is behind us');
+      assert.deepEqual(at(t, 'due'), [], 'and no ping at a deadline that has passed');
+      assert.ok(at(t, 'nag').length > 0, 'but it is still chased every morning — that is the product');
+      for (const ms of at(t, 'nag')) assert.ok(ms > created, 'and only ever forwards from now');
+    }
+
+    // Everything overdue by more than the horizon: silent, and reconcile() on the next app open is
+    // what re-extends it. Asserted so the silence is a known state, not a surprise.
+    assert.deepEqual(reminderTimes({ createdAt: created - 30 * DAY, dueAt: created - 20 * DAY, reminder: 'smart' }, null, created), []);
+
+    // THE EDIT CASE. A task written on the 1st for the 3rd, pushed out to the 20th on the 2nd.
+    // The 85% point is measured from the ORIGINAL creation instant — recomputing from the edit
+    // would restart the clock on every edit and let the nudge drift forwards forever.
+    {
+      const due = created + 19 * DAY;
+      const editedOn = created + DAY;
+      const t = reminderTimes({ createdAt: created, dueAt: due, reminder: 'smart' }, null, editedOn);
+      assert.equal(one(t, 'pre'), created + 19 * DAY * SMART_FRACTION, 'measured from when it was written, not when it was edited');
+      assert.notEqual(one(t, 'pre'), editedOn + (due - editedOn) * SMART_FRACTION, 'an edit does not restart the clock');
+    }
+    // Pulled IN so far that the 85% point is now behind us: skipped, not fired late.
+    assert.deepEqual(at(reminderTimes({ createdAt: created - 10 * DAY, dueAt: created + MIN, reminder: 'smart' }, null, created), 'pre'), []);
+
+    // No creation stamp at all: no elapsed time to take a fraction of, so no invented nudge —
+    // but the deadline and the chase, which need no creation stamp, still stand.
+    {
+      const t = reminderTimes({ dueAt: created + DAY, reminder: 'smart' }, null, created);
+      assert.deepEqual(at(t, 'pre'), [], 'no creation stamp, no 85% point');
+      assert.equal(one(t, 'due'), created + DAY, 'the promise survives a missing stamp');
+    }
+    // A due date BEFORE the creation stamp (a backdated import): nothing before, nothing invented.
+    assert.deepEqual(at(reminderTimes({ createdAt: created, dueAt: created - DAY, reminder: 'smart' }, null, created - 2 * DAY), 'pre'), []);
+    // Dates as Date objects and as ISO strings, not only as numbers.
+    assert.equal(
+      one(reminderTimes({ createdAt: new Date(created), dueAt: new Date(created + 10 * DAY), reminder: 'smart' }, null, created), 'pre'),
+      one(reminderTimes({ createdAt: new Date(created).toISOString(), dueAt: new Date(created + 10 * DAY).toISOString(), reminder: 'smart' }, null, created), 'pre'),
+      'Date, ISO string and epoch ms all mean the same instant',
+    );
+  }
+
+  // --- the id budget. lib/taskNotifications hands each task exactly SLOTS consecutive ids -------
+  {
+    const created = Date.parse('2026-08-01T09:00:00Z');
+    assert.ok(NAG_SLOT_START + NAG_DAYS - 1 < SLOTS, 'the chase fits inside the budget');
+    assert.ok(PRE_SLOT < SLOTS && DUE_SLOT < SLOTS, 'so do the nudge and the deadline');
+    assert.ok(PRE_SLOT < NAG_SLOT_START || PRE_SLOT > NAG_SLOT_START + NAG_DAYS - 1, 'the nudge does not sit on a chase slot');
+    assert.ok(DUE_SLOT < NAG_SLOT_START || DUE_SLOT > NAG_SLOT_START + NAG_DAYS - 1, 'nor does the deadline');
+    // Every reachable schedule, against the budget and against itself.
+    for (const c of REMINDER_VALUES) {
+      for (const [dueOffset, now] of [[10 * DAY, created], [HOUR, created], [10 * MIN, created], [-2 * DAY, created], [DAY, created]]) {
+        const t = reminderTimes({ createdAt: created, dueAt: created + dueOffset, reminder: c }, null, now);
+        assert.ok(t.length <= SLOTS, `never more instants than ids (${c})`);
+        const slots = t.map(s => s.slot);
+        assert.equal(new Set(slots).size, slots.length, `no two reminders claim the same id (${c})`);
+        for (const s of slots) assert.ok(s >= 0 && s < SLOTS, `slot ${s} is inside [0, ${SLOTS}) (${c})`);
+        for (const r of t) assert.ok(r.at > now, `nothing is ever scheduled in the past (${c})`);
+      }
+    }
+  }
+
+  // --- the words on the notification ------------------------------------------------------------
+  // "Due tomorrow" was hard-coded and only ever right for the old fixed 24h offset; an 85% point
+  // nine minutes out needs a title that says nine minutes.
+  const due0 = Date.parse('2026-08-10T17:00:00Z');
+  assert.equal(countdownLabel(due0 - 9 * MIN, due0), 'Due in 9 min');
+  assert.equal(countdownLabel(due0 - HOUR, due0), 'Due in 1 hour');
+  assert.equal(countdownLabel(due0 - 5 * HOUR, due0), 'Due in 5 hours');
+  assert.equal(countdownLabel(due0 - DAY, due0), 'Due in 1 day');
+  assert.equal(countdownLabel(due0 - 3 * DAY, due0), 'Due in 3 days');
+  assert.equal(countdownLabel(due0, due0), 'Due in 1 min', 'never "in 0" and never negative');
+  // Down, never to nearest: a warning that says you have more time than you do is the one error
+  // this title must not make.
+  assert.equal(countdownLabel(due0 - 36 * HOUR, due0), 'Due in 1 day', '36 hours is not "2 days"');
+  assert.equal(countdownLabel(due0 - 90 * MIN, due0), 'Due in 1 hour', 'and 90 minutes is not "2 hours"');
+  assert.equal(countdownLabel(due0 - 59 * MIN, due0), 'Due in 59 min');
+
+  // --- structural: nothing outside the rule module decides when a reminder fires -----------------
+  {
+    const notif = readFileSync(new URL('../src/lib/taskNotifications.ts', import.meta.url), 'utf8');
+    assert.ok(notif.includes('reminderTimes('), 'the scheduler asks the rule module');
+    assert.ok(!/24 \* 3600e3|setHours\(9/.test(notif), 'and holds no offsets or 9am of its own any more');
+    const task = readFileSync(new URL('../src/actions/task.ts', import.meta.url), 'utf8');
+    assert.ok(task.includes('asChoice(opts.reminder) ?? await myReminderDefault('),
+      'createTask stores a validated choice, or the profile default — never client text');
+    assert.ok(task.includes('task.reminder = asChoice(data.reminder)'),
+      'and an edit cannot store an unrecognised one either');
+  }
 }
 
 console.log('self-check: all assertions passed');

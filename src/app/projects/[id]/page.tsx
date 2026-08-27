@@ -8,7 +8,7 @@ import {
   ArrowLeft, MoreVertical, AlertTriangle, ChevronRight, Trash2, X, Check, Download, Pencil,
   UserPlus, Users, StickyNote, FileText, BadgeCheck, Mic, CheckSquare, History, BookOpen,
 } from 'lucide-react';
-import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask } from '@/actions/task';
+import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask, getReminderDefault } from '@/actions/task';
 import { getProjectWorkspace, addMember, removeMember, setProjectRole, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
 import { getNotes, createNote, deleteNote } from '@/actions/note';
 import PersonPicker from '@/components/PersonPicker';
@@ -18,6 +18,8 @@ import { formatTime, formatDay, formatDate } from '@/lib/time';
 import { isProjectOwner, isProjectCreator, isProjectViewer, canWrite } from '@/lib/scope';
 import { needsOwner, assigneeEmailOf, assigneeEmailsOf } from '@/lib/taskAccess';
 import AssigneePicker from '@/components/AssigneePicker';
+import ReminderPicker from '@/components/ReminderPicker';
+import type { ReminderChoice } from '@/lib/reminderRule';
 import { phrase, DEFAULT_DAYS, fromMeeting } from '@/lib/activity';
 import '@/styles/workspace.css';
 
@@ -89,8 +91,12 @@ export default function ProjectWorkspace() {
   const [renameOpen, setRenameOpen] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
-  const [draft, setDraft] = useState<{ title: string; description: string; dueAt: string; assigneeEmails: string[] }>(
-    { title: '', description: '', dueAt: '', assigneeEmails: [] });
+  const [draft, setDraft] = useState<{ title: string; description: string; dueAt: string; assigneeEmails: string[]; reminder: ReminderChoice | null }>(
+    { title: '', description: '', dueAt: '', assigneeEmails: [], reminder: null });
+  // The profile default: what the quick-add starts on, and what a task written before the setting
+  // existed is actually doing today.
+  const [reminderDefault, setReminderDefault] = useState<ReminderChoice | null>(null);
+  const [remind, setRemind] = useState<ReminderChoice | null>(null);
 
   const myEmail = (session?.user?.email || '').toLowerCase();
   const isOwner = isProjectOwner(project, myEmail);
@@ -178,6 +184,15 @@ export default function ProjectWorkspace() {
   // cheap enough to leave; split it out if the trail's window turns into something people play with.
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
 
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+    getReminderDefault().then(r => {
+      const choice = (r.choice as ReminderChoice) || null;
+      setReminderDefault(choice);
+      setRemind(prev => prev ?? choice);
+    }).catch(() => {});
+  }, [status]);
+
   /**
    * A shared project changes under you — someone ticks off a task, adds a meeting, joins.
    * Re-fetch when the tab becomes visible again. Catches nearly everything a poll would, with
@@ -240,6 +255,7 @@ export default function ProjectWorkspace() {
       dueAt: due ? new Date(due).toISOString() : undefined,
       projectId,
       assigneeEmails: assignee.length ? assignee : [myEmail],
+      reminder: remind || undefined,   // undefined = whatever my profile default is, resolved server-side
     });
     if (res.success) { setTitle(''); setDue(''); setAssignee([]); fetchTasks(); fetchEvents(); }
     else toast(res.error || 'Something went wrong', 'error');
@@ -272,6 +288,8 @@ export default function ProjectWorkspace() {
       description: task.description || '',
       dueAt: toLocalInput(task.dueAt),
       assigneeEmails: assigneeEmailsOf(task),
+      // A task with no choice of its own opens showing what it actually does — the profile default.
+      reminder: task.reminder || reminderDefault,
     });
   };
 
@@ -282,6 +300,7 @@ export default function ProjectWorkspace() {
       description: draft.description.trim(),
       dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null,
       assigneeEmails: draft.assigneeEmails,
+      reminder: draft.reminder,
     });
     if (res.success) { setEditing(null); fetchTasks(); fetchEvents(); }
     else toast(res.error || 'Something went wrong', 'error');
@@ -605,8 +624,10 @@ export default function ProjectWorkspace() {
                 <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
               </div>
               <div className="quick-add-meta">
-                <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic"
+                <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due"
                   style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+                {/* Only once there is a deadline to be reminded of */}
+                {due && <ReminderPicker inline value={remind} onChange={setRemind} />}
                 {/* Tap several and it stays ONE task that any of them can tick. Nobody tapped
                     means it is yours — the same default the single select had. */}
                 <AssigneePicker options={memberOptions} value={assignee} onChange={setAssignee} myEmail={myEmail} labelOf={nameOf} />
@@ -817,6 +838,9 @@ export default function ProjectWorkspace() {
                 <label htmlFor="wk-due" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Due</label>
                 <input id="wk-due" className="field" type="datetime-local" value={draft.dueAt} onChange={e => setDraft(d => ({ ...d, dueAt: e.target.value }))}
                   style={{ color: draft.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+                {/* No deadline, nothing to be reminded about */}
+                {draft.dueAt && <ReminderPicker id="wk-remind" value={draft.reminder}
+                  onChange={next => setDraft(d => ({ ...d, reminder: next }))} />}
                 <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
                   Assigned to <span style={{ fontWeight: 600, color: 'var(--text-tertiary)' }}>— anyone tapped can tick it off</span>
                 </span>

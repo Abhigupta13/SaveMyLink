@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 import { defineModel } from './registry';
+import { REMINDER_VALUES, type ReminderChoice } from '../reminderRule';
 
 export interface IUser extends Document {
   name?: string;
@@ -46,6 +47,9 @@ export interface IUser extends Document {
   // Their role-in-company, captured once on the delete screen — the only new profile field, and
   // the only content kept alongside name and email during retention.
   role?: string;
+  // Which reminder every new task is pre-filled with. Absent reads as the 85% schedule, so an
+  // account that never opens the setting gets the same reminders as one that sets it deliberately.
+  reminderDefault?: ReminderChoice;
 }
 
 const UserSchema: Schema<IUser> = new Schema({
@@ -86,6 +90,7 @@ const UserSchema: Schema<IUser> = new Schema({
   // Absent on every live account, which reads as "not deleted" — the honest default.
   deletedAt: { type: Date, default: null },
   role: { type: String },
+  reminderDefault: { type: String, enum: REMINDER_VALUES },
 }, { timestamps: true });
 
 export const User: Model<IUser> = defineModel<IUser>('User', UserSchema);

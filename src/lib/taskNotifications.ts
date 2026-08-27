@@ -1,23 +1,25 @@
 'use client';
 import { formatInZone } from '@/lib/time';
+import { reminderTimes, countdownLabel, SLOTS, type ReminderChoice } from '@/lib/reminderRule';
 
 // On-device task reminders via @capacitor/local-notifications.
 // Notification IDs are derived from the task _id, so no notification state is
 // stored server-side; re-scheduling with the same ID replaces (idempotent).
 //
+// WHICH instants get scheduled is not decided here — lib/reminderRule owns that, imports nothing,
+// and is asserted by scripts/self-check.mjs. This file only turns its slots into notifications.
 // Slots per task (base = last 6 hex chars of _id * 10, Java-int-safe):
-//   +0  due − 24h    +1  due − 1h    +2..+8  daily 9:00 nags while overdue
+//   +0  the chosen pre-deadline nudge    +2..+8  daily 9:00 nags while overdue    +9  the deadline
 // ponytail: fixed 7-day nag horizon + tiny id-collision risk; reconcile() on
 // each app open extends the horizon and repairs drift.
-
-const SLOTS = 10;
-const NAG_DAYS = 7;
 
 interface TaskLike {
   _id: string;
   title: string;
   dueAt?: string | null;
+  createdAt?: string | null;   // the ORIGINAL one — the 85% point is measured from it, not from an edit
   completed?: boolean;
+  reminder?: string | null;
 }
 
 async function plugin() {
@@ -29,46 +31,32 @@ async function plugin() {
 
 const baseId = (taskId: string) => parseInt(taskId.slice(-6), 16) * SLOTS;
 
-function slotsFor(task: TaskLike): { id: number; at: Date; title: string; body: string }[] {
-  if (!task.dueAt || task.completed) return [];
-  const due = new Date(task.dueAt);
-  const now = Date.now();
+function slotsFor(task: TaskLike, userDefault?: ReminderChoice | null): { id: number; at: Date; title: string; body: string }[] {
   const base = baseId(task._id);
-  const dueText = formatInZone(due);   // device zone: this runs on the phone
-  const out: { id: number; at: Date; title: string; body: string }[] = [];
-
-  const pre: [number, number, string][] = [
-    [0, 24 * 3600e3, 'Due tomorrow'],
-    [1, 3600e3, 'Due in 1 hour'],
-  ];
-  for (const [slot, ms, label] of pre) {
-    const at = new Date(due.getTime() - ms);
-    if (at.getTime() > now) out.push({ id: base + slot, at, title: `${label}: ${task.title}`, body: `Due ${dueText}` });
-  }
-
-  // At the deadline itself — without this, a task due soon never notifies until the next 9am nag
-  if (due.getTime() > now) {
-    out.push({ id: base + 9, at: due, title: `Due now: ${task.title}`, body: dueText });
-  }
-
-  // Daily 9:00 nags after the deadline passes
-  const nag = new Date(due);
-  nag.setHours(9, 0, 0, 0);
-  if (nag <= due) nag.setDate(nag.getDate() + 1);
-  for (let i = 0; i < NAG_DAYS; i++) {
-    const at = new Date(nag);
-    at.setDate(at.getDate() + i);
-    if (at.getTime() > now) out.push({ id: base + 2 + i, at, title: `Overdue: ${task.title}`, body: `Was due ${dueText}` });
-  }
-  return out;
+  const due = task.dueAt ? new Date(task.dueAt) : null;
+  const dueText = due ? formatInZone(due) : '';   // device zone: this runs on the phone
+  return reminderTimes(task, userDefault).map(s => {
+    const at = new Date(s.at);
+    if (s.kind === 'pre') return { id: base + s.slot, at, title: `${countdownLabel(s.at, due!.getTime())}: ${task.title}`, body: `Due ${dueText}` };
+    if (s.kind === 'due') return { id: base + s.slot, at, title: `Due now: ${task.title}`, body: dueText };
+    return { id: base + s.slot, at, title: `Overdue: ${task.title}`, body: `Was due ${dueText}` };
+  });
 }
 
-export async function syncTask(task: TaskLike) {
+/**
+ * What WOULD be scheduled, without a plugin and without a phone. The browser is not a native
+ * platform, so nothing here ever schedules anything there — this is how the schedule is checked
+ * on a desktop, and how it is read back off a device that is misbehaving.
+ */
+export const reminderPreview = (task: TaskLike, userDefault?: ReminderChoice | null) =>
+  slotsFor(task, userDefault).map(s => ({ id: s.id, at: s.at.toISOString(), title: s.title }));
+
+export async function syncTask(task: TaskLike, userDefault?: ReminderChoice | null) {
   const p = await plugin();
   if (!p) return;
   const { ln } = p;
   await cancelTask(task._id);
-  const slots = slotsFor(task);
+  const slots = slotsFor(task, userDefault);
   if (!slots.length) return;
   await ln.schedule({
     notifications: slots.map(s => ({
@@ -91,15 +79,15 @@ export async function cancelTask(taskId: string) {
 // Called on tasks-page mount: schedule reminders for every open task I own or
 // am assigned, and cancel pending notifications for tasks gone/completed on
 // another device.
-export async function reconcile(tasks: TaskLike[]) {
+export async function reconcile(tasks: TaskLike[], userDefault?: ReminderChoice | null) {
   const p = await plugin();
   if (!p) return;
   const { ln } = p;
 
   const valid = new Set<number>();
   for (const task of tasks) {
-    for (const s of slotsFor(task)) valid.add(s.id);
-    await syncTask(task);
+    for (const s of slotsFor(task, userDefault)) valid.add(s.id);
+    await syncTask(task, userDefault);
   }
 
   const { notifications } = await ln.getPending();

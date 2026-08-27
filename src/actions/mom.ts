@@ -17,6 +17,7 @@ import {
 } from "@/lib/sarvam";
 import { hinglishEnabled, sarvamKeyFor } from "@/lib/sarvamAccess";
 import { DEFAULT_TZ, safeZone, zonedToUtc } from "@/lib/time";
+import { asChoice } from "@/lib/reminderRule";
 import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
@@ -438,7 +439,7 @@ Reply ONLY with JSON:
 
 export async function confirmMomTasks(
   momId: string,
-  items: { kind?: 'task' | 'note' | 'brief'; title: string; detail?: string; assigneeEmail?: string; dueAt?: string; projectId?: string }[]
+  items: { kind?: 'task' | 'note' | 'brief'; title: string; detail?: string; assigneeEmail?: string; dueAt?: string; projectId?: string; reminder?: string }[]
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -450,6 +451,10 @@ export async function confirmMomTasks(
 
     const myEmail = (session.user.email || '').toLowerCase();
     let tasks = 0, notes = 0, briefs = 0;
+    // Read once for the batch, not once per action item. Same rule as createTask: whatever the
+    // confirm row chose, else the profile default, and anything unrecognised is not stored.
+    const me = await User.findById(session.user.id).select('reminderDefault').lean<{ reminderDefault?: string } | null>();
+    const fallbackReminder = asChoice(me?.reminderDefault);
 
     for (const item of items) {
       if (!item.title?.trim()) continue;
@@ -500,6 +505,7 @@ export async function confirmMomTasks(
         assigneeId,
         assigneeEmail: item.assigneeEmail?.toLowerCase(),
         momId: mom._id,
+        reminder: asChoice(item.reminder) ?? fallbackReminder,
       });
       await recordEvent({ projectId, actorId: session.user.id, verb: 'task_created', subject: item.title.trim() });
       tasks++;

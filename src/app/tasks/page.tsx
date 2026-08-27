@@ -9,6 +9,8 @@ import { getTasks, getMyOpenTasks, createTask, toggleTask, deleteTask, updateTas
 import { getProjects, createProject, deleteProject, renameProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
 import AssigneePicker from '@/components/AssigneePicker';
+import ReminderPicker from '@/components/ReminderPicker';
+import type { ReminderChoice } from '@/lib/reminderRule';
 import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useShareNotice } from '@/components/ShareNotice';
@@ -69,8 +71,12 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [showDone, setShowDone] = useState(false);
   const [editing, setEditing] = useState<any | null>(null); // task being edited
-  const [draft, setDraft] = useState<{ title: string; description: string; dueAt: string; assigneeEmails: string[]; projectId: string }>(
-    { title: '', description: '', dueAt: '', assigneeEmails: [], projectId: '' });
+  const [draft, setDraft] = useState<{ title: string; description: string; dueAt: string; assigneeEmails: string[]; projectId: string; reminder: ReminderChoice | null }>(
+    { title: '', description: '', dueAt: '', assigneeEmails: [], projectId: '', reminder: null });
+  // The profile default. It pre-fills the quick-add and stands in for every task written before
+  // the setting existed — the phone needs it to know what a task with no reminder of its own means.
+  const [reminderDefault, setReminderDefault] = useState<ReminderChoice | null>(null);
+  const [remind, setRemind] = useState<ReminderChoice | null>(null);
 
   const toLocalInput = (iso?: string | null) => {
     if (!iso) return '';
@@ -87,6 +93,9 @@ export default function TasksPage() {
       dueAt: toLocalInput(task.dueAt),
       assigneeEmails: assigneeEmailsOf(task),
       projectId: task.projectId ? String(task.projectId) : '',
+      // A task written before the setting existed opens showing what it actually does today —
+      // the profile default — rather than an empty control that means nothing.
+      reminder: task.reminder || reminderDefault,
     });
   };
 
@@ -99,6 +108,7 @@ export default function TasksPage() {
       dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null,
       assigneeEmails: draft.projectId ? draft.assigneeEmails : [],
       projectId: draft.projectId || null,
+      reminder: draft.reminder,
     });
     if (res.success) {
       setEditing(null);
@@ -134,7 +144,11 @@ export default function TasksPage() {
   }, []);
   const refreshReminders = useCallback(async () => {
     const res = await getMyOpenTasks();
-    if (res.success) reconcile(res.tasks || []);
+    if (!res.success) return;
+    const fallback = (res.reminderDefault as ReminderChoice) || null;
+    setReminderDefault(fallback);
+    setRemind(prev => prev ?? fallback);   // the quick-add starts on your default, then stays where you put it
+    reconcile(res.tasks || [], fallback);
   }, []);
 
   useEffect(() => {
@@ -162,6 +176,7 @@ export default function TasksPage() {
       dueAt: due ? new Date(due).toISOString() : undefined,
       projectId: activeProject?._id,
       assigneeEmails: activeProject ? (assignee.length ? assignee : [myEmail]) : undefined,
+      reminder: remind || undefined,   // undefined means "whatever my profile default is", resolved server-side
     });
     if (res.success) { setDue(''); fetchTasks(activeProject?._id); refreshReminders(); }
     else { setTasks(prev => prev.filter(x => x._id !== tempId)); toast(res.error || 'Something went wrong', 'error'); }
@@ -299,6 +314,9 @@ export default function TasksPage() {
               <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Due</label>
               <input className="field" type="datetime-local" value={draft.dueAt} onChange={e => setDraft(d => ({ ...d, dueAt: e.target.value }))}
                 style={{ color: draft.dueAt ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+              {/* No deadline, nothing to be reminded about — the control would be a lie */}
+              {draft.dueAt && <ReminderPicker id="task-remind" value={draft.reminder}
+                onChange={next => setDraft(d => ({ ...d, reminder: next }))} />}
               <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Project</label>
               <select className="field" value={draft.projectId} onChange={e => setDraft(d => ({ ...d, projectId: e.target.value, assigneeEmails: [] }))}>
                 <option value="">Personal (no project)</option>
@@ -341,7 +359,10 @@ export default function TasksPage() {
           <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
         </div>
         <div className="quick-add-meta">
-          <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due — reminders are automatic" style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+          <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due" style={{ color: due ? 'var(--text-primary)' : 'var(--text-tertiary)' }} />
+          {/* Only once there is a deadline to be reminded of. It appears where the eye already
+              is, immediately after setting the date. */}
+          {due && <ReminderPicker inline value={remind} onChange={setRemind} />}
           {/* Nobody tapped means it is yours, which is what adding a task to your own group
               usually means — the same default the single-select had. */}
           {activeProject && <AssigneePicker options={memberOptions} value={assignee} onChange={setAssignee} myEmail={myEmail} />}
