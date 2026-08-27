@@ -38,7 +38,8 @@ export function isHowTo(question: string): boolean {
 export const EXTRA_PAGES: { href: string; title: string; what: string }[] = [
   { href: '/', title: 'Home', what: 'the grid of every section, and the getting-started checklist' },
   { href: '/search', title: 'Search', what: 'search across everything saved' },
-  { href: '/profile', title: 'Profile', what: 'account, theme, Private Safe, the Sarvam key, share the app, delete the account' },
+  { href: '/profile', title: 'Profile', what: 'account, theme, Private Safe, share the app, delete the account' },
+  { href: '/sarvam-key', title: 'Your own Sarvam key', what: 'how to get a Sarvam API key for upgraded Hindi transcription, what it costs, and where to paste it' },
   { href: '/your-data', title: 'How it works, and who sees it', what: 'the guided tour, then every group and exactly what has been shared into it' },
   { href: '/download', title: 'Download the app', what: 'the Android APK, the QR code and the install warnings' },
   { href: '/terms', title: 'Terms', what: 'what is stored and who can read it' },

@@ -1,17 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Languages } from 'lucide-react';
-import Link from 'next/link';
 import { sarvamKeyStatus, setSarvamKey, clearSarvamKey } from '@/actions/sarvamKey';
 import { useFeedback } from '@/components/ui/Feedback';
 
 /**
- * Bring your own Sarvam key.
+ * The only interactive part of /sarvam-key: paste a key, replace it, remove it.
  *
- * The billing sentence is not decoration — this field hands a third party's paid credential to
- * our server, and the person typing it deserves to read who charges them before they paste it.
- * The key itself never comes back: once saved, this shows four characters and nothing else.
+ * The security model is entirely in src/actions/sarvamKey.ts and src/lib/secretBox.ts and none of
+ * it lives here — this component never sees a stored key. `sarvamKeyStatus` selects
+ * `sarvamKey.last4` and nothing else, so the four characters below are all the browser is ever
+ * told. The plaintext travels one way, into `setSarvamKey`, and is dropped from state the moment
+ * that returns.
  */
 export default function SarvamKeyCard() {
   const { toast, confirm } = useFeedback();
@@ -49,45 +49,33 @@ export default function SarvamKeyCard() {
   };
 
   return (
-    <div className="card" style={{ marginTop: '14px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-      <span className="row-icon"><Languages size={18} strokeWidth={2.2} /></span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: 'block', fontWeight: 700 }}>Upgraded Hindi transcription</span>
-        <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-          {last4
-            ? <>Using your own Sarvam key <strong>•••• {last4}</strong></>
-            : 'Hindi and Hinglish already work free. Your own Sarvam key buys a sharper engine — better with names and long meetings.'}
-        </span>
+    <div className="g-key">
+      <p className="g-key-state">
+        {last4
+          ? <>Saved on this account <span className="g-chip accent">•••• <code>{last4}</code></span></>
+          : <>No key saved yet</>}
+      </p>
 
-        {editing ? (
-          <div style={{ marginTop: '10px' }}>
-            <input
-              type="password" value={value} onChange={e => setValue(e.target.value)}
-              placeholder="Paste your Sarvam API key" autoComplete="off" className="field"
-              style={{ width: '100%' }} autoFocus
-            />
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              <button onClick={save} disabled={busy || !value.trim()} className="btn-primary"
-                style={{ padding: '8px 18px', borderRadius: '10px', fontWeight: 700, fontSize: '0.8rem', opacity: busy || !value.trim() ? 0.6 : 1 }}>
-                {busy ? 'Saving…' : 'Save key'}
-              </button>
-              <button onClick={() => { setEditing(false); setValue(''); }} className="subtle-link">Cancel</button>
-            </div>
+      {editing ? (
+        <>
+          <label htmlFor="sarvam-key">Sarvam API key</label>
+          <input
+            id="sarvam-key" type="password" value={value} onChange={e => setValue(e.target.value)}
+            placeholder="Paste it here" autoComplete="off" spellCheck={false} className="field" autoFocus
+          />
+          <div className="g-key-row">
+            <button onClick={save} disabled={busy || !value.trim()} className="g-btn primary">
+              {busy ? 'Saving…' : 'Save key'}
+            </button>
+            <button onClick={() => { setEditing(false); setValue(''); }} className="g-btn">Cancel</button>
           </div>
-        ) : (
-          <div style={{ display: 'flex', gap: '12px', marginTop: '8px', flexWrap: 'wrap' }}>
-            <button onClick={() => setEditing(true)} className="subtle-link">{last4 ? 'Replace key' : 'Add your key'}</button>
-            {last4 && <button onClick={remove} className="subtle-link" style={{ color: 'var(--danger-color)' }}>Remove</button>}
-          </div>
-        )}
-
-        <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-tertiary)', marginTop: '10px', lineHeight: 1.5 }}>
-          Sarvam bills this key directly — you pay them, not us. We store it encrypted and never
-          show it again.{' '}
-          {/* Inherits the note's tertiary colour otherwise, and reads as prose rather than a link */}
-          <Link href="/terms" style={{ color: 'var(--accent-color)', fontWeight: 700 }}>Terms &amp; your data</Link>
-        </span>
-      </div>
+        </>
+      ) : (
+        <div className="g-key-row">
+          <button onClick={() => setEditing(true)} className="g-btn primary">{last4 ? 'Replace key' : 'Add your key'}</button>
+          {last4 && <button onClick={remove} className="g-btn danger">Remove</button>}
+        </div>
+      )}
     </div>
   );
 }

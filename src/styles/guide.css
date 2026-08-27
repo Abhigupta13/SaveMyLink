@@ -67,6 +67,18 @@
 .guide .g-cta:hover { background: var(--accent-hover); }
 .guide .g-note { margin-top: 10px; text-align: center; font-size: 12.5px; line-height: 1.55; color: var(--text-tertiary); }
 
+/* ── The key panel: the one interactive block on /sarvam-key, sitting inside its own step. ── */
+.guide .g-key { margin-top: 12px; padding: 14px; border-radius: 16px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+.guide .g-key-state { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text-secondary); }
+.guide .g-key-state code { font-family: inherit; letter-spacing: .08em; color: var(--text-primary); }
+.guide .g-key label { display: block; margin: 12px 0 6px; font-size: 12px; font-weight: 700; color: var(--text-secondary); }
+.guide .g-key-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.guide .g-btn { min-height: 44px; padding: 10px 20px; border-radius: 999px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.guide .g-btn.primary { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
+.guide .g-btn.danger { background: var(--danger-soft); color: var(--danger-color); border-color: color-mix(in srgb, var(--danger-color) 25%, transparent); }
+.guide .g-btn:disabled { opacity: .55; cursor: default; }
+.guide .g-btn:focus-visible, .guide .g-key .field:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+
 .guide .g-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; margin-top: 34px; font-size: 13px; color: var(--text-tertiary); }
 .guide .g-foot a { color: var(--text-secondary); font-weight: 700; text-decoration: none; }
 .guide .g-foot a:hover { color: var(--accent-text); }

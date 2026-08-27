@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles } from 'lucide-react';
+import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles, Languages } from 'lucide-react';
 import { getContacts } from '@/actions/contact';
 import { getMyOpenTasks } from '@/actions/task';
 import { getProjects } from '@/actions/project';
@@ -10,7 +10,6 @@ import { useFeedback } from '@/components/ui/Feedback';
 import { useUser } from '@/components/UserContext';
 import ThemeToggle from '@/components/ThemeToggle';
 import SuggestBox from '@/components/SuggestBox';
-import SarvamKeyCard from '@/components/SarvamKeyCard';
 import DeleteAccountCard from '@/components/DeleteAccountCard';
 import Link from 'next/link';
 import { appUrl } from '@/lib/url';
@@ -137,7 +136,20 @@ export default function ProfilePage() {
         </label>
       </div>
 
-      <SarvamKeyCard />
+      {/* One line, not three paragraphs: the how-and-what-it-costs explainer lives on /sarvam-key,
+          and so does the key field — this row only has to get you there. */}
+      <Link href="/sarvam-key" className="card" style={{
+        display: 'flex', alignItems: 'center', gap: '12px',
+        marginTop: '14px', textDecoration: 'none', color: 'inherit',
+      }}>
+        <span className="row-icon"><Languages size={18} strokeWidth={2.2} /></span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontWeight: 700 }}>Upgraded Hindi transcription</span>
+          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            Bring your own Sarvam key — how to get one, and what it costs
+          </span>
+        </span>
+      </Link>
 
       {admin && (
         <Link href="/admin" className="card" style={{
