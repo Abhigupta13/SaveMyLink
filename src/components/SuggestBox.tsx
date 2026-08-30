@@ -47,14 +47,12 @@ export default function SuggestBox() {
 
   return (
     <>
-      <button onClick={() => setOpen(true)} className="card safe-row"
-        style={{ width: '100%', marginTop: '14px', textAlign: 'left', cursor: 'pointer', font: 'inherit' }}>
-        <span className="safe-icon"><MessageSquarePlus size={18} /></span>
-        <span style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ display: 'block', fontWeight: 700 }}>Help us improve</span>
-          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-            Something broken, or an idea? Tell us.
-          </span>
+      {/* A row in the About group on /profile, not a card of its own — see .set-row in globals.css */}
+      <button onClick={() => setOpen(true)} className="set-row">
+        <span className="row-icon"><MessageSquarePlus size={18} strokeWidth={2.2} /></span>
+        <span className="set-row-text">
+          <span className="set-row-title">Help us improve</span>
+          <span className="set-row-sub">Something broken, or an idea? Tell us.</span>
         </span>
       </button>
 

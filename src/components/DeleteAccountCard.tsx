@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { signOut } from 'next-auth/react';
 import { Trash2, AlertTriangle } from 'lucide-react';
 import { accountAuthMode, deleteMyAccount } from '@/actions/account';
+import { listAccounts, signOutActive } from '@/actions/accounts';
+import { finishIdentityChange } from '@/lib/clientIdentityReset';
 import { useFeedback } from '@/components/ui/Feedback';
 
 /**
@@ -24,6 +25,11 @@ export default function DeleteAccountCard() {
   const [pin, setPin] = useState('');
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
+  // Which account this device falls back INTO once this one is gone. Named here, before the
+  // irreversible tap, rather than in a toast afterwards — the document is replaced the instant
+  // the identity changes, so a toast would never be read. Landing silently inside somebody
+  // else's account is the worst possible outcome of this screen.
+  const [landsIn, setLandsIn] = useState('');
 
   const start = async () => {
     setSecret(''); setPin('');
@@ -31,6 +37,8 @@ export default function DeleteAccountCard() {
     setHasPassword(mode.hasPassword);
     setHasPin(mode.hasPin);
     setEmail(mode.email);
+    const { rows } = await listAccounts().catch(() => ({ rows: [] as { active: boolean; state: string; email: string }[] }));
+    setLandsIn(rows.find(r => !r.active && r.state === 'live')?.email || '');
     setOpen(true);
   };
 
@@ -41,27 +49,27 @@ export default function DeleteAccountCard() {
     const res = await deleteMyAccount({ password: secret, pin: hasPin ? pin.trim() : undefined });
     setBusy(false);
     if (res?.error) return toast(res.error, 'error');
-    // Content is gone; end the session and land on the public page.
-    await signOut({ callbackUrl: '/' });
+    // Content is gone; leave this account. With another account on the device that means landing
+    // IN it, which the dialog above has already said out loud.
+    await signOutActive();
+    await finishIdentityChange('/');
   };
 
   return (
     <>
-      <button onClick={start} className="card" style={{
-        display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
-        marginTop: '14px', textAlign: 'left', cursor: 'pointer', font: 'inherit',
-        color: 'var(--danger-color)', border: '1px solid color-mix(in srgb, var(--danger-color) 25%, transparent)',
-      }}>
-        <span className="row-icon" style={{ background: 'var(--danger-soft)', color: 'var(--danger-color)' }}>
-          <Trash2 size={18} strokeWidth={2.2} />
-        </span>
-        <span style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ display: 'block', fontWeight: 700 }}>Delete my account</span>
-          <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-            Erase your content. This cannot be undone.
+      {/* Its own card, tinted, with nothing else in it — the Danger zone on /profile is one row
+          on purpose, so the irreversible tap has no neighbour to be mistaken for. */}
+      <div className="set-card danger">
+        <button onClick={start} className="set-row">
+          <span className="row-icon" style={{ background: 'var(--danger-soft)', color: 'var(--danger-color)' }}>
+            <Trash2 size={18} strokeWidth={2.2} />
           </span>
-        </span>
-      </button>
+          <span className="set-row-text">
+            <span className="set-row-title">Delete my account</span>
+            <span className="set-row-sub">Erase your content. This cannot be undone.</span>
+          </span>
+        </button>
+      </div>
 
       {open && (
         <div className="confirm-overlay" onClick={() => !busy && setOpen(false)}>
@@ -79,7 +87,12 @@ export default function DeleteAccountCard() {
               records, then erase those too.
             </p>
 
-            
+            {landsIn && (
+              <p style={{ textAlign: 'left', marginTop: '8px' }}>
+                Afterwards this device signs you in as <strong>{landsIn}</strong>, which is still
+                on it.
+              </p>
+            )}
 
             <label style={{ display: 'block', marginTop: '10px', fontSize: '0.82rem', fontWeight: 700 }}>
               {hasPassword ? 'Confirm your password' : 'Type your email to confirm'}

@@ -114,9 +114,14 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
         </div>
       )}
 
-      <button className={`search-fab ${showSearchBar ? 'active' : ''}`} onClick={goSearch} title="Search" aria-label="Search">
-        <Search size={20} strokeWidth={2.4} />
-      </button>
+      {/* Not on the settings page. This searches links — the bar it opens says "Search your
+          links…" — and on /profile it was a shortcut to somewhere else that cost 66px of every
+          row, wrapping "Where your files are kept" onto two lines just to stay clear of it. */}
+      {pathname !== '/profile' && (
+        <button className={`search-fab ${showSearchBar ? 'active' : ''}`} onClick={goSearch} title="Search" aria-label="Search">
+          <Search size={20} strokeWidth={2.4} />
+        </button>
+      )}
 
       {pathname === '/links' && (
         <div className="fab-container">
