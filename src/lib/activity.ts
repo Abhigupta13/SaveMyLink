@@ -18,6 +18,7 @@ export const VERBS = [
   'role_changed',
   'project_renamed',
   'meeting_recorded',
+  'message_posted',
 ] as const;
 
 export type Verb = (typeof VERBS)[number];
@@ -37,6 +38,11 @@ const PHRASES: Record<Verb, (subject: string) => string> = {
   role_changed: s => `changed the role of ${s}`,
   project_renamed: s => `renamed the group to ${s}`,
   meeting_recorded: s => `recorded ${s}`,
+  // Reads for all three shapes a message takes: an excerpt ("posted where is the gate key"), a
+  // file name when there is no text ("posted site-plan.pdf"), and phrase()'s own empty-subject
+  // fallback ("posted something"). "What did I miss" is the highest-value thing the trail answers,
+  // and a chat the trail never mentions is a conversation you only find by opening the chat.
+  message_posted: s => `posted ${s}`,
 };
 
 /**

@@ -7,20 +7,26 @@ import { useSession } from 'next-auth/react';
 import {
   ArrowLeft, MoreVertical, AlertTriangle, ChevronRight, Trash2, X, Check, Download, Pencil,
   UserPlus, Users, StickyNote, FileText, BadgeCheck, Mic, CheckSquare, History, BookOpen,
+  MessageSquare, Send, Paperclip,
 } from 'lucide-react';
+import { getMessages, sendMessage, editMessage, deleteMessage } from '@/actions/message';
+import { goConnectDrive } from '@/lib/driveConnect';
+import { useDriveGate } from '@/components/useDriveGate';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask, getReminderDefault } from '@/actions/task';
 import { getProjectWorkspace, addMember, removeMember, setProjectRole, deleteProject, updateProjectNotes, renameProject, getProjectEvents } from '@/actions/project';
 import { getNotes, createNote, deleteNote } from '@/actions/note';
+import { addDocument } from '@/actions/document';
 import PersonPicker from '@/components/PersonPicker';
 import MomSection from '@/components/MomSection';
 import { useFeedback } from '@/components/ui/Feedback';
 import { formatTime, formatDay, formatDate } from '@/lib/time';
-import { isProjectOwner, isProjectCreator, isProjectViewer, canWrite } from '@/lib/scope';
+import { isProjectOwner, isProjectCreator, isProjectViewer, canWrite, canChat } from '@/lib/scope';
 import { needsOwner, assigneeEmailOf, assigneeEmailsOf } from '@/lib/taskAccess';
 import AssigneePicker from '@/components/AssigneePicker';
 import ReminderPicker from '@/components/ReminderPicker';
 import type { ReminderChoice } from '@/lib/reminderRule';
 import { phrase, DEFAULT_DAYS, fromMeeting } from '@/lib/activity';
+import { escapeRegex } from '@/lib/regex';
 import '@/styles/workspace.css';
 
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -49,15 +55,79 @@ function fmtWhen(iso: string) {
 type ActivityEvent = { _id: string; verb: string; subject?: string; at: string; actorId?: { email?: string; name?: string } };
 
 /**
- * The seven places a group's work lives. Each is a screen you open, not a panel you unfold:
+ * The eight places a group's work lives. Each is a screen you open, not a panel you unfold:
  * at 390px an accordion is a column of shut doors you scroll past to reach the one you want,
  * and People and What changed were the two that were always in the way.
  */
-type Section = 'meetings' | 'tasks' | 'notes' | 'people' | 'activity' | 'files' | 'about';
+type Section = 'meetings' | 'tasks' | 'notes' | 'chat' | 'people' | 'activity' | 'files' | 'about';
+
+/** A message the panel holds. Written by one action, so the shape is known. */
+type ChatMessage = {
+  _id: string;
+  body: string;
+  createdAt: string;
+  editedAt?: string | null;
+  deletedAt?: string | null;
+  refs?: { kind: 'task' | 'mom' | 'note' | 'user'; id?: string; email?: string; label: string }[];
+  attachments?: { name: string; key: string; url: string; mimeType?: string; size?: number }[];
+  authorId?: { email?: string; name?: string };
+};
+/** Chosen in the composer, not yet sent. The server re-resolves every one of these. */
+type PendingRef = { kind: 'task' | 'mom' | 'note' | 'user'; id?: string; email?: string; label: string };
+/** The only fields the pickers read off a task, meeting or note — the page holds them as `any`. */
+type Listed = { _id: string; title?: string; body?: string };
+
+/**
+ * What typing at the start of a word opens. `@` is a person because that is what `@` means in every
+ * other chat app; the rest are `/` commands so the three of them read as one family.
+ */
+const REF_COMMANDS: { token: string; kind: Exclude<PendingRef['kind'], 'user'>; hint: string }[] = [
+  { token: '/task', kind: 'task', hint: 'a task in this group' },
+  { token: '/mom', kind: 'mom', hint: 'a meeting' },
+  { token: '/note', kind: 'note', hint: 'a note' },
+];
+
+/** Where an open autocomplete started, so a pick can replace exactly what was typed to open it. */
+type Trigger = { kind: PendingRef['kind']; token: string; tokenStart: number; queryStart: number };
+
+/** Past this the person is clearly writing a sentence, not still choosing. */
+const MAX_QUERY = 30;
+
+/**
+ * Keep an open autocomplete open across spaces.
+ *
+ * Detection alone looks at the last word, which closes the list the moment you type "/task gate" or
+ * reach the surname in "@Chat Test". Both are the normal way to narrow a list, so once a trigger is
+ * open it survives until its token is edited away, a choice is made, Escape is pressed, or the query
+ * gets long enough that it is plainly prose.
+ */
+function keepTrigger(open: Trigger | null, value: string): Trigger | null {
+  if (!open) return null;
+  if (!value.startsWith(open.token, open.tokenStart)) return null;
+  if (value.length < open.queryStart) return null;
+  return value.length - open.queryStart <= MAX_QUERY ? open : null;
+}
+
+/**
+ * The token being typed — everything after the last space — and what it is asking for.
+ *
+ * Only ever the LAST token, so a `@` in the middle of a finished sentence stays a `@`. The query
+ * runs to the end of the draft, which is why picking always replaces a suffix and never has to
+ * splice around text the person has already written.
+ */
+function detectTrigger(value: string): Trigger | null {
+  const tokenStart = value.lastIndexOf(' ') + 1;
+  const token = value.slice(tokenStart);
+  if (token.startsWith('@')) return { kind: 'user', token: '@', tokenStart, queryStart: tokenStart + 1 };
+  const cmd = REF_COMMANDS.find(c => token.startsWith(c.token));
+  if (cmd) return { kind: cmd.kind, token: cmd.token, tokenStart, queryStart: tokenStart + cmd.token.length };
+  return null;
+}
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export default function ProjectWorkspace() {
   const { toast, confirm } = useFeedback();
+  const ensureDrive = useDriveGate();
   const { data: session, status } = useSession();
   const router = useRouter();
   const projectId = String(useParams().id || '');
@@ -68,6 +138,8 @@ export default function ProjectWorkspace() {
   const [moms, setMoms] = useState<any[]>([]);
   const [notes, setNotes] = useState<any[]>([]);
   const [files, setFiles] = useState<any[]>([]);
+  const groupFileRef = useRef<HTMLInputElement>(null);
+  const [addingFile, setAddingFile] = useState(false);
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [days, setDays] = useState(DEFAULT_DAYS);
   const [loading, setLoading] = useState(true);
@@ -98,12 +170,35 @@ export default function ProjectWorkspace() {
   const [reminderDefault, setReminderDefault] = useState<ReminderChoice | null>(null);
   const [remind, setRemind] = useState<ReminderChoice | null>(null);
 
+  // ---------- Chat ----------
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatCount, setChatCount] = useState(0);
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatRefs, setChatRefs] = useState<PendingRef[]>([]);
+  const [trigger, setTrigger] = useState<Trigger | null>(null);
+  const [pickerIndex, setPickerIndex] = useState(0);
+  const [sending, setSending] = useState(false);
+  const [editingMsg, setEditingMsg] = useState<{ id: string; body: string } | null>(null);
+  // Which message is showing its Edit/Remove. Hover does this on a desktop; a phone has no hover,
+  // so tapping the bubble is what reveals them — the long-press equivalent every chat app has.
+  const [selMsg, setSelMsg] = useState<string | null>(null);
+  // The newest message already held. The poll asks for what arrived after it rather than re-reading
+  // the page every five seconds — a busy group otherwise ships fifty rows to say nothing changed.
+  const lastSeen = useRef<string | null>(null);
+  const chatEnd = useRef<HTMLDivElement>(null);
+  const chatInput = useRef<HTMLInputElement>(null);
+  const chatFileRef = useRef<HTMLInputElement>(null);
+  const [chatFile, setChatFile] = useState<File | null>(null);
+
   const myEmail = (session?.user?.email || '').toLowerCase();
   const isOwner = isProjectOwner(project, myEmail);
   const isCreator = isProjectCreator(project, myEmail);
   // The single question every control on this page asks. The server answers it again with
   // writerScope — this only stops offering things that would fail.
   const canEdit = canWrite(project, myEmail);
+  // Everyone on the project talks, view-only included — the one place a viewer may write, and the
+  // reason it is its own predicate rather than a second reading of canWrite.
+  const canPost = canChat(project, myEmail);
   const [busyOwner, setBusyOwner] = useState('');
 
   const roleOf = useCallback((email: string): 'owner' | 'member' | 'viewer' => {
@@ -173,6 +268,7 @@ export default function ProjectWorkspace() {
     setNotes(res.notes || []);
     setFiles(res.documents || []);
     setEvents(res.events || []);
+    setChatCount(res.messageCount || 0);
     setNotesDraft(res.project.notes || '');
     setRenaming(res.project.name);
     setLoading(false);
@@ -209,6 +305,63 @@ export default function ProjectWorkspace() {
     document.addEventListener('visibilitychange', refresh);
     return () => document.removeEventListener('visibilitychange', refresh);
   }, [status, load]);
+
+  /**
+   * The chat is the one place on this page where "not live" is actually felt, so it polls — but
+   * only while its panel is open and the tab is visible, and only for what has arrived since the
+   * newest message it already holds. Closed panel, hidden tab, unmounted page: no timer, no
+   * invocation, no bill. The precedent is MomSection, which has long-polled a server action on this
+   * host since MOM shipped; websockets are not available here.
+   */
+  /**
+   * What the open autocomplete is offering, filtered by whatever has been typed after the trigger.
+   *
+   * A plain value, not a useMemo. The lists are small, the React Compiler memoizes it anyway, and a
+   * hook here was actively a hazard: it has to sit above the loading early-return or the hook order
+   * changes between renders, which is precisely how this panel crashed the first time.
+   */
+  const pickerQuery = trigger ? chatDraft.slice(trigger.queryStart).trim().toLowerCase() : '';
+  const pickerAll: PendingRef[] = !trigger ? []
+    : trigger.kind === 'user' ? memberOptions.map(e => ({ kind: 'user', email: e, label: nameOf(e) }))
+    : trigger.kind === 'task' ? (tasks as Listed[]).map(t => ({ kind: 'task', id: t._id, label: t.title || 'a task' }))
+    : trigger.kind === 'mom' ? (moms as Listed[]).map(m => ({ kind: 'mom', id: m._id, label: m.title || 'a meeting' }))
+    : (notes as Listed[]).map(n => ({ kind: 'note', id: n._id, label: n.title || 'Untitled note' }));
+  const pickerOptions: PendingRef[] = pickerAll
+    // Matched on the address as well as the name: half of a group is people whose name nobody has
+    // filled in yet, whose label IS their email.
+    .filter(o => !pickerQuery || o.label.toLowerCase().includes(pickerQuery) || (o.email || '').toLowerCase().includes(pickerQuery))
+    .slice(0, 6);
+
+  const pullMessages = useCallback(async () => {
+    const since = lastSeen.current;
+    const res = await getMessages(projectId, since ? { after: since } : undefined);
+    if (!res.success) return;
+    const incoming = (res.messages || []) as ChatMessage[];
+    if (!incoming.length) return;
+    lastSeen.current = incoming[incoming.length - 1].createdAt;
+    setMessages(prev => {
+      // Merge by id, never append: a poll can race the optimistic echo of your own send, and a
+      // re-read of the newest page has to be able to replace a row that was edited or removed.
+      const byId = new Map(prev.map(m => [m._id, m]));
+      for (const m of incoming) byId.set(m._id, m);
+      return [...byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    });
+  }, [projectId]);
+
+  useEffect(() => {
+    if (status !== 'authenticated' || section !== 'chat') return;
+    // Re-read the newest page every time the panel opens. `after` alone would never see an edit or
+    // a removal, because neither moves createdAt.
+    lastSeen.current = null;
+    let alive = true;
+    const tick = () => { if (alive && document.visibilityState === 'visible') pullMessages(); };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, [status, section, pullMessages]);
+
+  // A new message lands at the bottom, which is where the eye already is.
+  useEffect(() => { if (section === 'chat') chatEnd.current?.scrollIntoView({ block: 'end' }); }, [messages, section]);
 
   /**
    * Opening a section is a real history entry, so the Android back gesture — the only "back" that
@@ -454,10 +607,179 @@ export default function ProjectWorkspace() {
     );
   };
 
+  /**
+   * Typing `@` or `/task` at the start of a word opens the picker for that kind.
+   *
+   * The trigger token is removed once a choice is made, so the message stays a sentence and the
+   * reference travels beside it as data — never as text the server would have to parse back out.
+   * The server re-resolves every reference against this project regardless of what arrives here.
+   */
+  const onChatInput = (value: string) => {
+    setChatDraft(value);
+    // An open list keeps filtering across spaces; only when it has been edited away do we look for
+    // a fresh trigger. Doing it the other way round closes the list on "@Chat Test".
+    setTrigger(keepTrigger(trigger, value) ?? detectTrigger(value));
+    setPickerIndex(0);
+  };
+
+  /**
+   * Arrow keys move through the list, Enter takes the highlighted one, Escape closes it — the
+   * behaviour every other chat app has trained people to expect. Enter only sends when nothing is
+   * open, so choosing a person never posts a half-written message by accident.
+   */
+  const onChatKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!trigger || !pickerOptions.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setPickerIndex(i => (i + 1) % pickerOptions.length); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setPickerIndex(i => (i - 1 + pickerOptions.length) % pickerOptions.length); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); addRef(pickerOptions[pickerIndex]); }
+    else if (e.key === 'Escape') { e.preventDefault(); setTrigger(null); }
+  };
+
+  /**
+   * A person becomes text — `@Their Name` lands in the sentence, the way a mention reads in any
+   * other chat app. A task, meeting or note does NOT: it is an attachment, not a word, so it leaves
+   * the sentence alone and rides along as a card under the message.
+   *
+   * Either way the structured reference travels beside the text and the server re-resolves it. The
+   * text is for people; the ref is what the app can actually check.
+   */
+  const addRef = (ref: PendingRef) => {
+    if (trigger) {
+      const before = chatDraft.slice(0, trigger.tokenStart);
+      setChatDraft(ref.kind === 'user' ? `${before}@${ref.label} ` : before);
+    }
+    setChatRefs(r => (r.some(x => x.kind === ref.kind && (x.id || x.email) === (ref.id || ref.email)) ? r : [...r, ref]));
+    setTrigger(null);
+    setPickerIndex(0);
+    chatInput.current?.focus();
+  };
+
+  /**
+   * A file goes into the group from inside the group.
+   *
+   * It used to be a link out to the Digi Locker, which meant leaving the project, filing the
+   * document, choosing the group again from a dropdown, and coming back — four steps to do the
+   * thing the empty state was already asking for. The row it creates is the same Document either
+   * way, so the locker still lists it.
+   */
+  const pickGroupFile = async () => {
+    if (await ensureDrive(`/projects/${projectId}`)) groupFileRef.current?.click();
+  };
+
+  const addGroupFile = async (picked: File | null) => {
+    if (!picked) return;
+    setAddingFile(true);
+    const fd = new FormData();
+    fd.append('name', picked.name);
+    fd.append('type', 'file');
+    fd.append('file', picked);
+    fd.append('projectId', projectId);
+    // Never private: the whole group can open this the moment it lands, so a padlock on it would
+    // be a promise the app cannot keep. privacyOnWrite says the same thing server-side.
+    fd.set('isPrivate', 'false');
+    const res = await addDocument(fd);
+    setAddingFile(false);
+    if (groupFileRef.current) groupFileRef.current.value = '';   // so the same file can be picked twice
+    if (res.success) {
+      toast(`${picked.name} added to ${project.name}`, 'success');
+      load();
+      fetchEvents();
+    } else if (res.needsDrive) {
+      toast('Taking you to Google to connect your Drive…', 'info');
+      goConnectDrive();
+    } else toast(res.error || 'Could not add that file', 'error');
+  };
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const body = chatDraft.trim();
+    // A photo with no caption is a whole message on a site, so either half is enough to send.
+    if ((!body && !chatFile) || sending) return;
+    setSending(true);
+    const res = await sendMessage(projectId, body, chatRefs, chatFile);
+    setSending(false);
+    if (!res.success) {
+      if (res.needsDrive) {
+        toast('Taking you to Google to connect your Drive…', 'info');
+        return goConnectDrive();
+      }
+      return toast(res.error || 'Message not sent', 'error');
+    }
+    setChatDraft(''); setChatRefs([]); setTrigger(null); setPickerIndex(0);
+    setChatFile(null);
+    if (chatFileRef.current) chatFileRef.current.value = '';   // so the same file can be picked twice
+    const sent = res.message as ChatMessage | undefined;
+    if (sent) {
+      lastSeen.current = sent.createdAt;
+      setMessages(prev => [...prev.filter(m => m._id !== sent._id), sent]);
+    }
+    fetchEvents();   // the trail carries it too, and this panel is often opened straight after
+  };
+
+  /**
+   * A reference renders from the label stored with the message, never from a fresh lookup — so a
+   * chip still reads correctly after the task it points at has been deleted, which is exactly when
+   * someone comes looking for what was said about it. Tapping one goes to where that thing lives.
+   */
+  /**
+   * A mention belongs IN the sentence, highlighted, the way it reads in every other chat app — so
+   * the body is split on the mention text the composer inserted. Splitting on the stored reference
+   * rather than on any bare `@word` means an address somebody simply typed out is left alone.
+   *
+   * A person is stored as their address — the identity that survives a rename and works for someone
+   * who has not signed up yet — and read back as their name while they are still on the group.
+   */
+  const renderBody = (m: ChatMessage) => {
+    const names = (m.refs || []).filter(r => r.kind === 'user').map(r => `@${nameOf(r.email || r.label)}`);
+    if (!names.length) return m.body;
+    const rx = new RegExp(`(${names.map(escapeRegex).join('|')})`, 'g');
+    return m.body.split(rx).map((part, i) =>
+      names.includes(part) ? <span key={i} className="ch-mention">{part}</span> : part);
+  };
+
+  /**
+   * Referenced work rides UNDER the message as a card, not inside the sentence — it is an object,
+   * not a word. Tapping it goes to where that thing actually lives.
+   */
+  const refCard = (r: NonNullable<ChatMessage['refs']>[number], i: number) => {
+    if (r.kind === 'user') return null;
+    const Icon = r.kind === 'task' ? CheckSquare : r.kind === 'mom' ? Mic : StickyNote;
+    const go = () => (r.kind === 'note'
+      ? router.push(`/notes?project=${projectId}`)
+      : openSection(r.kind === 'task' ? 'tasks' : 'meetings'));
+    return (
+      <button key={i} type="button" className="ch-ref" onClick={go}>
+        <Icon size={13} />
+        <span className="ch-ref-label">{r.label}</span>
+        <ChevronRight size={13} />
+      </button>
+    );
+  };
+
+  const handleDeleteMessage = async (m: ChatMessage) => {
+    if (!await confirm({ title: 'Remove this message?', message: 'It stays in the thread marked as removed, so the conversation around it still reads.', danger: true, confirmLabel: 'Remove' })) return;
+    const res = await deleteMessage(m._id);
+    if (!res.success) return toast(res.error || 'Could not remove it', 'error');
+    setMessages(prev => prev.map(x => x._id === m._id ? { ...x, body: '', refs: [], deletedAt: new Date().toISOString() } : x));
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingMsg) return;
+    const body = editingMsg.body.trim();
+    if (!body) return;
+    const res = await editMessage(editingMsg.id, body);
+    if (!res.success) return toast(res.error || 'Could not save the edit', 'error');
+    setMessages(prev => prev.map(x => x._id === editingMsg.id ? { ...x, body, editedAt: new Date().toISOString() } : x));
+    setEditingMsg(null);
+  };
+
   const cards: { key: Section; label: string; count: number; Icon: typeof Mic; note?: string; warn?: boolean }[] = [
     { key: 'meetings', label: 'Meetings', count: moms.length, Icon: Mic, note: toReview ? `${toReview} to review` : undefined },
     { key: 'tasks', label: 'All tasks', count: open.length, Icon: CheckSquare, note: overdue.length ? `${overdue.length} overdue` : undefined, warn: true },
     { key: 'notes', label: 'Notes', count: notes.length, Icon: StickyNote },
+    // The count comes from the workspace payload, not from `messages` — that array is empty until
+    // the panel has been opened, and a card reading "0" on a busy chat is worse than no card.
+    { key: 'chat', label: 'Chat', count: Math.max(chatCount, messages.filter(m => !m.deletedAt).length), Icon: MessageSquare },
     { key: 'people', label: 'People', count: memberOptions.length, Icon: Users },
     { key: 'activity', label: 'What changed', count: events.length, Icon: History },
     { key: 'files', label: 'Files', count: files.length, Icon: FileText },
@@ -683,6 +1005,151 @@ export default function ProjectWorkspace() {
           </section>
         )}
 
+        {/* ---------- Chat ---------- */}
+        {section === 'chat' && (
+          <section className="ch-panel">
+            <div className="ch-thread">
+              {messages.length === 0 ? (
+                <p className="wk-quiet">
+                  Nothing said yet. Type <b>@</b> for a person, or <b>/task</b>, <b>/mom</b>, <b>/note</b> to
+                  point at something in this group — a message that names the work stays findable.
+                </p>
+              ) : messages.map((m, i) => {
+                const email = (m.authorId?.email || '').toLowerCase();
+                const mine = !!email && email === myEmail;
+                const gone = !!m.deletedAt;
+                const prev = messages[i - 1];
+                /* Consecutive messages from one person within five minutes are one turn in the
+                   conversation, so only the first carries a name, a time and an avatar. Every chat
+                   app does this, and without it a burst of three lines reads as three strangers. */
+                const run = !!prev
+                  && (prev.authorId?.email || '').toLowerCase() === email
+                  && new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() < 5 * 60_000;
+                const who = mine ? 'You' : (m.authorId?.name || m.authorId?.email || 'Someone');
+                return (
+                  <div key={m._id} className={`ch-row${mine ? ' me' : ''}${run ? ' run' : ''}${selMsg === m._id ? ' sel' : ''}`}>
+                    {!mine && <div className="ch-avatar" aria-hidden="true">{run ? '' : who.trim().charAt(0).toUpperCase()}</div>}
+                    <div className="ch-col">
+                      {!run && (
+                        <div className="ch-meta">
+                          <span className="ch-name">{who}</span>
+                          <time dateTime={m.createdAt}>{fmtWhen(m.createdAt)}</time>
+                        </div>
+                      )}
+
+                      {gone ? (
+                        <div className="ch-bubble ch-removed">Message removed</div>
+                      ) : editingMsg?.id === m._id ? (
+                        <div className="ch-edit">
+                          <textarea className="field" rows={3} value={editingMsg.body} autoFocus
+                            onChange={e => setEditingMsg({ id: m._id, body: e.target.value })} />
+                          <div className="ch-edit-acts">
+                            <button type="button" className="btn-primary" onClick={handleSaveEdit}
+                              disabled={!editingMsg.body.trim()}>Save</button>
+                            <button type="button" className="subtle-link" onClick={() => setEditingMsg(null)}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="ch-bubble" onClick={() => setSelMsg(s => s === m._id ? null : m._id)}>
+                            {renderBody(m)}
+                            {m.editedAt && <span className="ch-edited">edited</span>}
+                          </div>
+                          {!!m.attachments?.length && (
+                            <div className="ch-refs">
+                              {m.attachments.map(a => (
+                                /* Opened through /api/files, never a Drive link: half a group may
+                                   have signed up with a password and has no Google account to open
+                                   a Drive URL with. */
+                                <a key={a.key} href={a.url} target="_blank" rel="noopener noreferrer" className="ch-ref">
+                                  <Paperclip size={13} />
+                                  <span className="ch-ref-label">{a.name}</span>
+                                  <ChevronRight size={13} />
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                          {m.refs?.some(r => r.kind !== 'user') && <div className="ch-refs">{m.refs.map(refCard)}</div>}
+                        </>
+                      )}
+
+                      {/* The author edits; the author or the group's creator removes. The server
+                          checks both again — this only stops offering what would fail. */}
+                      {!gone && editingMsg?.id !== m._id && (mine || isCreator) && (
+                        <div className="ch-acts">
+                          {mine && <button type="button" onClick={() => setEditingMsg({ id: m._id, body: m.body })}>Edit</button>}
+                          <button type="button" onClick={() => handleDeleteMessage(m)}>Remove</button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={chatEnd} />
+            </div>
+
+            {canPost ? (
+              <form onSubmit={handleSend} className="ch-form">
+                {!!chatRefs.length && (
+                  <div className="ch-pending">
+                    {chatRefs.map((r, i) => (
+                      <button key={i} type="button" className="ch-chip" title="Remove this reference"
+                        onClick={() => setChatRefs(cur => cur.filter((_, j) => j !== i))}>
+                        {r.kind === 'user' ? `@${r.label}` : r.label}
+                        <X size={11} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {trigger && (
+                  <div className="ch-picker" role="listbox" aria-label="Insert a reference">
+                    {pickerOptions.length === 0
+                      ? <div className="ch-picker-empty">Nothing matches</div>
+                      : pickerOptions.map((o, i) => (
+                        <button key={i} type="button" role="option" aria-selected={i === pickerIndex}
+                          className={i === pickerIndex ? 'on' : ''}
+                          onMouseEnter={() => setPickerIndex(i)} onClick={() => addRef(o)}>
+                          <span className="ch-picker-label">{o.label}</span>
+                          {o.kind === 'user' && o.email && o.email !== o.label && <span className="ch-picker-sub">{o.email}</span>}
+                        </button>
+                      ))}
+                  </div>
+                )}
+
+                {chatFile && (
+                  <div className="ch-pending">
+                    <button type="button" className="ch-chip" title="Remove this file"
+                      onClick={() => { setChatFile(null); if (chatFileRef.current) chatFileRef.current.value = ''; }}>
+                      <Paperclip size={11} /> {chatFile.name}
+                      <X size={11} />
+                    </button>
+                  </div>
+                )}
+
+                <div className="ch-input">
+                  <input ref={chatFileRef} type="file" id="chat-file" style={{ display: 'none' }}
+                    onChange={e => setChatFile(e.target.files?.[0] || null)} />
+                  <button type="button" className="ch-clip" title="Attach a file" aria-label="Attach a file"
+                    onClick={async () => { if (await ensureDrive()) chatFileRef.current?.click(); }}>
+                    <Paperclip size={17} />
+                  </button>
+                  <input ref={chatInput} type="text" value={chatDraft} autoComplete="off"
+                    onChange={e => onChatInput(e.target.value)} onKeyDown={onChatKeyDown}
+                    placeholder="Message the group" aria-label={`Message ${project.name}`} />
+                  <button type="submit" className="ch-send" disabled={sending || (!chatDraft.trim() && !chatFile)} aria-label="Send">
+                    <Send size={16} />
+                  </button>
+                </div>
+                <p className="ch-hint"><b>@</b> a person · <b>/task</b> <b>/mom</b> <b>/note</b> to point at work in this group</p>
+              </form>
+            ) : (
+              <p className="wk-quiet">You can read this conversation but not post in it.</p>
+            )}
+
+          </section>
+        )}
+
         {/* ---------- People ---------- */}
         {section === 'people' && (
           <section>
@@ -784,8 +1251,19 @@ export default function ProjectWorkspace() {
                 </div>
               </a>
             ))}
+            {canEdit && (
+              <div style={{ marginTop: '16px' }}>
+                <input ref={groupFileRef} type="file" hidden onChange={e => addGroupFile(e.target.files?.[0] || null)} />
+                <button type="button" className="btn-primary" onClick={pickGroupFile} disabled={addingFile}
+                  style={{ padding: '11px 20px', borderRadius: '14px', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                  <Paperclip size={15} />
+                  {addingFile ? 'Uploading…' : 'Add a file'}
+                </button>
+              </div>
+            )}
+            {/* Still worth keeping: this adds a NEW file, the locker files one you already have. */}
             <Link href="/d-locker" className="subtle-link wk-foot">
-              {files.length ? 'Open the Digi Locker →' : 'Add from the Digi Locker →'}
+              {files.length ? 'Open the Digi Locker →' : 'Or file one you already saved →'}
             </Link>
           </section>
         )}

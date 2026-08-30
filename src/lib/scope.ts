@@ -168,3 +168,24 @@ export function canWrite(
   if (isProjectViewer(project, myEmail)) return false;
   return has(project.memberEmails, lower(myEmail));
 }
+
+/**
+ * "May this person post in this group's chat" — everyone on the project, viewers included.
+ *
+ * Its own predicate rather than a call to canWrite, because this is the single place the two
+ * answers are meant to differ: a viewer changes nothing else in a group but does take part in the
+ * conversation. That is a deliberate decision, not an oversight, and keeping it here means
+ * reversing it is one line — `return canWrite(project, myEmail, myUserId)` — rather than a hunt
+ * through the actions. It also means nobody widens what a viewer can do by editing canWrite.
+ *
+ * Reading the chat needs no predicate at all: projectScope already lets a viewer read the group.
+ */
+export function canChat(
+  project: OwnableProject | null | undefined,
+  myEmail: string | null | undefined,
+  myUserId?: string | null,
+): boolean {
+  if (!project) return false;
+  if (canWrite(project, myEmail, myUserId)) return true;
+  return isProjectViewer(project, myEmail);
+}
