@@ -2803,6 +2803,52 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 @keyframes level { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(.45); } }
 @media (prefers-reduced-motion: reduce) { .mark-live .mark-bar { animation: none; } }
 
+/* ---------- Waiting ---------- */
+/* Hidden on screen, still announced. The loading state is a picture with no words in it, so the
+   only thing a screen reader could otherwise report is an SVG that says nothing. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+.loading { display: flex; align-items: center; justify-content: center; }
+/* Centred in what is left of the viewport rather than pinned to the top of an empty page — the
+   mark lands where the eye already is while the screen is still empty. */
+.loading-page { min-height: 60vh; }
+/* One card's contents, arriving inside a page that is already there. Roughly the height the rows
+   will occupy, so the card does not collapse and snap back open underneath the cursor. */
+.loading-inline { padding: 22px 0; }
+
+/* The bars run the landing page's waveform, not the calmer level-meter pulse `mark-live` uses
+   elsewhere: same 1s, same reach PAST rest rather than only shrinking away from it, same stagger.
+   That reach is the whole difference — a bar that only ever gets smaller reads as fading out, and
+   one that overshoots reads as a signal arriving. This is the recording card on the landing hero,
+   which is the right thing for a screen that is waiting on something.
+
+   Scoped to `.loading`, so the sign-in side panel keeps the quieter version it was designed with. */
+.loading .mark-bar { animation: mark-wave 1s ease-in-out infinite; }
+.loading .mark-bar.b1 { animation-delay: 0s; }
+.loading .mark-bar.b2 { animation-delay: .15s; }
+.loading .mark-bar.b3 { animation-delay: .3s; }
+@keyframes mark-wave { 0%, 100% { transform: scaleY(.4); } 50% { transform: scaleY(1.4); } }
+
+/* The tick draws itself in over the bars, holds, clears, and goes again — the mark doing the thing
+   the mark means. 2s is exactly two wave cycles, so the two loops stay locked to each other; any
+   duration that is not a multiple would drift and read as two animations that happen to share a
+   logo. The reset lands at opacity 0, so the stroke is never seen jumping back to the start. */
+.loading .mark-tick { stroke-dasharray: 62; animation: tick-draw 2s ease-in-out infinite; }
+@keyframes tick-draw {
+  0%, 6%   { stroke-dashoffset: 62; opacity: 0; }
+  20%      { opacity: 1; }
+  62%, 88% { stroke-dashoffset: 0; opacity: 1; }
+  100%     { stroke-dashoffset: 0; opacity: 0; }
+}
+/* Stilled, but never left mid-draw: without the offset the tick would sit permanently erased. */
+@media (prefers-reduced-motion: reduce) {
+  .loading .mark-bar { animation: none; }
+  .loading .mark-tick { animation: none; stroke-dashoffset: 0; }
+}
+
 /* ---------- MOM: the recording stage ---------- */
 /* The landing page shows a recording card — title, live waveform, "Recording" pill, then
    "↓ action items found" dropping into the list. This is that card for real, on the app's tokens

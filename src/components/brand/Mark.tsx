@@ -24,7 +24,9 @@ export default function Mark({
         <path className="mark-bar b2" d="M40 18v44" />
         <path className="mark-bar b3" d="M54 30v20" />
       </g>
-      <path d="M66 42l12 12 30-32" stroke={tick} strokeWidth={9} strokeLinecap="round" strokeLinejoin="round" />
+      {/* Classed so a caller can animate the tick on its own — the loading state draws it in while
+          the bars pulse. Nothing else targets it, and `mark-live` still leaves it alone. */}
+      <path className="mark-tick" d="M66 42l12 12 30-32" stroke={tick} strokeWidth={9} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
