@@ -86,8 +86,16 @@ export default function Tour() {
   useEffect(() => {
     let saved: number | null = null;
     try { const v = localStorage.getItem(STORE); if (v !== null) saved = Number(v); } catch {}
-    if (saved !== null && saved >= 0 && saved < STEPS.length) { start(saved); }
-    else tourStatus().then(s => { if (s.autoStart) start(0); }).catch(() => {});
+    // The server answers first, always. Resuming straight off localStorage let a step left by
+    // one account replay itself at the next one and then call markTourDone() on the wrong user
+    // — a stale local step must never outrank what the server says about who is signed in.
+    tourStatus().then(s => {
+      if (saved !== null && saved >= 0 && saved < STEPS.length) start(saved);
+      else if (s.autoStart) start(0);
+    }).catch(() => {
+      // Offline, or signed out mid-flight: an interrupted tour still deserves to finish.
+      if (saved !== null && saved >= 0 && saved < STEPS.length) start(saved);
+    });
 
     const onStart = () => start(0);
     window.addEventListener('tour:start', onStart);

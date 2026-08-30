@@ -10,11 +10,26 @@ import GoogleButton from '@/components/auth/GoogleButton';
 import AuthShell from '@/components/auth/AuthShell';
 import { validateEmail } from '@/lib/validation';
 import { authProviders } from '@/actions/auth';
+import { parkedSummary, cancelAddAccount } from '@/actions/accounts';
+import { finishIdentityChange } from '@/lib/clientIdentityReset';
 
 function SigninInner() {
   const router = useRouter();
   const params = useSearchParams();
-  const [email, setEmail] = useState('');
+  // Arriving from "Add another account": the previous account is parked in `back` and this
+  // browser is deliberately signed out so NextAuth can sign somebody new in. /auth is outside
+  // the proxy matcher, so a session-less visit here works.
+  const adding = params.get('add') === '1';
+  const back = Number(params.get('back'));
+  const backSlot = Number.isInteger(back) && back >= 0 && back <= 3 ? back : null;
+  const [parked, setParked] = useState<{ email: string; name: string; live: boolean } | null>(null);
+  useEffect(() => {
+    if (!adding || backSlot === null) return;
+    parkedSummary(backSlot).then(setParked).catch(() => {});
+  }, [adding, backSlot]);
+
+  // Prefilled when the switcher sent someone here off an expired slot.
+  const [email, setEmail] = useState(params.get('email') || '');
   const [password, setPassword] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
@@ -77,7 +92,29 @@ function SigninInner() {
   };
 
   return (
-    <AuthShell title="Welcome back" sub="Sign in to your vault.">
+    <AuthShell
+      title={adding ? 'Add another account' : 'Welcome back'}
+      sub={adding ? 'Sign in with the other account. You can switch between them from Profile.' : 'Sign in to your vault.'}
+    >
+
+        {/* The single most important affordance on this screen. Without it the user cannot tell
+            whether they are ADDING an account or replacing the one they had — and the answer is
+            invisible, because the parked token is httpOnly. */}
+        {adding && parked && (
+          <div className="auth-banner success">
+            <CheckCircle2 size={16} />
+            <span>
+              {parked.email} stays signed in on this device.{' '}
+              {/* Abandoning an add leaves you signed out with your account still in the locker.
+                  This is the way back, and it is the reason `back` is in the URL at all. */}
+              <button type="button" className="subtle-link" onClick={async () => {
+                if (backSlot === null) return;
+                await cancelAddAccount(backSlot);
+                await finishIdentityChange('/');
+              }}>Back to {parked.email}</button>
+            </span>
+          </div>
+        )}
 
         {message && <div className="auth-banner success"><CheckCircle2 size={16} /> {message}</div>}
         {formError && <div className="auth-banner error"><AlertCircle size={16} /> {formError}</div>}

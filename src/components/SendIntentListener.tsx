@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import { extractUrl } from '@/lib/url';
 import { scheduleWeeklyDigest, registerNotificationTapHandler } from '@/lib/taskNotifications';
 
@@ -15,6 +16,15 @@ const safeDecode = (s?: string | null) => {
 // (the plugin fires a 'sendIntentReceived' window event).
 export default function SendIntentListener() {
   const router = useRouter();
+  const { status } = useSession();
+
+  // The digest is a notification about YOUR week, so it belongs to a signed-in person. It used
+  // to be scheduled on every app open including a signed-out visitor's, which put a weekly
+  // reminder on the phone of someone with no account to remind them about.
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+    scheduleWeeklyDigest().catch(() => {});
+  }, [status]);
 
   useEffect(() => {
     let disposed = false;
@@ -39,7 +49,6 @@ export default function SendIntentListener() {
     };
 
     handleIntent().catch(() => {});
-    scheduleWeeklyDigest().catch(() => {});
     registerNotificationTapHandler((route) => router.push(route)).catch(() => {});
     window.addEventListener('sendIntentReceived', handleIntent);
     return () => {

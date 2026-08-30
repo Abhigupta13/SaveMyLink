@@ -99,6 +99,27 @@ export async function reconcile(tasks: TaskLike[], userDefault?: ReminderChoice 
   }
 }
 
+/**
+ * Every pending notification on this device, cancelled — deliberately with NO filter.
+ *
+ * Notification ids are derived from the task _id alone and carry no user binding, bodies quote
+ * task titles verbatim, and AlarmManager outlives both sign-out and app kill. So after an
+ * identity change A's task titles would keep firing on the lock screen while B holds the phone.
+ * Namespacing the ids is the wrong fix and was rejected: it prevents collisions, not disclosure.
+ *
+ * This also kills the reserved weekly-digest id 1, which is why lib/clientIdentityReset always
+ * follows it with scheduleWeeklyDigest() — never call this one on its own.
+ */
+export async function cancelAllLocal() {
+  const p = await plugin();
+  if (!p) return;
+  const { ln } = p;
+  try {
+    const { notifications } = await ln.getPending();
+    if (notifications.length) await ln.cancel({ notifications: notifications.map(n => ({ id: n.id })) });
+  } catch { /* non-fatal: a phone that refuses to list is not a reason to block the switch */ }
+}
+
 // One-time permission bootstrap (Android 13+ POST_NOTIFICATIONS + exact alarms)
 export async function ensurePermissions() {
   const p = await plugin();

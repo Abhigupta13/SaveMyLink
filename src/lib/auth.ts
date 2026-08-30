@@ -30,6 +30,14 @@ export const authOptions = {
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       allowDangerousEmailAccountLinking: true, // same email = same account as password signup
+      /**
+       * Without this Google silently reuses its own signed-in session and re-authenticates the
+       * SAME account, so "Add another account" answers "you already have that one" every time —
+       * the feature is unusable for the exact case it exists for. v4 cannot pass `prompt`
+       * per-call, so this applies to every Google sign-in: one extra tap for everyone, and a
+       * genuine fix on a shared device. Worth a line in the release notes.
+       */
+      authorization: { params: { prompt: 'select_account' } },
     })] : []),
     CredentialsProvider({
       name: "Credentials",

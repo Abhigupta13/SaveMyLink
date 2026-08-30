@@ -1,12 +1,12 @@
 // Minimal self-check for the pure helpers. Run: node scripts/self-check.mjs
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { extractUrl, hostnameOf, normalizeUrl, youtubeId, appUrl } from '../src/lib/url.ts';
 import { escapeRegex } from '../src/lib/regex.ts';
 import { envAllowlisted, sarvamSource } from '../src/lib/sarvam.ts';
 import { seal, open as unseal } from '../src/lib/secretBox.ts';
 import { isAdmin, adminEmails } from '../src/lib/isAdmin.ts';
-import { suggestionEmail, inviteEmail, otpEmail } from '../src/lib/mailer.ts';
+import { suggestionEmail, inviteEmail, otpEmail, resolvedEmail } from '../src/lib/mailer.ts';
 import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, formatInZone } from '../src/lib/time.ts';
 import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
 import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite, canChat, withinProject, canAccessDoc } from '../src/lib/scope.ts';
@@ -225,6 +225,106 @@ assert.ok(evil.html.includes('&amp;'), 'ampersands escaped');
 assert.ok(!evil.html.includes('View screenshot'), 'no screenshot button when there is no shot');
 assert.ok(suggestionEmail({ kind: 'idea', message: 'x', from: 'a@b.com', shotUrl: 'https://h/s' })
   .html.includes('View screenshot'), 'screenshot button appears when there is one');
+
+// ---------------------------------------------------------------------------
+// Closing a report, and the mail that goes back to the person who wrote it.
+//
+// suggestionEmail is addressed to US and prints a From row in the body. resolvedEmail is addressed
+// to a STRANGER, so the same habit would post the admin's personal address out to them. It takes
+// no address of any kind on purpose; these calls hand it every address-shaped field the row
+// carries and insist none of them render.
+{
+  const REPORT = 'The share button did nothing on Android';
+  const bare = resolvedEmail({
+    message: REPORT, name: 'Asha',
+    email: 'reporter@x.com', from: 'reporter@x.com', resolvedBy: 'boss@x.com',
+  });
+  assert.ok(bare.text.includes(REPORT) && bare.html.includes(REPORT), 'their own words come back, so they know which report this is');
+  for (const leak of ['reporter@x.com', 'boss@x.com']) {
+    assert.ok(!bare.html.includes(leak), `${leak} never reaches the body of the html`);
+    assert.ok(!bare.text.includes(leak), `${leak} never reaches the body of the text`);
+  }
+  assert.ok(bare.html.includes('Asha') && bare.text.includes('Asha'), 'a name is used when there is one');
+
+  // Blank note is the common case — a canned thank-you, and no hole in the copy where the
+  // admin's sentence would have been.
+  assert.ok(!bare.text.includes('undefined') && !bare.html.includes('undefined'), 'no note leaves no stray undefined');
+  assert.ok(!/!/.test(bare.text), 'house voice: no exclamation marks (html carries <!doctype>, so text only)');
+  const anonymous = resolvedEmail({ message: REPORT });
+  assert.ok(!anonymous.text.includes('undefined') && !anonymous.html.includes('undefined'), 'and neither does a missing name');
+  assert.ok(anonymous.text.startsWith('Hi,'), 'a nameless reporter is still greeted');
+
+  // The half the feature exists for: the answer IS the specific thing that changed.
+  const withNote = resolvedEmail({ message: REPORT, note: 'This is now under Settings' });
+  assert.ok(withNote.text.includes('This is now under Settings'), "the admin's own line goes in the text");
+  assert.ok(withNote.html.includes('This is now under Settings'), 'and in the html');
+  assert.equal(withNote.subject, bare.subject, 'the note changes the body, never the subject');
+
+  // Both the report and the note are user-typed text dropped into an HTML email
+  const evilResolve = resolvedEmail({ message: '<b>bold</b> & co', note: '<script>alert(1)</script>' });
+  assert.ok(!evilResolve.html.includes('<script>'), 'a script tag in the note must not survive');
+  assert.ok(!evilResolve.html.includes('<b>bold</b>'), 'nor markup in the quoted report');
+  assert.ok(evilResolve.html.includes('&lt;script&gt;') && evilResolve.html.includes('&amp;'), 'escaped, not stripped');
+
+  // A 4000-word rant is quoted enough to be recognised, not reprinted
+  const long = resolvedEmail({ message: 'x'.repeat(900) });
+  assert.ok(long.text.includes('…'), 'a long report is truncated');
+  assert.ok(long.text.length < 900, 'and the mail does not carry the whole thing');
+  assert.ok(!resolvedEmail({ message: 'short one' }).text.includes('…'), 'a short one is quoted whole');
+}
+
+// ---------------------------------------------------------------------------
+// The one bug this feature would otherwise ship with: an admin double-taps, or two admins act on
+// the same report, and the reporter is thanked twice. The guard is a database race, not a pure
+// function, so it is asserted where it lives — the same way the Sarvam fallback chain is.
+{
+  const src = readFileSync(new URL('../src/actions/suggestion.ts', import.meta.url), 'utf8');
+  const resolve = src.slice(src.indexOf('export async function resolveSuggestion'));
+  assert.ok(resolve.length > 500, 'found the resolve action');
+
+  const claim = resolve.indexOf('findOneAndUpdate');
+  const send = resolve.indexOf('sendMail(');
+  assert.ok(claim > 0, 'the report is claimed with one atomic write');
+  assert.ok(/\{ _id: id, resolvedAt: null \}/.test(resolve),
+    'the "is it already closed" question and the closing are ONE filter — never a read then a write');
+
+  // Order is the whole safety property: resolved first, mail second. Reversed, a dead SMTP box
+  // throws away the admin's decision.
+  assert.ok(send > claim, 'the report is marked resolved BEFORE the email is attempted');
+  assert.equal((resolve.match(/sendMail\(/g) || []).length, 1, 'one send, reachable only by whoever won the claim');
+
+  // ...and nothing after the send may undo it.
+  const afterSend = resolve.slice(send);
+  assert.ok(/catch \(error\)/.test(afterSend), 'a throwing send is caught');
+  assert.ok(!/resolvedAt: null/.test(afterSend), 'no path un-resolves the report when the mail fails');
+  assert.ok(!/deleteOne\(|\$unset/.test(afterSend), 'and nothing rolls the row back');
+  // The send moved off the response path — waiting on SMTP left the admin watching "Closing…"
+  // for seconds per ticket, and nothing in that wait was theirs to act on. So the outcome is no
+  // longer returned; it is written to the row, which is what the Resolved tab reads. That makes
+  // the durable write the thing worth asserting.
+  assert.ok(resolve.indexOf('after(') > claim && resolve.indexOf('after(') < send,
+    'the send is wrapped in after(), so it runs past the response rather than inside it');
+  assert.ok(/let outcome: 'sent' \| 'failed' = 'failed'/.test(resolve),
+    'the outcome starts at failed, so a throw anywhere before the answer cannot read as success');
+  assert.ok(/outcome = posted\.delivered \? 'sent' : 'failed'/.test(afterSend),
+    'and only a message that actually left upgrades it');
+  assert.ok(/resolveMail: outcome/.test(afterSend), 'and the outcome reaches the row the inbox reads');
+
+  // Admin-gated on the session, like every other admin action here. An id from the client decides
+  // which report, never whether the caller may close one.
+  assert.ok(/isAdmin\(session\.user\.email\)/.test(resolve.slice(0, claim)), 'gated on the session email, before any write');
+  assert.ok(!/isAdmin\((?!session)/.test(resolve), 'never on anything the client sent');
+
+  // A report with no address closes silently rather than pretending somebody was written to.
+  assert.ok(/if \(claimed\.email\)/.test(resolve), 'the send is skipped when there is no address');
+
+  // New filter shape, new index — the open list and the resolved list are both queries this
+  // collection did not serve yesterday.
+  const model = readFileSync(new URL('../src/lib/models/Suggestion.ts', import.meta.url), 'utf8');
+  assert.ok(/index\(\{ resolvedAt: -1, createdAt: -1 \}\)/.test(model), 'the resolved/open split has an index behind it');
+  assert.ok(/resolvedAt: \{ type: Date, default: null \}/.test(model),
+    'open is null rather than absent, which is what the atomic claim matches on');
+}
 
 
 // A model writes a bare wall clock in the USER's zone; parsing it in the SERVER's zone is what
@@ -1543,6 +1643,129 @@ for (const [file, fn] of [['../src/components/MomSection.tsx', 'startRecording']
   assert.ok(/mom\.autoTitle = false/.test(mom), 'and editing the title ends the automatic naming');
   assert.equal((mom.match(/autoTitle: !given/g) || []).length, 3,
     'every recording path records whether a human supplied the name');
+}
+
+
+// ── Several accounts on one device ─────────────────────────────────────────────
+{
+  const {
+    MAX_ACCOUNTS, PARKED_SLOTS, MAX_LOCKER_BYTES,
+    secureCookies, parkedCookieName, activeCookieName,
+    packSlot, unpackSlot, freeSlot, withinLockerBudget, dedupeById,
+  } = await import('../src/lib/accountLocker.ts');
+  const { initialFor } = await import('../src/lib/avatar.ts');
+
+  /* THE assertion. NextAuth reassembles a chunked session cookie with
+     `name.startsWith(cookieName)` — a prefix match, not a chunk index — so a parked slot sharing
+     that prefix is concatenated into the LIVE session value on every request, corrupting the
+     session of whoever is signed in. It fails silently and constantly. Nothing else in this
+     feature can break a user who never even opens the switcher. */
+  for (const secure of [true, false]) {
+    for (const slot of PARKED_SLOTS) {
+      const name = parkedCookieName(slot, secure);
+      assert.ok(!name.startsWith('next-auth.') && !name.startsWith('__Secure-next-auth.'),
+        `slot ${slot} must not sit in NextAuth's namespace: ${name}`);
+      assert.ok(!activeCookieName(secure).startsWith(name) && !name.startsWith(activeCookieName(secure)),
+        `slot ${slot} and the active cookie must not prefix one another`);
+    }
+    // Distinct names, or two accounts silently become one.
+    const names = PARKED_SLOTS.map(n => parkedCookieName(n, secure));
+    assert.equal(new Set(names).size, names.length, 'every slot has its own name');
+  }
+
+  /* __Secure- keyed on the URL, never NODE_ENV: browsers reject a __Secure- cookie sent over
+     http, so keying it on the environment would make the whole feature fail in dev only. */
+  assert.equal(secureCookies('https://allyouneedvault.vercel.app'), true);
+  assert.equal(secureCookies('http://localhost:3000'), false);
+  assert.equal(secureCookies(undefined), false, 'no URL configured is not a reason to send __Secure-');
+  assert.ok(parkedCookieName(0, true).startsWith('__Secure-'));
+  assert.ok(!parkedCookieName(0, false).startsWith('__Secure-'));
+
+  /* A JWE has four dots; base64url has none. Splitting on the FIRST dot is what lets an expired
+     slot still be labelled — the difference between "signed out, tap to sign in" and an anonymous
+     dead row the user cannot identify. */
+  const jwe = 'aaa.bbb.ccc.ddd.eee';
+  const packed = packSlot('Someone@Example.com', jwe);
+  const back = unpackSlot(packed);
+  assert.equal(back.token, jwe, 'the token is not truncated at its own dots');
+  // Case is preserved rather than folded: this string is only ever shown to the person it belongs
+  // to, or prefilled into a sign-in box. Identity is decided by the decoded id, never by this.
+  assert.equal(back.email.toLowerCase(), 'someone@example.com', 'the email survives beside the token');
+  for (const bad of ['', null, undefined, 'nodot', '.', 'x.']) {
+    assert.equal(unpackSlot(bad), null, `refuses ${JSON.stringify(bad)}`);
+  }
+
+  assert.equal(freeSlot([]), PARKED_SLOTS[0]);
+  assert.equal(freeSlot([0, 2]), 1, 'the gap is reused rather than appended past');
+  assert.equal(freeSlot([...PARKED_SLOTS]), null, 'full means full');
+  assert.equal(PARKED_SLOTS.length + 1, MAX_ACCOUNTS, 'one active plus the parked ones');
+
+  // Per-cookie 4096 is never at risk; the total Cookie header is. Refusing early beats a jar the
+  // server starts rejecting wholesale.
+  assert.equal(withinLockerBudget([], 'x'.repeat(700)), true);
+  assert.equal(withinLockerBudget(['x'.repeat(MAX_LOCKER_BYTES)], 'x'.repeat(700)), false);
+
+  /* Dedupe on the decoded id, not the email: allowDangerousEmailAccountLinking plus the jwt
+     callback's Mongo-id swap mean Google and password sign-in for one address share an _id.
+     Signing in as an account already parked is the case that silently corrupts the locker, and it
+     is only detectable on the next request — so the sweep must keep the ACTIVE row whichever
+     order it arrives in, or a tap lands you on a stale token. */
+  const live = { id: 'u1', slot: null, active: true };
+  const parked = { id: 'u1', slot: 2, active: false };
+  for (const order of [[live, parked], [parked, live]]) {
+    const kept = dedupeById(order);
+    assert.equal(kept.length, 1, 'one row per identity');
+    assert.equal(kept[0].slot, null, 'and it is the live one, whatever order they came in');
+  }
+  // A slot that would not decode has no id, so it is nobody's duplicate and must survive — it is
+  // the row that can still say "signed out, tap to sign in" instead of vanishing unexplained.
+  const dead = { id: '', slot: 3, active: false };
+  assert.equal(dedupeById([live, parked, dead]).length, 2, 'an undecodable slot is kept, not swept');
+
+  assert.equal(initialFor('abhishek', 'a@x.com'), 'A');
+  assert.equal(initialFor(null, 'swaraj@x.com'), 'S');
+  assert.equal(initialFor(null, null), 'U', 'the fallback the three old call sites used');
+
+  /* Minting a session token for an arbitrary user id is unconditional account takeover if it is
+     ever reachable with attacker-controlled input. The app only ever moves opaque bytes it was
+     given and calls decode to look inside them. */
+  const jwtUsers = [];
+  for (const dir of ['actions', 'lib', 'components', 'app']) {
+    const walk = (d) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const full = `${d}/${e.name}`;
+        if (e.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(e.name)) {
+          const src = readFileSync(full, 'utf8');
+          if (/from ['"]next-auth\/jwt['"]/.test(src)) jwtUsers.push([full, src]);
+        }
+      }
+    };
+    walk(new URL(`../src/${dir}`, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+  }
+  for (const [file, src] of jwtUsers) {
+    const imported = (src.match(/import \{([^}]*)\} from ['"]next-auth\/jwt['"]/) || [, ''])[1];
+    assert.ok(!/\bencode\b/.test(imported), `${file} must never import encode from next-auth/jwt`);
+  }
+
+  // A switch must be a full document load: a client navigation keeps SessionProvider's __NEXTAUTH
+  // singleton, UserContext and every page's useState alive across the identity change, and pages
+  // gate their fetch on `status`, which never leaves 'authenticated'. B then reads A's data.
+  const resetSrc = readFileSync(new URL('../src/lib/clientIdentityReset.ts', import.meta.url), 'utf8');
+  // Comments stripped first: this file argues at length about why router.push must never be used
+  // here, and a naive search finds the warning and calls it the crime.
+  const reset = resetSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  assert.ok(/location\.assign|location\.href/.test(reset), 'identity changes reload the document');
+  assert.ok(!/router\.(push|refresh|replace)/.test(reset), 'never a client navigation');
+  // Cancelling every pending alarm kills the reserved weekly-digest id, so rescheduling is not
+  // optional cleanup — it is part of the same operation.
+  assert.ok(/cancelAllLocal/.test(reset) && /scheduleWeeklyDigest/.test(reset),
+    'alarms are cleared and the digest is put back, together, so no call site can forget');
+
+  // Without select_account Google silently reuses its own session and re-authenticates the SAME
+  // account, so "add account" answers "you already have that one" every time.
+  const auth = readFileSync(new URL('../src/lib/auth.ts', import.meta.url), 'utf8');
+  assert.ok(/select_account/.test(auth), 'Google is asked which account, every time');
 }
 
 console.log('self-check: all assertions passed');
