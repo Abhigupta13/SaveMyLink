@@ -12,7 +12,7 @@ import { readFile } from 'fs/promises';
 import { extractText } from '@/lib/docText';
 import { projectForWriter, mineOrMyProjects } from '@/lib/projectAccess';
 import { withinProject } from '@/lib/scope';
-import { privacyOnWrite } from '@/lib/privacy';
+import { privacyOnWrite, privateFilter } from '@/lib/privacy';
 import { hasSafe } from '@/lib/safeCookie';
 import { saveUpload, deleteUpload, readBytes } from '@/lib/storage';
 import { grantProjectReaders } from '@/lib/driveGrants';
@@ -58,11 +58,19 @@ export async function getDocuments(projectId?: string) {
     // `text` can be 12k a document — the locker page never shows it, so leave it on the server.
     // The folder list is derived from these client-side: a distinct() would miss documents
     // saved before folders existed, which have no folder field at all rather than 'Personal'.
-    // Mine, plus anything filed under a project I am in — a shared contract belongs to
-    // everyone working on it, not only whoever happened to upload it.
-    // The safe swaps the personal half of the locker; anything shared with a project is the
-    // project's and shows in both states. The owner field here is `user`, not `userId`.
-    const scope = await mineOrMyProjects(userId, session.user.email, 'user', await hasSafe(userId));
+    /* Two different questions, deliberately answered differently.
+        With a projectId this is a GROUP's file list, so it is mine-or-any-group-I-am-in narrowed to
+        that group — a shared contract belongs to everyone working on it, not only whoever uploaded
+        it. Without one this is the Digi Locker, which is personal filing and nothing else: a
+        document shared with a group is the group's, and lives in that group's Files tab. Showing it
+        in both made "my locker" mean two things at once, and the count on the page agreed with
+        neither. The owner field here is `user`, not `userId`. */
+    const unlocked = await hasSafe(userId);
+    const scope = projectId
+      ? await mineOrMyProjects(userId, session.user.email, 'user', unlocked)
+      // projectId: null matches rows saved before this field existed as well as rows that never
+      // had one — addDocument stores `projectId || undefined`, so both shapes are in the data.
+      : { user: userId, projectId: null, ...privateFilter(unlocked) };
     const docs = await Document.find(withinProject(scope, projectId)).select('-text')
       .populate('projectId', 'name').sort({ createdAt: -1 }).lean();
     return { docs: JSON.parse(JSON.stringify(docs)) };

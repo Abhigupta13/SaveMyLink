@@ -111,7 +111,10 @@ export default function DLockerPage() {
       // something the whole group can open.
       if (res.privacyDropped) toast(droppedPrivacy(projects.find(p => p._id === projectId)?.name), 'info');
       const project = projects.find(p => p._id === projectId) || null;
-      setPreview((p: any) => p && { ...p, projectId: project && { _id: project._id, name: project.name } });
+      // It leaves the locker at this point — the list behind the dialog is personal filing only —
+      // so close the preview and name where it has gone instead of blinking a row out of existence.
+      setPreview(null);
+      toast(`Moved to ${project?.name || 'the group'} — it is in that group's Files now.`, 'success');
       fetchDocs();
     } else toast(res.error || 'Could not share it', 'error');
   };
@@ -152,6 +155,9 @@ export default function DLockerPage() {
       setSelectedFile(null);
       autoNamed.current = '';
       setActiveFolder(docFolder);   // land on the folder you just filed into
+      if (docProject) {
+        toast(`Saved to ${projects.find(p => p._id === docProject)?.name || 'the group'} — find it in that group's Files.`, 'success');
+      }
       fetchDocs();
     } else if (res.needsDrive) {
       // Not an error, a missing step — so perform it rather than naming it. They land back here.
@@ -232,7 +238,7 @@ export default function DLockerPage() {
 
       {/* The locker has no scope switch — personal and group documents share one grid — so the
           banner has to admit that only half of it swapped. */}
-      <SafeBanner noun="files" also="Anything shared with a group is here in both." />
+      <SafeBanner noun="files" />
 
       {folders.length > 1 && (
         <div className="folder-bar">
@@ -265,7 +271,6 @@ export default function DLockerPage() {
                 <h3>{doc.name}</h3>
                 <div className="doc-card-meta">
                   <span className={`doc-tag ${doc.type}`}>{doc.type === 'link' ? 'link' : extOf(doc)}</span>
-                  {doc.projectId?.name && <span className="doc-tag">{doc.projectId.name}</span>}
                   {activeFolder === ALL && <span className="doc-size-text">{doc.folder || DEFAULT_FOLDER}</span>}
                   {doc.type === 'file' && <span className="doc-size-text">{formatSize(doc.size)}</span>}
                 </div>
