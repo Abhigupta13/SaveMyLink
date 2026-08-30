@@ -8,8 +8,10 @@ import { saveUpload } from "@/lib/storage";
 import { isAdmin, adminEmails } from "@/lib/isAdmin";
 import { feedbackDriveEmail } from "@/lib/feedbackDrive";
 import { User } from "@/lib/models/User";
-import { sendMail, suggestionEmail } from "@/lib/mailer";
+import { sendMail, suggestionEmail, resolvedEmail } from "@/lib/mailer";
 import { shareUrl } from '@/lib/url';
+import { isValidObjectId } from "mongoose";
+import { after } from "next/server";
 
 /**
  * "Help us improve" — anyone signed in can send a bug, an idea, or anything else, with an
@@ -94,16 +96,124 @@ export async function submitSuggestion(formData: FormData) {
   }
 }
 
-export async function getSuggestions() {
+export async function getSuggestions(view: 'open' | 'resolved' = 'open') {
   try {
     await connectToDatabase();
     const session = await getServerSession(authOptions);
     // Same answer for signed-out and non-admin: the inbox does not advertise that it exists
     if (!session?.user?.id || !isAdmin(session.user.email)) return { success: false, error: 'Not found' };
-    const suggestions = await Suggestion.find().sort({ createdAt: -1 }).limit(200).lean();
-    return { success: true, suggestions: JSON.parse(JSON.stringify(suggestions)) };
+
+    /* Filtered in the database rather than in the page. The list is capped at 200 and resolved
+       reports are kept forever, so a client-side filter would eventually push the open ones —
+       the whole reason anyone opens this page — off the end of the fetch. */
+    const resolved = view === 'resolved';
+    const filter = resolved ? { resolvedAt: { $ne: null } } : { resolvedAt: null };
+    // Resolved reads as "what did we close, most recently"; open still reads by when it arrived.
+    const sort: Record<string, -1> = resolved ? { resolvedAt: -1 } : { createdAt: -1 };
+
+    const [suggestions, open, done] = await Promise.all([
+      Suggestion.find(filter).sort(sort).limit(200).lean(),
+      Suggestion.countDocuments({ resolvedAt: null }),
+      Suggestion.countDocuments({ resolvedAt: { $ne: null } }),
+    ]);
+    return { success: true, suggestions: JSON.parse(JSON.stringify(suggestions)), counts: { open, resolved: done } };
   } catch (error) {
     console.error('Failed to get suggestions:', error);
     return { success: false, error: 'Failed to fetch suggestions' };
+  }
+}
+
+/**
+ * An admin closes a report, and the person who wrote it hears back.
+ *
+ * Two things this is built around:
+ *
+ * 1. The reporter is thanked EXACTLY once. The check for "already resolved" and the write that
+ *    resolves it are one atomic findOneAndUpdate on `resolvedAt: null`, so a double-tap, or two
+ *    admins on the same report, race in the database instead of in a read-then-write window.
+ *    Whoever loses matches nothing, sends nothing, and is told it was already closed.
+ * 2. The resolution is committed BEFORE the mail is attempted, and a failed send never rolls it
+ *    back. A dead SMTP box is our problem to retry; losing the admin's decision — and with it the
+ *    record that this was dealt with — is worse than an email that did not arrive. The action
+ *    says so in its result instead, and the outcome is stored so the inbox can keep saying it.
+ */
+export async function resolveSuggestion(id: string, note?: string) {
+  try {
+    const session = await getServerSession(authOptions);
+    // Gated on the SESSION email. Nothing the client sends decides who may close a report.
+    if (!session?.user?.id || !isAdmin(session.user.email)) return { success: false as const, error: 'Not found' };
+    await connectToDatabase();
+    if (!isValidObjectId(id)) return { success: false as const, error: 'Unknown report' };
+
+    const by = (session.user.email || '').toLowerCase();
+    const said = String(note || '').trim().slice(0, 1000);
+
+    const claimed = await Suggestion.findOneAndUpdate(
+      { _id: id, resolvedAt: null },
+      { $set: { resolvedAt: new Date(), resolvedBy: by, resolveNote: said } },
+      { new: true },
+    ).lean<{ _id: unknown; email?: string; message: string; userId?: unknown; resolvedAt: Date } | null>();
+
+    if (!claimed) {
+      // Either it is already closed — the common case, and a no-op by design — or the id is junk.
+      const existing = await Suggestion.findById(id)
+        .select('resolvedAt resolvedBy resolveNote resolveMail')
+        .lean<{ resolvedAt?: Date; resolvedBy?: string; resolveNote?: string; resolveMail?: string } | null>();
+      if (!existing?.resolvedAt) return { success: false as const, error: 'Unknown report' };
+      return {
+        success: true as const, already: true, mailed: (existing.resolveMail || 'none') as 'sent' | 'failed' | 'none',
+        resolvedAt: existing.resolvedAt.toISOString(), resolvedBy: existing.resolvedBy || '', note: existing.resolveNote || '',
+      };
+    }
+
+    /* Some reports carry no address at all — `email` defaults to '' and is filled from the session,
+       so anyone signed in without one leaves it blank. Those close silently. Reporting that as a
+       sent email would have the admin believe a person was answered who never heard from us. */
+    /* Some reports carry no address at all, and that is knowable instantly — so it is answered
+       instantly. Everything else goes to SMTP, which is the slow part. */
+    const mailed: 'pending' | 'none' = claimed.email ? 'pending' : 'none';
+    await Suggestion.updateOne({ _id: id }, { $set: { resolveMail: mailed } }).catch(() => {});
+
+    /* The send runs AFTER the response. Waiting on SMTP left the admin looking at "Closing…" for
+       several seconds per ticket, and nothing in that wait was theirs to act on: the report is
+       already closed and durable by this point, and a failed send does not un-close it. The
+       outcome is written to the row rather than returned, so the Resolved tab still tells the
+       truth about who actually heard from us — a beat later instead of instantly. */
+    if (claimed.email) {
+      // Captured before after(): the callback outlives this scope, and TypeScript will not carry
+      // the narrowing across that boundary.
+      const to = claimed.email;
+      after(async () => {
+        let outcome: 'sent' | 'failed' = 'failed';
+        try {
+          // The name makes it read like a person wrote it; the report only stores an address.
+          const who = claimed.userId
+            ? await User.findById(claimed.userId).select('name').lean<{ name?: string } | null>()
+            : null;
+          const posted = await sendMail({
+            to,
+            ...resolvedEmail({ message: claimed.message, note: said, name: who?.name }),
+          });
+          // sendMail answers `delivered: false` rather than throwing when SMTP is unconfigured, and
+          // "we sent it" has to mean a message actually left. Otherwise a deploy with no SMTP
+          // credentials would tell the admin, honestly and wrongly, that everyone had been thanked.
+          outcome = posted.delivered ? 'sent' : 'failed';
+        } catch (error) {
+          console.error('Suggestion resolved but the thank-you email failed:', error);
+        }
+        // Best-effort: the resolution is already durable, and losing only the send outcome costs
+        // the inbox a label, not the record.
+        await Suggestion.updateOne({ _id: id }, { $set: { resolveMail: outcome } })
+          .catch(err => console.error('Suggestion mail outcome not recorded:', err));
+      });
+    }
+
+    return {
+      success: true as const, already: false, mailed,
+      resolvedAt: claimed.resolvedAt.toISOString(), resolvedBy: by, note: said,
+    };
+  } catch (error) {
+    console.error('Failed to resolve suggestion:', error);
+    return { success: false as const, error: 'Could not close that — try again' };
   }
 }

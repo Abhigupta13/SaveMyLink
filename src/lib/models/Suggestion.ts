@@ -3,7 +3,11 @@ import { defineModel } from './registry';
 
 /**
  * What someone typed into "Help us improve". A log to read and act on, not a ticket system —
- * no status, no assignee, no replies. Add those the day reading the log stops being enough.
+ * no assignee, no threads. It now carries one piece of state: an admin can close a report, which
+ * thanks the reporter by email and moves it out of the default view.
+ *
+ * Resolving is a record, not a delete. "Did we ever answer this person?" is the question an inbox
+ * that tidies itself away can never answer, so who closed it and when both stay on the row.
  */
 export interface ISuggestion extends MongooseDocument {
   userId: mongoose.Types.ObjectId;
@@ -13,6 +17,11 @@ export interface ISuggestion extends MongooseDocument {
   page?: string;
   userAgent?: string;
   shot?: { key: string; url: string; mimeType?: string; size?: number };
+  resolvedAt?: Date | null;
+  resolvedBy?: string;
+  resolveNote?: string;
+  /** 'pending' = closed, and the thank-you is being sent after the response rather than during it. */
+  resolveMail?: 'sent' | 'failed' | 'none' | 'pending';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -26,8 +35,22 @@ const SuggestionSchema = new Schema<ISuggestion>({
   page: { type: String },        // where they were when they hit the button — the "where" of a bug
   userAgent: { type: String },   // a bug report with no browser or OS is half a report
   shot: { type: { _id: false, key: String, url: String, mimeType: String, size: Number } },
+  // `null`, not absent, is the open state — it is what the atomic claim in resolveSuggestion
+  // matches on, and in Mongo a null equality matches a missing field too, so every report
+  // written before this existed already reads as open with no migration.
+  resolvedAt: { type: Date, default: null },
+  resolvedBy: { type: String },   // the SESSION email of the admin who closed it, never a client value
+  resolveNote: { type: String },  // what the admin chose to tell them, if anything
+  // Whether the thank-you actually left the building. The resolution is committed before the send
+  // is attempted, so this is the only thing that distinguishes "answered" from "closed in silence"
+  // once the page is reloaded and the action's return value is gone.
+  resolveMail: { type: String, enum: ['sent', 'failed', 'none', 'pending'] },
 }, { timestamps: true });
 
 SuggestionSchema.index({ createdAt: -1 });
+// The inbox now asks two questions instead of one: open by newest written, resolved by newest
+// closed. One compound index serves both — an equality on null then createdAt for the first, and
+// the resolvedAt prefix alone for the second.
+SuggestionSchema.index({ resolvedAt: -1, createdAt: -1 });
 
 export const Suggestion: Model<ISuggestion> = defineModel<ISuggestion>('Suggestion', SuggestionSchema);

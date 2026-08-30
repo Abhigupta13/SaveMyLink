@@ -25,6 +25,9 @@ export async function sendMail(
   return { delivered: true as const };
 }
 
+/** User-typed text goes into every one of these templates; none of it may arrive as markup. */
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 /**
  * Sent when someone is added to a project. Two audiences, one template: a person who already
  * has an account lands on the project, a new person lands on signup with their email prefilled
@@ -68,7 +71,7 @@ If you weren't expecting this, you can ignore this email.`;
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#161922;border:1px solid #262b39;border-radius:20px;overflow:hidden;">
 
         <tr><td style="padding:28px 32px 0;">
-          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#7c83ff;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
+          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#e08a6a;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
         </td></tr>
 
         <tr><td style="padding:22px 32px 0;">
@@ -130,7 +133,7 @@ It expires in 10 minutes. If you didn't ${verify ? 'sign up' : 'request this'}, 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#161922;border:1px solid #262b39;border-radius:20px;overflow:hidden;">
 
         <tr><td style="padding:28px 32px 0;">
-          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#7c83ff;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
+          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#e08a6a;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
         </td></tr>
 
         <tr><td style="padding:22px 32px 0;">
@@ -188,8 +191,6 @@ Browser: ${userAgent || '—'}${shotUrl ? `\nScreenshot: ${shotUrl}` : ''}
 
 Reply to this email to answer them directly.`;
 
-  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
   const html = `<!doctype html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -199,7 +200,7 @@ Reply to this email to answer them directly.`;
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#161922;border:1px solid #262b39;border-radius:20px;overflow:hidden;">
 
         <tr><td style="padding:28px 32px 0;">
-          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#7c83ff;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
+          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#e08a6a;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
         </td></tr>
 
         <tr><td style="padding:22px 32px 0;">
@@ -246,6 +247,89 @@ Reply to this email to answer them directly.`;
   return { subject: `${label} from ${from}`, html, text };
 }
 
+/** Enough of their own words to recognise which report this is, without quoting an essay back. */
+const QUOTE_LIMIT = 400;
+
+/**
+ * The other end of "Help us improve": an admin closed the report, so the person who took the
+ * trouble to write in hears back. Deliberately not a status update — it says what was done, in
+ * the admin's own words when they wrote any, and thanks them.
+ *
+ * This one is addressed to the REPORTER, which is why it takes no address of any kind. The admin
+ * who closed it is recorded on the row for the inbox, and their personal address has no business
+ * in a mail leaving to a stranger; `suggestionEmail` puts a From row in the body because that one
+ * goes to us, and copying that habit into this template is the mistake worth designing out.
+ */
+export function resolvedEmail(opts: { message: string; note?: string; name?: string }) {
+  const { message, note, name } = opts;
+  const trimmed = String(message || '').trim();
+  const quote = trimmed.length > QUOTE_LIMIT ? `${trimmed.slice(0, QUOTE_LIMIT).trimEnd()}…` : trimmed;
+  const said = String(note || '').trim();
+
+  const text = `Hi${name ? ` ${name}` : ''},
+
+Thank you for the feedback you sent us through Help us improve. We have reviewed it, and it is now resolved.
+
+You reported:
+
+“${quote}”${said ? `\n\n${said}` : ''}
+
+We appreciate you taking the time to report this. It is how we find out what needs fixing.
+
+If we have misunderstood, reply to this email and we will reopen it.
+
+— The ALL YOU NEED team`;
+
+  const html = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#0f1117;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0">We have reviewed your feedback and it is now resolved.</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1117;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#161922;border:1px solid #262b39;border-radius:20px;overflow:hidden;">
+
+        <tr><td style="padding:28px 32px 0;">
+          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#e08a6a;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
+        </td></tr>
+
+        <tr><td style="padding:22px 32px 0;">
+          <h1 style="margin:0 0 8px;font-size:22px;line-height:1.3;font-weight:800;color:#f1f3f9;letter-spacing:-0.02em;">Your feedback has been resolved</h1>
+          <p style="margin:0;font-size:14px;line-height:1.6;color:#9aa3b8;">Hi${name ? ` ${esc(name)}` : ''}, thank you for the feedback you sent us through “Help us improve”. You reported:</p>
+        </td></tr>
+
+        <tr><td style="padding:18px 32px 0;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f1117;border:1px solid #2b3142;border-radius:16px;">
+            <tr><td style="padding:20px;">
+              <p style="margin:0;font-size:15px;line-height:1.65;color:#e6e9f2;white-space:pre-wrap;">${esc(quote)}</p>
+            </td></tr>
+          </table>
+        </td></tr>
+
+        <tr><td style="padding:18px 32px 0;">
+          <p style="margin:0;font-size:14px;line-height:1.6;color:#c9d0e0;">We have reviewed this, and it is now resolved.</p>
+          ${said ? `<p style="margin:10px 0 0;font-size:14px;line-height:1.6;color:#9aa3b8;white-space:pre-wrap;">${esc(said)}</p>` : ''}
+        </td></tr>
+
+        <tr><td style="padding:20px 32px 28px;">
+          <p style="margin:0 0 8px;font-size:13px;line-height:1.6;color:#9aa3b8;">We appreciate you taking the time to report this. It is how we find out what needs fixing.</p>
+          <p style="margin:0 0 14px;font-size:12px;line-height:1.6;color:#6f7891;">If we have misunderstood, reply to this email and we will reopen it.</p>
+          <p style="margin:0;font-size:13px;line-height:1.6;color:#9aa3b8;">— The ALL YOU NEED team</p>
+        </td></tr>
+
+        <tr><td style="padding:16px 32px;border-top:1px solid #262b39;">
+          <p style="margin:0;font-size:11px;color:#5a6274;">Sent by ALL YOU NEED · Help us improve</p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  return { subject: 'Your feedback has been resolved', html, text };
+}
+
 /**
  * The one email a new signup actually reads: it arrives the moment they finish confirming, when
  * they have just committed. Only for people who arrived on their own — someone invited to a
@@ -286,7 +370,7 @@ Something confusing or broken? Hit "Help us improve" inside the app — it comes
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#161922;border:1px solid #262b39;border-radius:20px;overflow:hidden;">
 
         <tr><td style="padding:28px 32px 0;">
-          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#7c83ff;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
+          <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#e08a6a;">ALL <span style="color:#8b93a7;">YOU NEED</span></div>
         </td></tr>
 
         <tr><td style="padding:22px 32px 0;">
