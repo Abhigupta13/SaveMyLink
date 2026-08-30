@@ -1507,4 +1507,42 @@ for (const [file, fn] of [['../src/components/MomSection.tsx', 'startRecording']
   }
 }
 
+
+// ── A meeting's name comes out of what was said in it ──────────────────────────
+// This takes a string straight from a language model and puts it in the heading of somebody's
+// meeting, so the cases that must NOT become a title are the ones worth pinning down.
+{
+  const { cleanMeetingTitle, dateTitle, MAX_TITLE } = await import('../src/lib/meetingTitle.ts');
+
+  assert.equal(cleanMeetingTitle('  Q3 planning  call '), 'Q3 planning call', 'whitespace collapses');
+  assert.equal(cleanMeetingTitle('"Vendor pricing review."'), 'Vendor pricing review',
+    'models quote titles and end them like sentences');
+
+  // Null means "keep the date". A meeting called "Meeting" looks like a name, so nobody thinks to
+  // fix it, and it carries less than the timestamp it replaced.
+  for (const junk of ['Meeting', 'untitled', 'Discussion', 'N/A', 'minutes', '', null, undefined, '  ', 'a']) {
+    assert.equal(cleanMeetingTitle(junk), null, `refuses ${JSON.stringify(junk)}`);
+  }
+  // Told not to use a date, a model sometimes does anyway — that is the old behaviour in a new coat.
+  assert.equal(cleanMeetingTitle('Meeting 30/08/2026'), null, 'a date is not a name');
+
+  // A summary that ignored the instruction is not a title, and truncating it would produce a
+  // plausible-looking name for a meeting nobody could recognise.
+  assert.equal(cleanMeetingTitle('x'.repeat(201)), null, 'a wall of text is refused, not cut down');
+
+  const long = cleanMeetingTitle('Vendor pricing and the Morphle proposal plus the hiring plan for the next quarter');
+  assert.ok(long.length <= MAX_TITLE + 1, 'a long-but-real title is trimmed to fit a card');
+  assert.ok(long.endsWith('…') && !/\s…$/.test(long), 'it is cut on a word boundary, not mid-word');
+
+  // The placeholder a recording gets before anybody has spoken.
+  assert.equal(dateTitle(new Date('2026-08-30T12:00:00Z'), 'Asia/Kolkata'), 'Meeting 30/08/2026');
+
+  // The flag is what stops extraction renaming a meeting its owner already named.
+  const mom = readFileSync(new URL('../src/actions/mom.ts', import.meta.url), 'utf8');
+  assert.ok(/if \(mom\.autoTitle\)/.test(mom), 'a person-chosen title is never overwritten');
+  assert.ok(/mom\.autoTitle = false/.test(mom), 'and editing the title ends the automatic naming');
+  assert.equal((mom.match(/autoTitle: !given/g) || []).length, 3,
+    'every recording path records whether a human supplied the name');
+}
+
 console.log('self-check: all assertions passed');

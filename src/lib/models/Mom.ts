@@ -8,6 +8,8 @@ export interface IMom extends MongooseDocument {
   projectId?: mongoose.Types.ObjectId | null;   // absent = a personal meeting, routed by the transcript alone
   userId: mongoose.Types.ObjectId;
   title: string;
+  /** Nobody has named this meeting, so the transcript may. Cleared the moment a person edits it. */
+  autoTitle?: boolean;
   audioUrl?: string;
   // Sarvam batch job, paid path only. A job id with no transcript means still transcribing.
   sarvamJobId?: string;
@@ -37,6 +39,9 @@ const MomSchema = new Schema<IMom>({
   projectId: { type: Schema.Types.ObjectId, ref: 'Project' },
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   title: { type: String, required: true },
+  // Absent on everything recorded before titles were extracted. Those keep their date name, which
+  // is right: re-titling somebody's old meetings out from under them is not a migration.
+  autoTitle: { type: Boolean, default: false },
   audioUrl: { type: String },   // legacy: audio is transcribed on upload and never stored now
   sarvamJobId: { type: String },
   engine: { type: String, enum: ['gemini', 'whisper', 'sarvam'] },

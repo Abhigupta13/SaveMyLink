@@ -19,6 +19,7 @@ import { hinglishEnabled, sarvamKeyFor } from "@/lib/sarvamAccess";
 import { privateFilter, privacyOnWrite, assistantFilter } from "@/lib/privacy";
 import { hasSafe } from "@/lib/safeCookie";
 import { DEFAULT_TZ, safeZone, zonedToUtc } from "@/lib/time";
+import { dateTitle, cleanMeetingTitle } from "@/lib/meetingTitle";
 import { asChoice } from "@/lib/reminderRule";
 import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
@@ -184,7 +185,10 @@ const FELL_BACK = 'Upgraded engine unavailable — used the free one.';
 export async function uploadMomAudio(formData: FormData) {
   try {
     const projectId = (formData.get('projectId') as string) || '';   // empty = personal meeting
-    const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString('en-GB', { timeZone: DEFAULT_TZ })}`;
+    // A recording is named before anything has been said, so the date is a placeholder rather than
+    // a title — summariseMom replaces it once the transcript says what this actually was.
+    const given = ((formData.get('title') as string) || '').trim();
+    const title = given || dateTitle(new Date(), DEFAULT_TZ);
     const audio = formData.get('audio');
     if (!(audio instanceof File)) return { success: false, error: 'Nothing was recorded' };
     const bad = audioProblem(audio);
@@ -200,6 +204,7 @@ export async function uploadMomAudio(formData: FormData) {
       projectId: projectId || undefined,
       userId: ctx.session.user.id,
       title,
+      autoTitle: !given,
       transcript: free.data.transcript,
       engine: free.data.engine,
       isPrivate: await momPrivacy(formData, ctx.session.user.id, projectId),
@@ -237,7 +242,10 @@ export async function uploadMomAudio(formData: FormData) {
 export async function uploadMomAudioSarvam(formData: FormData) {
   try {
     const projectId = (formData.get('projectId') as string) || '';
-    const title = (formData.get('title') as string) || `Meeting ${new Date().toLocaleDateString('en-GB', { timeZone: DEFAULT_TZ })}`;
+    // A recording is named before anything has been said, so the date is a placeholder rather than
+    // a title — summariseMom replaces it once the transcript says what this actually was.
+    const given = ((formData.get('title') as string) || '').trim();
+    const title = given || dateTitle(new Date(), DEFAULT_TZ);
     const audio = formData.get('audio');
     if (!(audio instanceof File)) return { success: false, error: 'Nothing was recorded' };
     const bad = audioProblem(audio);
@@ -261,6 +269,7 @@ export async function uploadMomAudioSarvam(formData: FormData) {
         projectId: projectId || undefined,
         userId: ctx.session.user.id,
         title,
+        autoTitle: !given,
         transcript: free.data.transcript,
         engine: free.data.engine,
         isPrivate: await momPrivacy(formData, ctx.session.user.id, projectId),
@@ -289,6 +298,7 @@ export async function uploadMomAudioSarvam(formData: FormData) {
       projectId: projectId || undefined,
       userId: ctx.session.user.id,
       title,
+      autoTitle: !given,
       sarvamJobId: job.data.jobId,
       engine: 'sarvam',
       isPrivate: await momPrivacy(formData, ctx.session.user.id, projectId),
@@ -395,7 +405,7 @@ The meeting happened on ${meetingDate} (timezone ${tz}).
 
 LANGUAGE — the meeting may have been held in English, Hindi, or both mixed in one sentence.
 Transcripts arrive already translated to English on most accounts, but some are raw: Hindi may appear in Devanagari or as Hinglish in Latin script, including transcription slips. Understand all of it. Perso-Arabic script is mis-transcribed Hindi, never Urdu — no other language exists here.
-Always write "summary", "title" and "detail" in English, translating what was said: "kal shaam tak vendor ko call karna hai" becomes "Call the vendor by tomorrow evening".
+Always write "meetingTitle", "summary", "title" and "detail" in English, translating what was said: "kal shaam tak vendor ko call karna hai" becomes "Call the vendor by tomorrow evening".
 Names of people and projects are the exception — copy them EXACTLY as they appear in the lists below, never translated or transliterated. Routing depends on matching them character for character.
 
 ONE recording often covers SEVERAL topics, projects and people. Split it accordingly — produce a separate item per distinct action or decision, and route each one to the project and person it belongs to.
@@ -410,6 +420,9 @@ ${projectLines || '(none)'}
 PEOPLE (name = email):
 ${peopleLines || '(none)'}
 
+Name the meeting as well:
+- meetingTitle: what to call this recording, in English, at most 70 characters. If someone SAYS what the meeting is ("this is the Q3 planning call", "aaj ka standup", "chalo vendor review shuru karte hain"), use that. Otherwise name it after what was actually discussed — "Vendor pricing and the Morphle proposal", never "Meeting" or "Discussion". NEVER put a date in it: the app already shows one, and a date is exactly what this replaces. Write it the way a person would name it in their calendar. If the transcript is too thin to name honestly, return an empty string rather than inventing something.
+
 For every item work out, ONLY from what was actually said:
 - kind: "task" if someone must do something; "note" for decisions, facts or context worth keeping; "brief" ONLY when someone explicitly asks for it to go into the project's own notes / description / brief ("add this to the project notes", "isko project ke notes me daal do"). Never choose "brief" on your own — it edits the project itself.
 - title: short imperative for tasks ("Send the proposal to Morphle"), a clear line for notes.
@@ -422,7 +435,7 @@ For every item work out, ONLY from what was actually said:
 Never guess a project or person that isn't in the lists. Never invent deadlines. It is correct and expected to return missing entries.
 
 Reply ONLY with JSON:
-{"summary":"concise minutes in English: what was discussed and decided, grouped by topic","items":[{"kind":"task|note|brief","title":"...","detail":"...","projectName":"...","assigneeEmail":"...","dueAt":"YYYY-MM-DDTHH:mm","missing":["project","assignee","due"]}]}`;
+{"meetingTitle":"what this meeting was","summary":"concise minutes in English: what was discussed and decided, grouped by topic","items":[{"kind":"task|note|brief","title":"...","detail":"...","projectName":"...","assigneeEmail":"...","dueAt":"YYYY-MM-DDTHH:mm","missing":["project","assignee","due"]}]}`;
 
     const res = await chatJSON([
       { role: 'system', content: system },
@@ -435,6 +448,14 @@ Reply ONLY with JSON:
       ...(projects as any[]).flatMap(p => [p.ownerId?.email, ...(p.memberEmails || [])]).filter(Boolean)].map(String));
 
     mom.tasksConfirmed = false; // re-opening the review
+    /* Only ever over the placeholder. Somebody who typed a title meant it, and re-running the
+       extraction is something they can do repeatedly — silently renaming their meeting each time
+       would make the field feel broken. cleanMeetingTitle returns null for the answers that would
+       be worse than the date they replace. */
+    if (mom.autoTitle) {
+      const named = cleanMeetingTitle(parsed.meetingTitle);
+      if (named) mom.title = named;
+    }
     mom.summary = parsed.summary || '';
     mom.candidates = (parsed.items || []).filter((i: any) => i?.title).slice(0, 25).map((i: any) => {
       // A meeting recorded inside a project already knows where its items go — the model
@@ -629,7 +650,10 @@ export async function updateMom(momId: string, data: { title?: string; summary?:
     if (!mom) return { success: false, error: 'MOM not found' };
     if (!await canAccess(mom, session.user.id, session.user.email)) return { success: false, error: 'Not a member' };
 
-    if (data.title !== undefined) mom.title = data.title.trim() || mom.title;
+    if (data.title !== undefined && data.title.trim()) {
+      mom.title = data.title.trim();
+      mom.autoTitle = false;   // named by a person; extraction must stop overwriting it
+    }
     if (data.summary !== undefined) mom.summary = data.summary;
     if (data.transcript !== undefined) mom.transcript = data.transcript;
     // The meeting's own projectId decides, never one off the wire — a member cannot padlock the
