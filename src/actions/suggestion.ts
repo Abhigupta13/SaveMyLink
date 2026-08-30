@@ -18,6 +18,11 @@ import { after } from "next/server";
  * optional screenshot. Only an admin reads them back.
  */
 
+/** What happened to the reporter's copy. 'pending' is a send in flight — the row's answer, not the
+ *  final one. Callers that render a sentence per outcome must handle every member: a chain that
+ *  falls through on 'pending' is how "closed, sending" came out as "there is no email address". */
+export type MailOutcome = 'sent' | 'failed' | 'none' | 'pending' | 'already';
+
 export async function submitSuggestion(formData: FormData) {
   try {
     const session = await getServerSession(authOptions);
@@ -152,7 +157,7 @@ export async function resolveSuggestion(id: string, note?: string) {
       { _id: id, resolvedAt: null },
       { $set: { resolvedAt: new Date(), resolvedBy: by, resolveNote: said } },
       { new: true },
-    ).lean<{ _id: unknown; email?: string; message: string; userId?: unknown; resolvedAt: Date } | null>();
+    ).lean<{ _id: unknown; email?: string; message: string; userId?: unknown; resolvedAt: Date; thankedAt?: Date | null } | null>();
 
     if (!claimed) {
       // Either it is already closed — the common case, and a no-op by design — or the id is junk.
@@ -161,17 +166,24 @@ export async function resolveSuggestion(id: string, note?: string) {
         .lean<{ resolvedAt?: Date; resolvedBy?: string; resolveNote?: string; resolveMail?: string } | null>();
       if (!existing?.resolvedAt) return { success: false as const, error: 'Unknown report' };
       return {
-        success: true as const, already: true, mailed: (existing.resolveMail || 'none') as 'sent' | 'failed' | 'none',
+        success: true as const, already: true, mailed: (existing.resolveMail || 'none') as MailOutcome,
         resolvedAt: existing.resolvedAt.toISOString(), resolvedBy: existing.resolvedBy || '', note: existing.resolveNote || '',
       };
     }
 
-    /* Some reports carry no address at all — `email` defaults to '' and is filled from the session,
-       so anyone signed in without one leaves it blank. Those close silently. Reporting that as a
-       sent email would have the admin believe a person was answered who never heard from us. */
-    /* Some reports carry no address at all, and that is knowable instantly — so it is answered
-       instantly. Everything else goes to SMTP, which is the slow part. */
-    const mailed: 'pending' | 'none' = claimed.email ? 'pending' : 'none';
+    /* Two reasons nothing gets sent, both knowable instantly — so both are answered instantly,
+       and only the third case pays for SMTP.
+
+       'none': the report carries no address at all. `email` defaults to '' and is filled from the
+       session, so anyone signed in without one leaves it blank. Reporting that as a sent email
+       would have the admin believe a person was answered who never heard from us.
+
+       'already': this report was closed before, thanked, and reopened. The mail is not owed twice
+       — see `thankedAt` on the model. */
+    const mailed: MailOutcome =
+      !claimed.email ? 'none'
+        : claimed.thankedAt ? 'already'
+          : 'pending';
     await Suggestion.updateOne({ _id: id }, { $set: { resolveMail: mailed } }).catch(() => {});
 
     /* The send runs AFTER the response. Waiting on SMTP left the admin looking at "Closing…" for
@@ -179,10 +191,10 @@ export async function resolveSuggestion(id: string, note?: string) {
        already closed and durable by this point, and a failed send does not un-close it. The
        outcome is written to the row rather than returned, so the Resolved tab still tells the
        truth about who actually heard from us — a beat later instead of instantly. */
-    if (claimed.email) {
+    if (mailed === 'pending') {
       // Captured before after(): the callback outlives this scope, and TypeScript will not carry
       // the narrowing across that boundary.
-      const to = claimed.email;
+      const to = claimed.email as string;
       after(async () => {
         let outcome: 'sent' | 'failed' = 'failed';
         try {
@@ -202,8 +214,11 @@ export async function resolveSuggestion(id: string, note?: string) {
           console.error('Suggestion resolved but the thank-you email failed:', error);
         }
         // Best-effort: the resolution is already durable, and losing only the send outcome costs
-        // the inbox a label, not the record.
-        await Suggestion.updateOne({ _id: id }, { $set: { resolveMail: outcome } })
+        // the inbox a label, not the record. `thankedAt` is stamped in the same write and only on
+        // a real send — it is what stops a reopen-then-close-again from thanking them twice.
+        await Suggestion.updateOne({ _id: id }, outcome === 'sent'
+          ? { $set: { resolveMail: 'sent', thankedAt: new Date() } }
+          : { $set: { resolveMail: 'failed' } })
           .catch(err => console.error('Suggestion mail outcome not recorded:', err));
       });
     }
@@ -215,5 +230,45 @@ export async function resolveSuggestion(id: string, note?: string) {
   } catch (error) {
     console.error('Failed to resolve suggestion:', error);
     return { success: false as const, error: 'Could not close that — try again' };
+  }
+}
+
+/**
+ * An admin puts a closed report back in the Open tab — closed by mistake, or closed and then it
+ * turned out not to be finished.
+ *
+ * The claim is atomic on `resolvedAt: { $ne: null }` for the same reason closing is: two admins on
+ * one row, or a double-tap, race in the database and the loser is told it is already open.
+ *
+ * What it clears and what it keeps is the whole design. `resolvedBy`, `resolveNote` and
+ * `resolveMail` describe ONE closing, and undoing that closing makes them false — they go. But
+ * `thankedAt` describes the reporter's inbox, and no admin action un-sends a mail. It stays, and
+ * closing this report again will not thank them a second time.
+ */
+export async function reopenSuggestion(id: string) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id || !isAdmin(session.user.email)) return { success: false as const, error: 'Not found' };
+    await connectToDatabase();
+    if (!isValidObjectId(id)) return { success: false as const, error: 'Unknown report' };
+
+    const reopened = await Suggestion.findOneAndUpdate(
+      { _id: id, resolvedAt: { $ne: null } },
+      {
+        $set: { resolvedAt: null, reopenedAt: new Date(), reopenedBy: (session.user.email || '').toLowerCase() },
+        $unset: { resolvedBy: '', resolveNote: '', resolveMail: '' },
+      },
+    ).lean<{ _id: unknown } | null>();
+
+    if (!reopened) {
+      // Already open is a no-op, not a failure — the row is in the state the admin wanted.
+      const exists = await Suggestion.exists({ _id: id });
+      if (!exists) return { success: false as const, error: 'Unknown report' };
+      return { success: true as const, already: true };
+    }
+    return { success: true as const, already: false };
+  } catch (error) {
+    console.error('Failed to reopen suggestion:', error);
+    return { success: false as const, error: 'Could not reopen that — try again' };
   }
 }

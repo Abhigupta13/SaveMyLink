@@ -272,7 +272,7 @@ Thank you for the feedback you sent us through Help us improve. We have reviewed
 
 You reported:
 
-“${quote}”${said ? `\n\n${said}` : ''}
+“${quote}”${said ? `\n\nA NOTE FROM THE TEAM\n\n${said}` : ''}
 
 We appreciate you taking the time to report this. It is how we find out what needs fixing.
 
@@ -308,8 +308,23 @@ If we have misunderstood, reply to this email and we will reopen it.
 
         <tr><td style="padding:18px 32px 0;">
           <p style="margin:0;font-size:14px;line-height:1.6;color:#c9d0e0;">We have reviewed this, and it is now resolved.</p>
-          ${said ? `<p style="margin:10px 0 0;font-size:14px;line-height:1.6;color:#9aa3b8;white-space:pre-wrap;">${esc(said)}</p>` : ''}
         </td></tr>
+
+        ${said ? `
+        <!-- The admin's own words. Everything else in this mail is a template the reporter could
+             have predicted; this is the one part a person wrote for them, and for half of these
+             reports it IS the answer — the specific thing that changed. It used to render as a
+             dimmer grey paragraph than the boilerplate above it, which read as more filler and
+             buried the only sentence worth the email. Accent rule, a label saying who is talking,
+             and the brightest text in the body. -->
+        <tr><td style="padding:16px 32px 0;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1b1f2b;border:1px solid #33384a;border-left:3px solid #e08a6a;border-radius:14px;">
+            <tr><td style="padding:16px 18px;">
+              <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#e08a6a;padding-bottom:7px;">A note from the team</div>
+              <p style="margin:0;font-size:15px;line-height:1.65;color:#f1f3f9;white-space:pre-wrap;">${esc(said)}</p>
+            </td></tr>
+          </table>
+        </td></tr>` : ''}
 
         <tr><td style="padding:20px 32px 28px;">
           <p style="margin:0 0 8px;font-size:13px;line-height:1.6;color:#9aa3b8;">We appreciate you taking the time to report this. It is how we find out what needs fixing.</p>

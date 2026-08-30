@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
-import { Bug, Lightbulb, MessageSquare, Check, MailWarning, MailCheck, MailX } from 'lucide-react';
-import { getSuggestions, resolveSuggestion } from '@/actions/suggestion';
+import { Bug, Lightbulb, MessageSquare, Check, Mail, MailWarning, MailCheck, MailX, Undo2 } from 'lucide-react';
+import { getSuggestions, resolveSuggestion, reopenSuggestion } from '@/actions/suggestion';
 import { useFeedback } from '@/components/ui/Feedback';
+import Loading from '@/components/ui/Loading';
 import { formatInZone } from '@/lib/time';
 import Link from 'next/link';
 
@@ -28,6 +29,10 @@ const MAIL_NOTE = {
   sent: { Icon: MailCheck, text: 'Reporter emailed', color: 'var(--success-color)' },
   failed: { Icon: MailWarning, text: 'Email did not go out', color: 'var(--danger-color)' },
   none: { Icon: MailX, text: 'No email address — nobody was emailed', color: 'var(--text-tertiary)' },
+  // The send is started after the response, so a just-closed row lands here for a beat. Without an
+  // entry of its own the lookup returned undefined and the card threw on `mail.color`.
+  pending: { Icon: Mail, text: 'Sending the thank-you…', color: 'var(--text-tertiary)' },
+  already: { Icon: MailCheck, text: 'Emailed when this was closed before', color: 'var(--success-color)' },
   unknown: { Icon: MailWarning, text: 'Email outcome not recorded', color: 'var(--text-tertiary)' },
 } as const;
 
@@ -64,19 +69,35 @@ export default function FeedbackInboxPage() {
     setBusy(null);
     if (!res.success) { toast(res.error || 'Could not close that', 'error'); return; }
     closeComposer();
+    /* Every outcome gets its own branch, and the default is the neutral one. This used to fall
+       through to "there is no email address on this one" for anything it did not recognise — and
+       since the send moved after the response, the answer for a normal close became 'pending',
+       which it did not recognise. Every reporter with an address was reported as having none. */
     toast(
       res.already ? 'That one was already closed — nobody was emailed twice'
+        : res.mailed === 'pending' ? 'Closed — the thank-you is on its way'
         : res.mailed === 'sent' ? 'Closed, and they have been emailed'
         : res.mailed === 'failed' ? 'Closed — but the email did not go out'
-        : 'Closed — there is no email address on this one, so nobody was emailed',
+        : res.mailed === 'already' ? 'Closed — they were already emailed the first time'
+        : res.mailed === 'none' ? 'Closed — there is no email address on this one, so nobody was emailed'
+        : 'Closed',
       res.mailed === 'failed' ? 'error' : 'success');
     // Refetched rather than patched in place: the row leaves this view and both counts move, and
     // an "already closed" answer means what we were holding was stale anyway.
     load(view);
   };
 
+  const reopen = async (id: string) => {
+    setBusy(id);
+    const res = await reopenSuggestion(id);
+    setBusy(null);
+    if (!res.success) { toast(res.error || 'Could not reopen that', 'error'); return; }
+    toast(res.already ? 'That one was already open' : 'Back in Open — closing it again will not email them twice', 'success');
+    load(view);
+  };
+
   if (denied) return <div className="page narrow"><p style={{ color: 'var(--text-secondary)' }}>Not found.</p></div>;
-  if (!rows) return <div className="page narrow"><p style={{ color: 'var(--text-secondary)' }}>Loading…</p></div>;
+  if (!rows) return <div className="page narrow"><Loading label="Loading reports" /></div>;
 
   return (
     <div className="page narrow">
@@ -123,6 +144,13 @@ export default function FeedbackInboxPage() {
               <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontWeight: 600, wordBreak: 'break-word' }}>
                 {r.email}{r.page ? ` · ${r.page}` : ''}
                 {r.userAgent && <div style={{ marginTop: '2px', opacity: 0.7 }}>{r.userAgent}</div>}
+                {/* Only on an open row: a reopened report looks identical to a never-closed one
+                    otherwise, and "why is this back" is the first thing the next admin asks. */}
+                {!r.resolvedAt && r.reopenedAt && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '4px', opacity: 0.9 }}>
+                    <Undo2 size={12} /> Reopened by {r.reopenedBy || 'an admin'} · {when(r.reopenedAt)}
+                  </div>
+                )}
               </div>
 
               {r.resolvedAt ? (
@@ -136,18 +164,29 @@ export default function FeedbackInboxPage() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px', fontSize: '0.72rem', color: mail.color }}>
                     <mail.Icon size={13} /> {mail.text}
                   </div>
+                  <button type="button" onClick={() => reopen(r._id)} disabled={busy === r._id}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '12px', height: '36px', padding: '0 14px', borderRadius: '11px', border: '1px solid var(--border-color)', background: 'none', color: 'var(--text-primary)', font: 'inherit', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}>
+                    <Undo2 size={14} /> {busy === r._id ? 'Reopening…' : 'Reopen'}
+                  </button>
                 </div>
               ) : composing ? (
                 <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-color)' }}>
                   <label className="field-label" htmlFor={`note-${r._id}`}>Anything to tell them? (optional)</label>
+                  {/* The admin should know their words are not buried in the boilerplate — they
+                      arrive under their own heading, which is worth writing a real sentence for. */}
+                  <p style={{ margin: '2px 2px 6px', fontSize: '0.72rem', color: 'var(--text-tertiary)', fontWeight: 600 }}>
+                    Shown in the email under “A note from the team”.
+                  </p>
                   <textarea id={`note-${r._id}`} className="field" rows={3} autoFocus value={note}
                     onChange={e => setNote(e.target.value)}
                     placeholder="Fixed in the next build · This is now under Settings"
                     style={{ resize: 'vertical', minHeight: '76px' }} />
                   <p style={{ margin: '6px 2px 10px', fontSize: '0.72rem', color: 'var(--text-tertiary)', fontWeight: 600 }}>
-                    {r.email
-                      ? 'Left blank, they still get a plain thank-you.'
-                      : 'This report has no email address, so nobody will be emailed.'}
+                    {!r.email
+                      ? 'This report has no email address, so nobody will be emailed.'
+                      : r.thankedAt
+                        ? 'They were emailed when this was closed before — closing it again will not email them twice.'
+                        : 'Left blank, they still get a plain thank-you.'}
                   </p>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button type="button" className="btn-primary" disabled={busy === r._id}
