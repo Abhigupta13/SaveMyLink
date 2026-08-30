@@ -18,6 +18,8 @@ export interface ITask extends MongooseDocument {
   signedOffBy?: mongoose.Types.ObjectId;
   signedOffAt?: Date;
   reminder?: ReminderChoice;
+  /** Behind the Private Safe. Only ever true on a personal record — see lib/privacy. */
+  isPrivate?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +53,9 @@ const TaskSchema = new Schema<ITask>({
   // default, then the 85% schedule. No index: nothing ever filters on it, it is read only on rows
   // already fetched by _id or by the "my open tasks" query.
   reminder: { type: String, enum: REMINDER_VALUES },
+  // Private is personal-only: a record filed under a group belongs to that group, so
+  // privacyOnWrite (lib/privacy) drops this flag the moment a projectId is set.
+  isPrivate: { type: Boolean, default: false },
 }, {
   timestamps: true
 });
@@ -67,4 +72,6 @@ TaskSchema.index({ assigneeIds: 1 });
 TaskSchema.index({ assigneeEmail: 1 });
 TaskSchema.index({ assigneeEmails: 1 });
 
+// The Private Safe swaps the personal list, so isPrivate is part of that read, not a scan.
+TaskSchema.index({ userId: 1, isPrivate: 1, dueAt: 1 });
 export default defineModel<ITask>('Task', TaskSchema);

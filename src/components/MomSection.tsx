@@ -6,6 +6,8 @@ import { getMoms, uploadMomAudio, uploadMomAudioSarvam, pollMomTranscription, ex
 import { Mic, Square, Share2, Trash2, AlertTriangle, CheckSquare, StickyNote, BookOpen, Pencil, RefreshCw, FileText, Check, Loader2 } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useShareNotice } from '@/components/ShareNotice';
+import { useUser } from '@/components/UserContext';
+import { SafeBanner, SafeEmpty, PrivateToggle } from '@/components/PrivateSafe';
 import { isProjectOwner, canWrite } from '@/lib/scope';
 import { formatDay, formatDate } from '@/lib/time';
 import { getReminderDefault } from '@/actions/task';
@@ -52,6 +54,7 @@ const Wave = () => (
 export default function MomSection({ project, projects = [], myEmail, memberOptions, onTasksCreated, pendingOnly = false, afterRecorder }: MomSectionProps) {
   const { toast, confirm } = useFeedback();
   const { confirmShare, shareDialog } = useShareNotice();
+  const { privateSafe } = useUser();
   const [moms, setMoms] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [recording, setRecording] = useState(false);
@@ -114,6 +117,10 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   // that belongs to an *older* meeting (re-extract, resumed poll) — those must not borrow today's
   // title and the last recording's clock.
   const [stageTitle, setStageTitle] = useState('');
+  // Which vault the next recording lands in. Seeded from the safe, because a meeting recorded with
+  // it open and filed outside it disappears from this very list the moment it saves.
+  const [momPrivate, setMomPrivate] = useState(false);
+  useEffect(() => { setMomPrivate(privateSafe); }, [privateSafe]);
 
   const fetchMoms = useCallback(async () => {
     const res = await getMoms(projectId);
@@ -227,6 +234,10 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     const formData = new FormData();
     formData.append('projectId', projectId);
     formData.append('title', meetingTitle());
+    // Only in Personal. A group meeting is the group's, privacyOnWrite drops the flag either way,
+    // and neither upload action has a privacyDropped to report the drop with — so the recorder
+    // does not offer the choice inside a group and does not send one.
+    if (!projectId) formData.append('isPrivate', String(momPrivate));
     formData.append('audio', blob, 'meeting.webm');
     const up = await uploadMomAudioSarvam(formData);
     if (!up.success || !up.momId) {
@@ -252,6 +263,10 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     const formData = new FormData();
     formData.append('projectId', projectId);
     formData.append('title', meetingTitle());
+    // Only in Personal. A group meeting is the group's, privacyOnWrite drops the flag either way,
+    // and neither upload action has a privacyDropped to report the drop with — so the recorder
+    // does not offer the choice inside a group and does not send one.
+    if (!projectId) formData.append('isPrivate', String(momPrivate));
     formData.append('audio', blob, 'meeting.webm');
     const up = await uploadMomAudio(formData);   // transcribes in the same call
     if (!up.success) { setPipeline(''); toast(up.error || 'Something went wrong', 'error'); return; }
@@ -446,6 +461,14 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
             : project ? `Tap the dot to record → transcribe → action items, filed under ${project.name}.`
             : 'Tap the dot to record → transcribe → each action item routed to the project it belongs to.')}
         </p>
+
+        {/* Personal meetings only. Hidden while recording or transcribing: the vault is decided
+            when the upload goes out, and a switch that no longer changes anything is a lie. */}
+        {!project && !recording && !pipeline && (
+          <div style={{ marginTop: '12px' }}>
+            <PrivateToggle value={momPrivate} onChange={setMomPrivate} />
+          </div>
+        )}
       </div>}
 
       {afterRecorder}
@@ -462,8 +485,16 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
         </p>
       )}
 
+      {/* Personal only. A group's meetings never swap, and the group page renders this with
+          pendingOnly — a banner above a two-card summary would be shouting about a list that is
+          not the safe's to change. */}
+      {!project && !pendingOnly && <SafeBanner noun="meetings" />}
+
       {loading ? (
         pendingOnly ? null : <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}><div className="loading-spinner"></div></div>
+      ) : shown.length === 0 && !pipeline && privateSafe && !project && !pendingOnly ? (
+        // "No meetings yet" would be about the recordings the safe is currently hiding.
+        <SafeEmpty noun="meetings" />
       ) : shown.length === 0 && !pipeline ? (
         // Nothing to confirm is the normal state, not an empty state — the count on the Meetings
         // card is what says how many there are.

@@ -9,6 +9,7 @@ import { Mom } from "@/lib/models/Mom";
 import { Note } from "@/lib/models/Note";
 import { escapeRegex } from "@/lib/regex";
 import { hasSafe } from "@/lib/safeCookie";
+import { privateFilter } from "@/lib/privacy";
 import { getServerSession } from "next-auth";
 import { myProjectFilter } from "@/lib/projectAccess";
 import { projectNameMap, sharedLabel } from "@/lib/visibility";
@@ -23,13 +24,21 @@ export async function searchAll(q: string) {
 
   await connectToDatabase();
   const regex = new RegExp(escapeRegex(q.trim()), 'i');
-  const includePrivate = await hasSafe(userId);
+  /* Search is a list like any other, so it swaps rather than adds: locked it finds what is not
+     private, unlocked it finds what is. It used to ADD for links alone, which meant the one place
+     that searches across everything disagreed with every page it links to — a link that /links
+     was hiding was still findable from the bar above it. Jarvis is the single exception in this
+     app and says so where it happens.
+
+     Personal branches only. A group's rows are the group's and are found in both states, which is
+     also why they can never be private (lib/privacy). */
+  const personal = privateFilter(await hasSafe(userId));
 
   const linkQuery: any = {
     userId,
+    ...personal,
     $or: [{ title: regex }, { url: regex }, { tags: { $in: [regex] } }],
   };
-  if (!includePrivate) linkQuery.isPrivate = { $ne: true };
 
   const myProjects = await Project.find(await myProjectFilter(userId, email))
     .select('_id name notes').lean();
@@ -39,19 +48,21 @@ export async function searchAll(q: string) {
     Link.find(linkQuery).populate('category', 'name color').sort({ createdAt: -1 }).limit(20).lean(),
     Task.find({
       $and: [
-        { $or: [{ userId }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] },
+        // A task handed to you out of a group is the group's record, so the assignee branches
+        // stay open in both states — only the plain personal branch swaps.
+        { $or: [{ userId, ...personal }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] },
         { $or: [{ title: regex }, { description: regex }] },
       ],
     }).sort({ completed: 1, createdAt: -1 }).limit(20).lean(),
     Mom.find({
       $and: [
-        { $or: [{ projectId: { $in: projectIds } }, { userId }] },  // personal meetings have no project
+        { $or: [{ projectId: { $in: projectIds } }, { userId, ...personal }] },  // personal meetings have no project
         { $or: [{ title: regex }, { summary: regex }, { transcript: regex }] },
       ],
     }).select('_id title summary projectId createdAt').sort({ createdAt: -1 }).limit(10).lean(),
     Note.find({
       $and: [
-        { $or: [{ userId }, { projectId: { $in: projectIds } }] },
+        { $or: [{ userId, ...personal }, { projectId: { $in: projectIds } }] },
         { $or: [{ title: regex }, { body: regex }] },
       ],
     }).sort({ updatedAt: -1 }).limit(20).lean(),

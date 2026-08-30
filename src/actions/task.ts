@@ -7,6 +7,8 @@ import { User } from "@/lib/models/User";
 import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject, projectPeople } from "@/lib/projectAccess";
 import { canWorkOn, canSignOff, assigneeEmailsOf } from "@/lib/taskAccess";
 import { allowedAssignees } from "@/lib/validation";
+import { privateFilter, privacyOnWrite } from "@/lib/privacy";
+import { hasSafe } from "@/lib/safeCookie";
 import { asChoice, type ReminderChoice } from "@/lib/reminderRule";
 import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
@@ -79,7 +81,9 @@ export async function getTasks(projectId?: string) {
       if (!project) return { success: false, error: 'Not a member of this project' };
       query = { projectId };
     } else {
-      query = { userId: session.user.id, projectId: null }; // personal tasks
+      // Personal tasks, and the only half the Private Safe touches: locked shows what is not
+      // private, unlocked shows what is. A project list is the group's and never swaps.
+      query = { userId: session.user.id, projectId: null, ...privateFilter(await hasSafe(session.user.id)) };
     }
 
     const tasks = await Task.find(query)
@@ -107,7 +111,13 @@ export async function getMyOpenTasks() {
       completed: false,
       // assigneeIds as well as assigneeId, or a co-assignee's shared work would be missing from
       // My Tasks — and from the phone reminders, which each device schedules off this list.
-      $or: [{ userId: session.user.id, projectId: null }, { assigneeId: session.user.id }, { assigneeIds: session.user.id }],
+      // The safe swaps the personal branch only: work handed to you out of a group is the group's
+      // and stays visible either way, which is also why it can never have been private.
+      $or: [
+        { userId: session.user.id, projectId: null, ...privateFilter(await hasSafe(session.user.id)) },
+        { assigneeId: session.user.id },
+        { assigneeIds: session.user.id },
+      ],
       // createdAt + reminder because the phone computes its own fire times off them; projectId
       // drives the per-scope counts on /tasks.
     }).select('_id title dueAt completed projectId createdAt reminder').lean();
@@ -133,6 +143,7 @@ interface TaskOpts {
   momId?: string;
   linkId?: string;
   reminder?: string;   // one of REMINDER_VALUES; anything else falls back to the profile default
+  isPrivate?: boolean;  // a request, not the answer — privacyOnWrite decides, and a group wins
 }
 
 export async function createTask(title: string, opts: TaskOpts = {}) {
@@ -151,6 +162,8 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
       byEmail = await resolveAssignees(emails);   // unresolved → kept as email, claimed when they sign up
     }
 
+    const isPrivate = privacyOnWrite(opts.isPrivate, opts.projectId);
+
     const task = await Task.create({
       title,
       description: opts.description,
@@ -167,19 +180,25 @@ export async function createTask(title: string, opts: TaskOpts = {}) {
       // keeps. Changing the profile default later re-aims the next task, not every old one.
       // A caller that never asks (Jarvis) simply inherits the default.
       reminder: asChoice(opts.reminder) ?? await myReminderDefault(session.user.id),
+      // Assignment and privacy are opposites: a task with a group has people who must read it.
+      isPrivate,
     });
 
     await recordEvent({ projectId: task.projectId, actorId: session.user.id, verb: 'task_created', subject: task.title });
 
     revalidatePath('/tasks');
-    return { success: true, task: JSON.parse(JSON.stringify(task)) };
+    return {
+      success: true,
+      task: JSON.parse(JSON.stringify(task)),
+      privacyDropped: opts.isPrivate === true && !isPrivate,
+    };
   } catch (error) {
     console.error('Failed to create task:', error);
     return { success: false, error: 'Failed to create task' };
   }
 }
 
-export async function updateTask(id: string, data: { title?: string; description?: string; dueAt?: string | null; assigneeEmail?: string | null; assigneeEmails?: string[] | null; projectId?: string | null; reminder?: string | null }) {
+export async function updateTask(id: string, data: { title?: string; description?: string; dueAt?: string | null; assigneeEmail?: string | null; assigneeEmails?: string[] | null; projectId?: string | null; reminder?: string | null; isPrivate?: boolean }) {
   try {
     await connectToDatabase();
     const session = await getServerSession(authOptions);
@@ -219,6 +238,11 @@ export async function updateTask(id: string, data: { title?: string; description
         task.projectId = undefined;
       }
     }
+    // Same place and the same reason as the assignee block: WHERE the task ended up decides this,
+    // so it is settled after the move and never from the id the client sent. Moving private work
+    // into a group drops the padlock rather than leaving one every member can open.
+    const wantPrivate = data.isPrivate !== undefined ? data.isPrivate : !!task.isPrivate;
+    task.isPrivate = privacyOnWrite(wantPrivate, task.projectId);
     if (!task.projectId) {
       // Personal tasks have no assignee, and no assignee input survives the move out.
       task.set({ assigneeId: undefined, assigneeEmail: undefined, assigneeIds: [], assigneeEmails: [] });
@@ -252,7 +276,11 @@ export async function updateTask(id: string, data: { title?: string; description
     }
 
     revalidatePath('/tasks');
-    return { success: true, task: JSON.parse(JSON.stringify(task)) };
+    return {
+      success: true,
+      task: JSON.parse(JSON.stringify(task)),
+      privacyDropped: wantPrivate === true && !task.isPrivate,
+    };
   } catch (error) {
     console.error('Failed to update task:', error);
     return { success: false, error: 'Failed to update task' };

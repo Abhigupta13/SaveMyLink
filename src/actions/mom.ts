@@ -16,6 +16,8 @@ import {
   startTranscriptionJob, jobStatus, jobTranscript, type SarvamResult,
 } from "@/lib/sarvam";
 import { hinglishEnabled, sarvamKeyFor } from "@/lib/sarvamAccess";
+import { privateFilter, privacyOnWrite, assistantFilter } from "@/lib/privacy";
+import { hasSafe } from "@/lib/safeCookie";
 import { DEFAULT_TZ, safeZone, zonedToUtc } from "@/lib/time";
 import { asChoice } from "@/lib/reminderRule";
 import { recordEvent } from "@/lib/models/Event";
@@ -59,6 +61,19 @@ function audioProblem(audio: File): string | null {
   return null;
 }
 
+/**
+ * Whether the meeting about to be saved is private. A group meeting never is — every member has
+ * to be able to read the minutes of a meeting filed under their group, so privacyOnWrite drops
+ * the flag rather than storing a padlock they can all open.
+ *
+ * With no checkbox on the wire it inherits the vault the recording was started in: recording with
+ * the safe open and landing outside it would put the meeting in a list the user cannot see.
+ */
+async function momPrivacy(formData: FormData, userId: string, projectId?: string | null) {
+  const wanted = formData.has('isPrivate') ? formData.get('isPrivate') === 'true' : await hasSafe(userId);
+  return privacyOnWrite(wanted, projectId);
+}
+
 // Transcripts mis-spell project names; match on letters only, then by containment
 const norm = (v: string) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 function matchProject(name: string, projects: any[]) {
@@ -96,7 +111,11 @@ export async function getMoms(projectId?: string | null) {
   try {
     const ctx = await memberSession(projectId, false);   // the one read on this page
     if (!ctx) return { success: false, error: 'Not a member' };
-    const moms = await Mom.find(projectId ? { projectId } : { projectId: null, userId: ctx.session.user.id })
+    // A group's meetings are the group's and never swap. The personal shelf does: locked shows
+    // the meetings that are not private, unlocked shows the ones that are.
+    const moms = await Mom.find(projectId
+      ? { projectId }
+      : { projectId: null, userId: ctx.session.user.id, ...privateFilter(await hasSafe(ctx.session.user.id)) })
       .sort({ createdAt: -1 }).lean();
     // Which recorder the client should use. Display and branching only — uploadMomAudioSarvam
     // re-resolves the key, so removing access actually cuts it rather than hiding a button.
@@ -183,6 +202,7 @@ export async function uploadMomAudio(formData: FormData) {
       title,
       transcript: free.data.transcript,
       engine: free.data.engine,
+      isPrivate: await momPrivacy(formData, ctx.session.user.id, projectId),
     });
     await recordEvent({ projectId: mom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: mom.title });
     return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
@@ -243,6 +263,7 @@ export async function uploadMomAudioSarvam(formData: FormData) {
         title,
         transcript: free.data.transcript,
         engine: free.data.engine,
+        isPrivate: await momPrivacy(formData, ctx.session.user.id, projectId),
       });
       await recordEvent({ projectId: fallbackMom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: fallbackMom.title });
       // momId, like the paid path — but with a transcript already on it, so the client extracts
@@ -270,6 +291,7 @@ export async function uploadMomAudioSarvam(formData: FormData) {
       title,
       sarvamJobId: job.data.jobId,
       engine: 'sarvam',
+      isPrivate: await momPrivacy(formData, ctx.session.user.id, projectId),
     });
     await recordEvent({ projectId: mom.projectId, actorId: ctx.session.user.id, verb: 'meeting_recorded', subject: mom.title });
     // `fallback` spelled out even when there wasn't one: both returns then carry the field, so
@@ -345,7 +367,12 @@ export async function extractMomTasks(momId: string, timeZone = '') {
     const [projects, contacts] = await Promise.all([
       Project.find(await myProjectFilter(session.user.id, myEmail))
         .populate('ownerId', 'email name').lean(),
-      Contact.find({ userId: session.user.id }).select('name email').lean(),
+      // Every name here is written into a Gemini prompt, which makes this an assistant path and
+      // puts it under Jarvis's rule rather than a list's: with the safe open the model may see a
+      // private contact, with it shut that person does not exist. Routing an action item to
+      // somebody the user is currently hiding would announce them on the confirm screen.
+      Contact.find({ userId: session.user.id, ...(assistantFilter(await hasSafe(session.user.id)) ?? {}) })
+        .select('name email').lean(),
     ]);
 
     const projectLines = (projects as any[]).map(p =>
@@ -481,8 +508,13 @@ export async function confirmMomTasks(
         continue;
       }
 
+      // What comes out of a private meeting stays in the safe with it — extracting the action
+      // items should not be the thing that copies the contents into a list anyone can read over
+      // your shoulder. Filing an item into a group drops it, exactly like every other write.
+      const isPrivate = privacyOnWrite(mom.isPrivate, projectId);
+
       if (item.kind === 'note') {
-        await Note.create({ userId: session.user.id, projectId: projectId || undefined, title: item.title.trim(), body: item.detail || '', momId: mom._id });
+        await Note.create({ userId: session.user.id, projectId: projectId || undefined, title: item.title.trim(), body: item.detail || '', momId: mom._id, isPrivate });
         notes++;
         continue;
       }
@@ -506,6 +538,7 @@ export async function confirmMomTasks(
         assigneeEmail: item.assigneeEmail?.toLowerCase(),
         momId: mom._id,
         reminder: asChoice(item.reminder) ?? fallbackReminder,
+        isPrivate,
       });
       await recordEvent({ projectId, actorId: session.user.id, verb: 'task_created', subject: item.title.trim() });
       tasks++;
@@ -587,7 +620,7 @@ export async function deleteMom(momId: string, opts: { alsoDeleteWork?: boolean 
   }
 }
 
-export async function updateMom(momId: string, data: { title?: string; summary?: string; transcript?: string }) {
+export async function updateMom(momId: string, data: { title?: string; summary?: string; transcript?: string; isPrivate?: boolean }) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
@@ -599,8 +632,15 @@ export async function updateMom(momId: string, data: { title?: string; summary?:
     if (data.title !== undefined) mom.title = data.title.trim() || mom.title;
     if (data.summary !== undefined) mom.summary = data.summary;
     if (data.transcript !== undefined) mom.transcript = data.transcript;
+    // The meeting's own projectId decides, never one off the wire — a member cannot padlock the
+    // group's minutes, and the padlock on a personal meeting is the recorder's to set.
+    if (data.isPrivate !== undefined) mom.isPrivate = privacyOnWrite(data.isPrivate, mom.projectId);
     await mom.save();
-    return { success: true, mom: JSON.parse(JSON.stringify(mom)) };
+    return {
+      success: true,
+      mom: JSON.parse(JSON.stringify(mom)),
+      privacyDropped: data.isPrivate === true && !mom.isPrivate,
+    };
   } catch (error) {
     console.error('Failed to update MOM:', error);
     return { success: false, error: 'Failed to save changes' };

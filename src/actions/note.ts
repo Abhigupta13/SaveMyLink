@@ -3,12 +3,16 @@
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import { Note } from "@/lib/models/Note";
+import { Project } from "@/lib/models/Project";
 import { Mom } from "@/lib/models/Mom";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 import { projectForWriter, mineOrMyProjects, canDelete } from "@/lib/projectAccess";
 import { withinProject } from "@/lib/scope";
+import { privacyOnWrite } from "@/lib/privacy";
+import { hasSafe } from "@/lib/safeCookie";
 import { saveUpload, deleteUpload } from "@/lib/storage";
+import { grantProjectReaders } from "@/lib/driveGrants";
 import { extractText } from "@/lib/docText";
 
 async function me() {
@@ -44,7 +48,11 @@ export async function getNotes(projectId?: string) {
     const who = await me();
     if (!who) return { success: false, error: 'Unauthorized' };
     await connectToDatabase();
-    const filter = withinProject(await mineOrMyProjects(who.userId, who.email), projectId);
+    // The Private Safe swaps the personal half of this list and leaves the project half alone.
+    // The state comes off the signed cookie, never off an argument — a client that could ask for
+    // the private list would be the whole PIN.
+    const unlocked = await hasSafe(who.userId);
+    const filter = withinProject(await mineOrMyProjects(who.userId, who.email, 'userId', unlocked), projectId);
     // Attachment text can be 12k a file and the list never renders it — leave it on the server
     const notes = await Note.find(filter).select('-attachments.text')
       .populate('projectId', 'name')   // meeting notes carry their project — shown as a chip on the card
@@ -68,7 +76,7 @@ export async function getNotes(projectId?: string) {
   }
 }
 
-export async function createNote(data: { title?: string; body: string; projectId?: string }) {
+export async function createNote(data: { title?: string; body: string; projectId?: string; isPrivate?: boolean }) {
   try {
     await connectToDatabase();
     const who = await me();
@@ -76,25 +84,33 @@ export async function createNote(data: { title?: string; body: string; projectId
     if (!data.body?.trim() && !data.title?.trim()) return { success: false, error: 'Note is empty' };
     if (data.projectId && !(await projectForWriter(data.projectId, who.userId, who.email)))
       return { success: false, error: 'Not a member of that project' };
+    // The checkbox is a request, not the answer: a note filed into a group belongs to the group,
+    // so the padlock is dropped rather than stored as something the members can open anyway.
+    const isPrivate = privacyOnWrite(data.isPrivate, data.projectId);
     const note = await Note.create({
       userId: who.userId, projectId: data.projectId || undefined,
-      title: data.title?.trim(), body: data.body?.trim() || '',
+      title: data.title?.trim(), body: data.body?.trim() || '', isPrivate,
     });
     revalidatePath('/notes');
-    return { success: true, note: JSON.parse(JSON.stringify(note)) };
+    return {
+      success: true,
+      note: JSON.parse(JSON.stringify(note)),
+      privacyDropped: data.isPrivate === true && !isPrivate,
+    };
   } catch (error) {
     console.error('Failed to create note:', error);
     return { success: false, error: 'Failed to save note' };
   }
 }
 
-export async function updateNote(id: string, data: { title?: string; body?: string; pinned?: boolean; projectId?: string }) {
+export async function updateNote(id: string, data: { title?: string; body?: string; pinned?: boolean; projectId?: string; isPrivate?: boolean }) {
   try {
     await connectToDatabase();
     const who = await me();
     if (!who) return { success: false, error: 'Unauthorized' };
     const note = await noteIWrite(id, who.userId, who.email);
     if (!note) return { success: false, error: 'Note not found' };
+    const wasIn = String(note.projectId || '');
 
     // Moving a note into a project shares it with that project's members, so verify first.
     // '' is a deliberate choice of Personal; undefined leaves it where it is.
@@ -106,9 +122,30 @@ export async function updateNote(id: string, data: { title?: string; body?: stri
     if (data.title !== undefined) note.title = data.title;
     if (data.body !== undefined) note.body = data.body;
     if (data.pinned !== undefined) note.pinned = data.pinned;
+    // Settled AFTER the move, because where the note ends up is what decides whether it may be
+    // private at all. A private note dragged into a group loses the padlock instead of keeping
+    // one every member could open, and privacyDropped is how the screen gets to say so.
+    const wanted = data.isPrivate !== undefined ? data.isPrivate : !!note.isPrivate;
+    note.isPrivate = privacyOnWrite(wanted, note.projectId);
     await note.save();
+    // The move is the share: a note carrying attachments has just handed them to a new group, so
+    // they go into that group's Drives too. Guarded on the projectId actually CHANGING to a group,
+    // or every pin and title edit on a shared note would re-run the grants.
+    const nowIn = String(note.projectId || '');
+    if (nowIn && nowIn !== wasIn) {
+      grantProjectReaders({
+        projectId: nowIn,
+        uploaderId: who.userId,
+        uploaderEmail: who.email,
+        keys: (note.attachments || []).map(a => a.key),
+      });
+    }
     revalidatePath('/notes');
-    return { success: true, note: JSON.parse(JSON.stringify(note)) };
+    return {
+      success: true,
+      note: JSON.parse(JSON.stringify(note)),
+      privacyDropped: wanted === true && !note.isPrivate,
+    };
   } catch (error) {
     console.error('Failed to update note:', error);
     return { success: false, error: 'Failed to update note' };
@@ -154,16 +191,29 @@ export async function attachToNote(noteId: string | null, formData: FormData) {
     // Photos are downscaled in the browser before they get here and land well under it.
     if (file.size > 4 * 1024 * 1024) return { success: false, error: 'File is too large (max 4MB)' };
 
+    // The implicit note has no composer and therefore no checkbox, so it inherits the vault it was
+    // born in: attach a file with the safe open and the note it creates is private, or it would be
+    // written straight into a list the user cannot currently see.
     const note = noteId
       ? await noteIWrite(noteId, userId, who.email)
-      : await Note.create({ userId, body: '' });
+      : await Note.create({ userId, body: '', isPrivate: privacyOnWrite(await hasSafe(userId)) });
     if (!note) return { success: false, error: 'Note not found' };
 
-    const { key, url, mimeType, size, buffer } = await saveUpload(userId, file);
+    // A note filed under a group puts its attachment in that group's Drive folder; a personal one
+    // goes to ALL-YOU-NEED/personal.
+    const projectName = note.projectId
+      ? (await Project.findById(note.projectId).select('name').lean<{ name?: string } | null>())?.name
+      : null;
+    const saved = await saveUpload(userId, file, { source: 'note', projectName });
+    if (!saved.ok) return { success: false, error: saved.message, needsDrive: saved.reason === 'no_drive' || saved.reason === 'drive_revoked' };
+    const { key, url, mimeType, size, buffer } = saved;
     // Same extraction the Digi Locker uses: '' for images and video, real text for PDFs
     const text = await extractText(buffer, mimeType, file.name);
     note.attachments.push({ name: file.name, key, url, mimeType, size, text });
     await note.save();
+    // A group note's attachment is group work — offer it to their own Drives as well, after the
+    // response. A personal note is a no-op inside the helper.
+    grantProjectReaders({ projectId: note.projectId, uploaderId: userId, uploaderEmail: who.email, keys: [key] });
 
     revalidatePath('/notes');
     return { success: true, noteId: String(note._id), attachment: { name: file.name, key, url, mimeType, size } };

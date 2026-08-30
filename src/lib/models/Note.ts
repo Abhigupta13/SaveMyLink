@@ -18,6 +18,8 @@ export interface INote extends MongooseDocument {
   body: string;
   pinned: boolean;
   attachments: INoteAttachment[];
+  /** Behind the Private Safe. Only ever true on a personal record — see lib/privacy. */
+  isPrivate?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -39,6 +41,9 @@ const NoteSchema = new Schema<INote>({
     type: [{ _id: false, name: String, key: String, url: String, mimeType: String, size: Number, text: String }],
     default: [],
   },
+  // Private is personal-only: a record filed under a group belongs to that group, so
+  // privacyOnWrite (lib/privacy) drops this flag the moment a projectId is set.
+  isPrivate: { type: Boolean, default: false },
 }, { timestamps: true });
 
 NoteSchema.index({ userId: 1, pinned: -1, updatedAt: -1 });
@@ -46,4 +51,6 @@ NoteSchema.index({ userId: 1, pinned: -1, updatedAt: -1 });
 // project branch of the read scope — which has always been there, inside the $or — is a scan.
 NoteSchema.index({ projectId: 1, pinned: -1, updatedAt: -1 });
 
+// The Private Safe swaps the personal list, so isPrivate is part of that read, not a scan.
+NoteSchema.index({ userId: 1, isPrivate: 1, pinned: -1, updatedAt: -1 });
 export const Note: Model<INote> = defineModel<INote>('Note', NoteSchema);

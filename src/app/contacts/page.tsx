@@ -6,12 +6,15 @@ import { useSession } from 'next-auth/react';
 import { Phone, Mail, MessageCircle, Plus, Pencil, Trash2, X, UserPlus } from 'lucide-react';
 import { getContacts, createContact, updateContact, deleteContact, inviteContact, ContactInput } from '@/actions/contact';
 import { useFeedback } from '@/components/ui/Feedback';
+import { useUser } from '@/components/UserContext';
+import { SafeBanner, SafeEmpty, PrivateToggle } from '@/components/PrivateSafe';
 
-const EMPTY: ContactInput = { name: '', phone: '', email: '', company: '', note: '' };
+const EMPTY: ContactInput = { name: '', phone: '', email: '', company: '', note: '', isPrivate: false };
 const digits = (s?: string) => (s || '').replace(/\D/g, '');
 
 export default function ContactsPage() {
   const { toast, confirm } = useFeedback();
+  const { privateSafe } = useUser();
   const { status } = useSession();
   const [contacts, setContacts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,8 +32,10 @@ export default function ContactsPage() {
   }, []);
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
 
-  const startAdd = (prefill: Partial<ContactInput> = {}) => { setEditingId(null); setForm({ ...EMPTY, ...prefill }); };
-  const startEdit = (c: any) => { setEditingId(c._id); setForm({ name: c.name, phone: c.phone || '', email: c.email || '', company: c.company || '', note: c.note || '' }); };
+  // Somebody added while the safe is open belongs in the safe — saving them anywhere else would
+  // drop them into the address book the user is not currently looking at.
+  const startAdd = (prefill: Partial<ContactInput> = {}) => { setEditingId(null); setForm({ ...EMPTY, isPrivate: privateSafe, ...prefill }); };
+  const startEdit = (c: any) => { setEditingId(c._id); setForm({ name: c.name, phone: c.phone || '', email: c.email || '', company: c.company || '', note: c.note || '', isPrivate: !!c.isPrivate }); };
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,6 +93,10 @@ export default function ContactsPage() {
         )}
       </header>
 
+      {/* Contacts are always personal, so the safe swaps the whole list — the banner is not
+          conditional on a scope here the way it is on Notes and Tasks. */}
+      <SafeBanner noun="people" />
+
       {form && (
         <form onSubmit={save} className="card" style={{ marginBottom: '20px', display: 'grid', gap: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -101,6 +110,9 @@ export default function ContactsPage() {
           </div>
           <input className="field" placeholder="Company / role" value={form.company} onChange={e => setForm({ ...form, company: e.target.value })} />
           <input className="field" placeholder="Note" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} />
+          {/* A contact never carries a projectId, so there is no group branch to hide behind —
+              the switch here is always the answer. */}
+          <PrivateToggle value={!!form.isPrivate} onChange={next => setForm({ ...form, isPrivate: next })} />
           <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
             {editingId && <button type="button" className="icon-btn danger" onClick={remove} title="Delete"><Trash2 size={16} /></button>}
             <button type="submit" className="btn-primary" style={{ padding: '10px 22px', borderRadius: '12px', fontWeight: 800 }}>Save</button>
@@ -135,11 +147,14 @@ export default function ContactsPage() {
       ) : (
         <>
           {filtered.length === 0 && !form && (
-            <div className="empty-state">
-              <p style={{ fontWeight: 700 }}>No contacts yet.</p>
-              <p className="empty-hint">{hintFor('/contacts')}</p>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Add people you call, message, or work with.</p>
-            </div>
+            // "No contacts yet" with the safe open is a lie about a full address book.
+            privateSafe && !q ? <SafeEmpty noun="people" /> : (
+              <div className="empty-state">
+                <p style={{ fontWeight: 700 }}>No contacts yet.</p>
+                <p className="empty-hint">{hintFor('/contacts')}</p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Add people you call, message, or work with.</p>
+              </div>
+            )
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {filtered.map(c => (

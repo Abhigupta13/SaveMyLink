@@ -7,12 +7,14 @@ import { Project } from "@/lib/models/Project";
 import { User } from "@/lib/models/User";
 import { sendMail, inviteEmail } from "@/lib/mailer";
 import { myProjectFilter } from "@/lib/projectAccess";
-import { appUrl } from "@/lib/url";
+import { privateFilter, privacyOnWrite } from "@/lib/privacy";
+import { hasSafe } from "@/lib/safeCookie";
+import { shareUrl } from '@/lib/url';
 import { mergeContacts, type ProjectPeopleSource } from "@/lib/contacts";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 
-export interface ContactInput { name: string; phone?: string; email?: string; company?: string; note?: string }
+export interface ContactInput { name: string; phone?: string; email?: string; company?: string; note?: string; isPrivate?: boolean }
 
 /** A saved contact as it comes back from mongo, plus the projects that person shares with you. */
 interface ContactRow extends ContactInput { _id?: unknown; projects?: string[]; [key: string]: unknown }
@@ -45,15 +47,26 @@ export async function getContacts() {
     const userId = session.user.id;
     const myEmail = (session.user.email || '').toLowerCase();
 
-    const [contacts, projects, me] = await Promise.all([
-      Contact.find({ userId }).sort({ name: 1 }).lean<ContactRow[]>(),
+    // Contacts are always personal — there is no project branch here — so the safe simply swaps
+    // the whole list: locked shows the address book, unlocked shows the people kept out of it.
+    const unlocked = await hasSafe(userId);
+
+    const [contacts, savedEmails, projects, me] = await Promise.all([
+      Contact.find({ userId, ...privateFilter(unlocked) }).sort({ name: 1 }).lean<ContactRow[]>(),
+      // Every address already saved, private ones included. The seeder decides who is MISSING,
+      // and asking that question of a filtered list would answer "everybody" with the safe open
+      // and clone the whole address book.
+      Contact.distinct('email', { userId }),
       // populate turns ownerId into { email, name }, which is what peopleByProject reads
       Project.find(await myProjectFilter(userId, myEmail))
         .populate('ownerId', 'email name').lean<ProjectPeopleSource[]>(),
       User.findById(userId).select('contactsSeeded').lean<{ contactsSeeded?: string[] } | null>(),
     ]);
 
-    const { missing, withProjects } = mergeContacts({ contacts, projects, seeded: me?.contactsSeeded, myEmail });
+    const { missing, withProjects } = mergeContacts({
+      contacts, projects, myEmail,
+      seeded: [...(me?.contactsSeeded || []), ...savedEmails],
+    });
 
     let all: ContactRow[] = contacts;
     if (missing.length) {
@@ -68,7 +81,9 @@ export async function getContacts() {
         { ordered: false },
       );
       await User.updateOne({ _id: userId }, { $addToSet: { contactsSeeded: { $each: missing } } });
-      all = [...all, ...JSON.parse(JSON.stringify(created))];
+      // Somebody seeded off a shared project is not private, so with the safe open they belong to
+      // the list the user is not currently looking at. They appear the moment it is locked again.
+      if (!unlocked) all = [...all, ...JSON.parse(JSON.stringify(created))];
     }
 
     return { success: true, contacts: JSON.parse(JSON.stringify(withProjects(all))) };
@@ -84,7 +99,12 @@ export async function createContact(data: ContactInput) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
     if (!data.name?.trim()) return { success: false, error: 'Name required' };
-    const contact = await Contact.create({ ...data, name: data.name.trim(), userId: session.user.id });
+    // No projectId to lose to: a contact is always personal, so the checkbox is honoured as sent.
+    // It still runs through privacyOnWrite so "what may be private" has one answer app-wide.
+    const contact = await Contact.create({
+      ...data, name: data.name.trim(), userId: session.user.id,
+      isPrivate: privacyOnWrite(data.isPrivate),
+    });
     revalidatePath('/contacts');
     return { success: true, contact: JSON.parse(JSON.stringify(contact)), inviteAvailable: await invitable(data.email) };
   } catch (error) {
@@ -98,7 +118,10 @@ export async function updateContact(id: string, data: ContactInput) {
     await connectToDatabase();
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
-    const res = await Contact.findOneAndUpdate({ _id: id, userId: session.user.id }, data, { new: true });
+    // Left alone unless the caller actually asked — an edit sheet that never sends the field must
+    // not silently unlock somebody who is in the safe.
+    const patch = data.isPrivate === undefined ? data : { ...data, isPrivate: privacyOnWrite(data.isPrivate) };
+    const res = await Contact.findOneAndUpdate({ _id: id, userId: session.user.id }, patch, { new: true });
     if (!res) return { success: false, error: 'Contact not found' };
     revalidatePath('/contacts');
     return { success: true, contact: JSON.parse(JSON.stringify(res)), inviteAvailable: await invitable(data.email) };
@@ -140,7 +163,7 @@ export async function inviteContact(email: string) {
     if (!contact) return { success: false, error: 'Save them as a contact first' };
     if (await User.exists({ email: normalized })) return { success: false, error: 'They already have an account' };
 
-    const base = appUrl();
+    const base = shareUrl();
     const mail = inviteEmail({
       inviterName: session.user.name || session.user.email || 'A friend',
       link: `${base}/auth/signup?email=${encodeURIComponent(normalized)}`,

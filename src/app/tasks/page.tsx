@@ -14,6 +14,8 @@ import type { ReminderChoice } from '@/lib/reminderRule';
 import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useShareNotice } from '@/components/ShareNotice';
+import { useUser } from '@/components/UserContext';
+import { SafeBanner, SafeEmpty, PrivateToggle, droppedPrivacy } from '@/components/PrivateSafe';
 import { formatTime, formatDay } from '@/lib/time';
 import { isProjectOwner, canWrite } from '@/lib/scope';
 import { assigneeEmailsOf } from '@/lib/taskAccess';
@@ -61,6 +63,7 @@ function groupTasks(tasks: any[]): Group[] {
 export default function TasksPage() {
   const { toast, confirm } = useFeedback();
   const { confirmShare, shareDialog } = useShareNotice();
+  const { privateSafe } = useUser();
   const { data: session, status } = useSession();
   const [projects, setProjects] = useState<any[]>([]);
   const [activeProject, setActiveProject] = useState<any | null>(null);
@@ -71,8 +74,12 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [showDone, setShowDone] = useState(false);
   const [editing, setEditing] = useState<any | null>(null); // task being edited
-  const [draft, setDraft] = useState<{ title: string; description: string; dueAt: string; assigneeEmails: string[]; projectId: string; reminder: ReminderChoice | null }>(
-    { title: '', description: '', dueAt: '', assigneeEmails: [], projectId: '', reminder: null });
+  const [draft, setDraft] = useState<{ title: string; description: string; dueAt: string; assigneeEmails: string[]; projectId: string; reminder: ReminderChoice | null; isPrivate: boolean }>(
+    { title: '', description: '', dueAt: '', assigneeEmails: [], projectId: '', reminder: null, isPrivate: false });
+  // The quick-add starts in whichever vault you are looking at: a task added with the safe open
+  // and saved outside it would vanish the moment the list refreshed.
+  const [newPrivate, setNewPrivate] = useState(false);
+  useEffect(() => { setNewPrivate(privateSafe); }, [privateSafe]);
   // The profile default. It pre-fills the quick-add and stands in for every task written before
   // the setting existed — the phone needs it to know what a task with no reminder of its own means.
   const [reminderDefault, setReminderDefault] = useState<ReminderChoice | null>(null);
@@ -96,12 +103,14 @@ export default function TasksPage() {
       // A task written before the setting existed opens showing what it actually does today —
       // the profile default — rather than an empty control that means nothing.
       reminder: task.reminder || reminderDefault,
+      isPrivate: !!task.isPrivate,
     });
   };
 
   const saveEdit = async () => {
     if (!editing) return;
-    if (!(await confirmShare(projects.find(p => p._id === draft.projectId)))) return;
+    const group = projects.find(p => p._id === draft.projectId);
+    if (!(await confirmShare(group))) return;
     const res = await updateTask(editing._id, {
       title: draft.title.trim() || editing.title,
       description: draft.description.trim(),
@@ -109,8 +118,11 @@ export default function TasksPage() {
       assigneeEmails: draft.projectId ? draft.assigneeEmails : [],
       projectId: draft.projectId || null,
       reminder: draft.reminder,
+      isPrivate: draft.isPrivate,
     });
     if (res.success) {
+      // Moving a private task into a group is the one move that quietly unlocks it. Say so.
+      if (res.privacyDropped) toast(droppedPrivacy(group?.name), 'info');
       setEditing(null);
       fetchTasks(activeProject?._id);
       refreshReminders();
@@ -177,8 +189,12 @@ export default function TasksPage() {
       projectId: activeProject?._id,
       assigneeEmails: activeProject ? (assignee.length ? assignee : [myEmail]) : undefined,
       reminder: remind || undefined,   // undefined means "whatever my profile default is", resolved server-side
+      isPrivate: newPrivate,
     });
-    if (res.success) { setDue(''); fetchTasks(activeProject?._id); refreshReminders(); }
+    if (res.success) {
+      if (res.privacyDropped) toast(droppedPrivacy(activeProject?.name), 'info');
+      setDue(''); fetchTasks(activeProject?._id); refreshReminders();
+    }
     else { setTasks(prev => prev.filter(x => x._id !== tempId)); toast(res.error || 'Something went wrong', 'error'); }
   };
 
@@ -300,6 +316,10 @@ export default function TasksPage() {
         </Link>
       )}
 
+      {/* Personal only: a group's tasks never swap, so the banner would be describing a list the
+          safe is not touching. */}
+      {!activeProject && <SafeBanner noun="tasks" />}
+
       {editing && (
         <div className="modal-overlay" onClick={() => setEditing(null)}>
           <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '460px' }}>
@@ -335,6 +355,10 @@ export default function TasksPage() {
                       ...draft.assigneeEmails].filter(Boolean))]} />
                 </>
               )}
+              {/* Directly under the Project select, because that select is what takes the switch
+                  away — the reason lands where the cause is. */}
+              <PrivateToggle value={draft.isPrivate} onChange={next => setDraft(d => ({ ...d, isPrivate: next }))}
+                groupName={projects.find(p => p._id === draft.projectId)?.name} />
               <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '6px' }}>
                 {canRemove(editing) ? (
                 <button className="icon-btn danger" title="Delete task"
@@ -366,11 +390,18 @@ export default function TasksPage() {
           {/* Nobody tapped means it is yours, which is what adding a task to your own group
               usually means — the same default the single-select had. */}
           {activeProject && <AssigneePicker options={memberOptions} value={assignee} onChange={setAssignee} myEmail={myEmail} />}
+          {/* No group branch here on purpose: inside a group the scope is the page, already named
+              in the title and the placeholder, and a permanent "this cannot be private" line under
+              every group's quick-add is noise. The switch is simply not on offer there. */}
+          {!activeProject && <PrivateToggle compact value={newPrivate} onChange={setNewPrivate} />}
         </div>
       </form>
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
+      ) : tasks.length === 0 && privateSafe && !activeProject ? (
+        // "Nothing here yet" would be about the list the safe is currently hiding.
+        <SafeEmpty noun="tasks" />
       ) : tasks.length === 0 ? (
         <div className="empty-state">
           <p style={{ fontWeight: 800, marginBottom: '4px' }}>Nothing here yet</p>

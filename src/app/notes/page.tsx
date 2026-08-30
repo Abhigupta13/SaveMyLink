@@ -6,10 +6,14 @@ import { useSession } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
 import { Plus, Pin, Trash2, X, Paperclip, Camera, FileText, Image as ImageIcon } from 'lucide-react';
 import { getNotes, createNote, updateNote, deleteNote, attachToNote, removeAttachment } from '@/actions/note';
+import { goConnectDrive, DRIVE_OUTCOME_MESSAGE, type DriveOutcome } from '@/lib/driveConnect';
+import { useDriveGate } from '@/components/useDriveGate';
 import { getProjects, createProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useShareNotice } from '@/components/ShareNotice';
+import { useUser } from '@/components/UserContext';
+import { SafeBanner, SafeEmpty, PrivateToggle, droppedPrivacy } from '@/components/PrivateSafe';
 import { shrinkImage } from '@/lib/shrinkImage';
 import { formatTime, formatDay } from '@/lib/time';
 import { isProjectOwner } from '@/lib/scope';
@@ -27,6 +31,10 @@ const when = (iso: string) => {
 export default function NotesPage() {
   const { toast, confirm } = useFeedback();
   const { confirmShare, shareDialog } = useShareNotice();
+  const { privateSafe } = useUser();
+  // Asks before the picker rather than after the upload: attachments go to the user own Drive,
+  // so with none connected the file dialog can only ever end in a failure.
+  const ensureDrive = useDriveGate();
   const { data: session, status } = useSession();
   const myEmail = (session?.user?.email || '').toLowerCase();
   const [notes, setNotes] = useState<any[]>([]);
@@ -37,6 +45,7 @@ export default function NotesPage() {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [noteProject, setNoteProject] = useState('');   // project of the note being edited
+  const [notePrivate, setNotePrivate] = useState(false);   // what the switch is asking for; the server decides
   const [q, setQ] = useState('');
   const [attachments, setAttachments] = useState<any[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -73,6 +82,9 @@ export default function NotesPage() {
     setBody(note?.body || '');
     // A new note lands in whatever scope you are looking at — that is what you meant by being there
     setNoteProject(note ? (note.projectId?._id || '') : (scope?._id || ''));
+    // …and in whichever vault you are looking at. Writing a note with the safe open and landing
+    // outside it would file it straight into the list you cannot currently see.
+    setNotePrivate(note ? !!note.isPrivate : privateSafe);
     setAttachments(note?.attachments || []);
     noteIdRef.current = note?._id || null;
   };
@@ -84,11 +96,17 @@ export default function NotesPage() {
       if (id) await deleteNote(id);   // created by an attach that was then removed again
       setEditing(null); load(); return;
     }
-    if (!(await confirmShare(projects.find(p => String(p._id) === noteProject)))) return;
+    const group = projects.find(p => String(p._id) === noteProject);
+    if (!(await confirmShare(group))) return;
     const res = id
-      ? await updateNote(id, { title: title.trim(), body: body.trim(), projectId: noteProject })
-      : await createNote({ title: title.trim(), body: body.trim(), projectId: noteProject });
-    if (res.success) { setEditing(null); load(); } else toast(res.error || 'Something went wrong', 'error');
+      ? await updateNote(id, { title: title.trim(), body: body.trim(), projectId: noteProject, isPrivate: notePrivate })
+      : await createNote({ title: title.trim(), body: body.trim(), projectId: noteProject, isPrivate: notePrivate });
+    if (res.success) {
+      // Nothing failed — a padlock the group could open was never going to be kept, and this is
+      // the note saying so rather than the flag vanishing between saves.
+      if (res.privacyDropped) toast(droppedPrivacy(group?.name), 'info');
+      setEditing(null); load();
+    } else toast(res.error || 'Something went wrong', 'error');
   };
 
   const attach = async (files: FileList | null) => {
@@ -102,6 +120,10 @@ export default function NotesPage() {
       if (res.success) {
         noteIdRef.current = res.noteId!;   // first attach on a new note creates it
         setAttachments(a => [...a, res.attachment]);
+      } else if (res.needsDrive) {
+        toast('Taking you to Google to connect your Drive…', 'info');
+        goConnectDrive();
+        break;   // no point trying the rest of the batch against a Drive that is not connected
       } else toast(res.error || 'Could not attach that', 'error');
     }
     setUploading(false);
@@ -163,12 +185,12 @@ export default function NotesPage() {
           <input ref={cameraRef} type="file" hidden accept="image/*" capture="environment"
             onChange={e => attach(e.target.files)} />
           {hasCamera && (
-            <button className="icon-btn" onClick={() => cameraRef.current?.click()} disabled={uploading}
+            <button className="icon-btn" onClick={async () => { if (await ensureDrive('/notes')) cameraRef.current?.click(); }} disabled={uploading}
               title="Take a photo" aria-label="Take a photo">
               <Camera size={16} />
             </button>
           )}
-          <button className="icon-btn" onClick={() => fileRef.current?.click()} disabled={uploading}
+          <button className="icon-btn" onClick={async () => { if (await ensureDrive('/notes')) fileRef.current?.click(); }} disabled={uploading}
             title="Attach image or document" aria-label="Attach image or document">
             <Paperclip size={16} />
           </button>
@@ -185,11 +207,18 @@ export default function NotesPage() {
               <option value="">Personal — only me</option>
               {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
             </select>
+            {/* "Private to you" used to live here. It now means one specific thing — in the safe —
+                and a personal note is not that, so this says what it actually is. */}
             <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', fontWeight: 600 }}>
-              {noteProject ? 'Everyone in this project can see and edit it.' : 'Private to you.'}
+              {noteProject ? 'Everyone in this project can see and edit it.' : 'Only you can see it.'}
             </span>
           </div>
         )}
+
+        <div style={{ marginBottom: '12px' }}>
+          <PrivateToggle value={notePrivate} onChange={setNotePrivate}
+            groupName={projects.find(p => String(p._id) === noteProject)?.name} />
+        </div>
         <textarea className="field" placeholder="Write anything…" value={body} onChange={e => setBody(e.target.value)}
           rows={attachments.length ? 10 : 16} style={{ background: 'transparent', border: 'none', padding: '4px 0', resize: 'vertical', lineHeight: 1.65, fontSize: '0.95rem' }} />
 
@@ -224,7 +253,7 @@ export default function NotesPage() {
           <h1 className="page-title">{scope ? scope.name : 'Notes'}</h1>
           <p className="page-subtitle">
             {inScope.length
-              ? `${inScope.length} note${inScope.length === 1 ? '' : 's'}${scope ? ' · shared with the project' : ' · private to you'}`
+              ? `${inScope.length} note${inScope.length === 1 ? '' : 's'}${scope ? ' · shared with the project' : ' · only you'}`
               : 'Anything you want to remember'}
           </p>
         </div>
@@ -248,12 +277,19 @@ export default function NotesPage() {
         />
       </div>
 
+      {/* Only in Personal: a group's notes are the group's and do not swap, so saying the safe is
+          open over a list it is not touching would be the second lie. */}
+      {!scope && <SafeBanner noun="notes" />}
+
       {inScope.length > 5 && (
         <input className="field" placeholder="Search notes…" value={q} onChange={e => setQ(e.target.value)} style={{ marginBottom: '16px' }} />
       )}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
+      ) : filtered.length === 0 && privateSafe && !scope && !q ? (
+        // "No notes yet" here would be about a vault that is not on screen.
+        <SafeEmpty noun="notes" />
       ) : filtered.length === 0 ? (
         <div className="empty-state">
           <p style={{ fontWeight: 800, marginBottom: '4px' }}>{q ? 'No matches' : scope ? `No notes in ${scope.name}` : 'No notes yet'}</p>

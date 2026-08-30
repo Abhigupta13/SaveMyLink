@@ -49,6 +49,9 @@ const DocumentSchema = new mongoose.Schema({
   text: {
     type: String
   },
+  // Private is personal-only: a record filed under a group belongs to that group, so
+  // privacyOnWrite (lib/privacy) drops this flag the moment a projectId is set.
+  isPrivate: { type: Boolean, default: false },
   createdAt: {
     type: Date,
     default: Date.now
@@ -58,4 +61,6 @@ const DocumentSchema = new mongoose.Schema({
 DocumentSchema.index({ user: 1, folder: 1, createdAt: -1 });
 DocumentSchema.index({ projectId: 1, createdAt: -1 });
 
+// The Private Safe swaps the personal list, so isPrivate is part of that read, not a scan.
+DocumentSchema.index({ user: 1, isPrivate: 1, createdAt: -1 });
 export const Document = defineModel<any>('Document', DocumentSchema as any);

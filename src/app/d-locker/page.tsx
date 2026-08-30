@@ -1,14 +1,18 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { hintFor } from '@/lib/nav';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { getDocuments, addDocument, deleteDocument, moveDocument, fileDocumentUnderProject } from '@/actions/document';
+import { goConnectDrive, DRIVE_OUTCOME_MESSAGE, type DriveOutcome } from '@/lib/driveConnect';
+import { useDriveGate } from '@/components/useDriveGate';
 import { getProjects } from '@/actions/project';
 import { ExternalLink, Download, X } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useShareNotice } from '@/components/ShareNotice';
+import { useUser } from '@/components/UserContext';
+import { SafeBanner, SafeEmpty, PrivateToggle, droppedPrivacy } from '@/components/PrivateSafe';
 
 interface DocType {
   _id: string;
@@ -28,6 +32,10 @@ const DEFAULT_FOLDER = 'Personal';
 export default function DLockerPage() {
   const { toast, confirm } = useFeedback();
   const { confirmShare, shareDialog } = useShareNotice();
+  const { privateSafe } = useUser();
+  // Asks before the picker rather than after the upload: documents go to the user own Drive, so
+  // with none connected the file dialog can only ever end in a failure.
+  const ensureDrive = useDriveGate();
   const { data: session, status } = useSession();
   const router = useRouter();
   
@@ -44,8 +52,24 @@ export default function DLockerPage() {
   const [docName, setDocName] = useState('');
   const [docFolder, setDocFolder] = useState(DEFAULT_FOLDER);
   const [docProject, setDocProject] = useState('');   // '' = my locker only
+  // Uploading with the safe open files into the safe. Anything else drops the document into the
+  // half of the locker the user cannot currently see.
+  const [docPrivate, setDocPrivate] = useState(false);
+  useEffect(() => { setDocPrivate(privateSafe); }, [privateSafe]);
   const [externalLink, setExternalLink] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  /* The name the picker last filled in. Choosing a file names the document for you — nobody wants
+     to retype "Electricity bill March.pdf" — but only while the box still holds what we put there.
+     The moment somebody types their own name it is theirs, and re-picking a file will not eat it. */
+  const autoNamed = useRef('');
+  const docFileRef = useRef<HTMLInputElement>(null);
+
+  const pickFile = (file: File | null) => {
+    setSelectedFile(file);
+    if (!file) return;
+    const untouched = !docName.trim() || docName === autoNamed.current;
+    if (untouched) { autoNamed.current = file.name; setDocName(file.name); }
+  };
 
   const fetchDocs = useCallback(async () => {
     setIsLoading(true);
@@ -83,6 +107,9 @@ export default function DLockerPage() {
     if (!(await confirmShare(projects.find(p => p._id === projectId)))) return;
     const res = await fileDocumentUnderProject(id, projectId);
     if (res.success) {
+      // Sharing a document out of the safe is exactly the move that would leave a padlock on
+      // something the whole group can open.
+      if (res.privacyDropped) toast(droppedPrivacy(projects.find(p => p._id === projectId)?.name), 'info');
       const project = projects.find(p => p._id === projectId) || null;
       setPreview((p: any) => p && { ...p, projectId: project && { _id: project._id, name: project.name } });
       fetchDocs();
@@ -100,6 +127,9 @@ export default function DLockerPage() {
     formData.append('type', docType);
     formData.append('folder', docFolder);
     formData.append('projectId', docProject);
+    // Sent as asked for, not as decided: privacyOnWrite has the final word server-side, and
+    // privacyDropped comes back when a group overruled it.
+    formData.set('isPrivate', String(docPrivate));
 
     if (docType === 'file' && selectedFile) {
       formData.append('file', selectedFile);
@@ -115,12 +145,18 @@ export default function DLockerPage() {
     setIsUploading(false);
     
     if (res.success) {
+      if (res.privacyDropped) toast(droppedPrivacy(projects.find(p => p._id === docProject)?.name), 'info');
       setIsAddingDoc(false);
       setDocName('');
       setExternalLink('');
       setSelectedFile(null);
+      autoNamed.current = '';
       setActiveFolder(docFolder);   // land on the folder you just filed into
       fetchDocs();
+    } else if (res.needsDrive) {
+      // Not an error, a missing step — so perform it rather than naming it. They land back here.
+      toast('Taking you to Google to connect your Drive…', 'info');
+      goConnectDrive();
     } else {
       toast(res.error || 'Failed to add document', 'error');
     }
@@ -194,6 +230,10 @@ export default function DLockerPage() {
         </button>
       </header>
 
+      {/* The locker has no scope switch — personal and group documents share one grid — so the
+          banner has to admit that only half of it swapped. */}
+      <SafeBanner noun="files" also="Anything shared with a group is here in both." />
+
       {folders.length > 1 && (
         <div className="folder-bar">
           {[ALL, ...folders].map(f => (
@@ -232,6 +272,11 @@ export default function DLockerPage() {
               </div>
             </div>
           ))
+        ) : privateSafe && !docs.length ? (
+          /* "Your Digi Locker is empty" about a locker that is not empty, only swapped. Keyed on
+             docs rather than the folder: with the safe open the folder bar has nothing to draw, so
+             "Nothing in Taxes yet" would be a dead end with no way back to All. */
+          <SafeEmpty noun="files" />
         ) : (
           <div className="empty-locker-state">
             <div className="empty- locker-icon">🗄️</div>
@@ -307,6 +352,9 @@ export default function DLockerPage() {
                 <label className="field-label">Document name</label>
                 <input className="field" type="text" placeholder="e.g. My Resume, Passport Copy"
                   value={docName} onChange={(e) => setDocName(e.target.value)} required autoFocus />
+                {docName && docName === autoNamed.current && (
+                  <span className="field-hint">Taken from the file — edit it if you like.</span>
+                )}
               </div>
 
               <div>
@@ -326,6 +374,10 @@ export default function DLockerPage() {
                 </div>
               )}
 
+              {/* Under the project select, which is the control that takes it away. */}
+              <PrivateToggle value={docPrivate} onChange={setDocPrivate}
+                groupName={projects.find(p => p._id === docProject)?.name} />
+
               <div className="seg-group">
                 {(['file', 'link'] as const).map(t => (
                   <button key={t} type="button" className={`seg-btn ${docType === t ? 'active' : ''}`} onClick={() => setDocType(t)}>
@@ -337,11 +389,14 @@ export default function DLockerPage() {
               {docType === 'file' ? (
                 <div>
                   <label className="field-label">Select file</label>
-                  <input type="file" id="doc-file" style={{ display: 'none' }}
-                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
-                  <label htmlFor="doc-file" className={`file-drop ${selectedFile ? 'has-file' : ''}`}>
+                  <input ref={docFileRef} type="file" id="doc-file" style={{ display: 'none' }}
+                    onChange={(e) => pickFile(e.target.files?.[0] || null)} />
+                  {/* A button rather than a <label htmlFor>: a label opens the system file dialog
+                      natively, and there is no holding that back while the Drive check runs. */}
+                  <button type="button" className={`file-drop ${selectedFile ? 'has-file' : ''}`}
+                    onClick={async () => { if (await ensureDrive('/d-locker')) docFileRef.current?.click(); }}>
                     {selectedFile ? selectedFile.name : 'Click to choose a file…'}
-                  </label>
+                  </button>
                 </div>
               ) : (
                 <div>

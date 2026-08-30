@@ -8,11 +8,20 @@ import { authOptions } from "@/lib/auth";
 import { revalidatePath } from 'next/cache';
 import { grantSafe, hasSafe, revokeSafe } from '@/lib/safeCookie';
 
+/**
+ * Every screen whose list the safe swaps. It started as /links and the home page, which was the
+ * whole of it while only links and categories had a padlock; now notes, tasks, meetings, the
+ * locker and contacts each swap too, and a cached page showing the other vault is the safe
+ * failing in the one direction that matters. Both ends of the toggle clear the same set — a
+ * refresh on lock and not on unlock is how the two halves drift apart.
+ */
+const SAFE_PATHS = ['/', '/links', '/notes', '/tasks', '/mom', '/d-locker', '/contacts'];
+const refreshSwappedLists = () => { for (const path of SAFE_PATHS) revalidatePath(path); };
+
 // Lock the safe: revoke the grant so private links can't be reached until the PIN is re-entered
 export async function lockPrivateSafe() {
   await revokeSafe();
-  revalidatePath('/links');
-  revalidatePath('/');
+  refreshSwappedLists();
   return { success: true };
 }
 
@@ -68,7 +77,10 @@ export async function verifyPrivatePin(pin: string) {
 
   const isValid = await bcrypt.compare(pin, user.privatePin);
 
-  if (isValid) await grantSafe((session.user as any).id);
+  if (isValid) {
+    await grantSafe((session.user as any).id);
+    refreshSwappedLists();
+  }
 
   return {
     success: isValid

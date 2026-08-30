@@ -3,6 +3,7 @@ import { hintFor } from '@/lib/nav';
 import { getCategories } from '@/actions/category';
 import CategoryFilter from '@/components/CategoryFilter';
 import LinksDisplay from '@/components/LinksDisplay';
+import { SafeBanner, SafeEmpty } from '@/components/PrivateSafe';
 import { cookies } from 'next/headers';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
@@ -46,7 +47,11 @@ export default async function LinksPage({
   return (
     <main className="container links-page-container">
       <CategoryFilter categories={categories} activeCategoryId={categoryId} />
-      
+
+      {/* This page has always swapped its list silently. The state is known here on the server —
+          off the cookie or ?private=true — so hand it over rather than let the banner flash in. */}
+      <SafeBanner noun="links" open={privateSafe} />
+
       {links.length > 0 ? (
         <LinksDisplay 
           key={`${categoryId || 'all'}-${search || ''}-${privateSafe}`} 
@@ -57,6 +62,9 @@ export default async function LinksPage({
           search={search}
           privateSafe={privateSafe}
         />
+      ) : privateSafe && !search ? (
+        // "Nothing saved yet" with the safe open is a lie about a full collection.
+        <SafeEmpty noun="links" />
       ) : (
         <div className="empty-state" style={{ marginTop: '24px' }}>
           <p style={{ fontWeight: 800, marginBottom: '4px' }}>{search ? 'No matches' : categoryId ? 'Nothing in this category yet' : 'Nothing saved yet'}</p>

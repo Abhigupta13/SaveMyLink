@@ -16,6 +16,7 @@ import { myProjectFilter } from "@/lib/projectAccess";
 import { retrieve, type Candidate } from "@/lib/retrieval";
 import { isProjectOwner, isProjectCreator, canWrite, type OwnableProject } from "@/lib/scope";
 import { hasSafe } from "@/lib/safeCookie";
+import { assistantFilter, privacyOnWrite } from "@/lib/privacy";
 import { isAdmin } from "@/lib/isAdmin";
 import { dayKey, spendQuestion, capMessage, SHARED_OUT_MESSAGE, JARVIS_DAILY_LIMIT } from "@/lib/jarvisLimit";
 import { isHowTo, HOW_IT_WORKS, EXTRA_PAGES } from "@/lib/manual";
@@ -70,22 +71,39 @@ const fmtIn = (tz: string): Fmt => v => formatInZone(v, tz);
 async function gatherContext(userId: string, email: string, includePrivate: boolean, d: Fmt) {
   const ids = new Set<string>();
   const groupOf = new Map<string, string>();   // id → group name, for the shared chip on cited items
-  const linkQuery: any = { userId };
-  if (!includePrivate) linkQuery.isPrivate = { $ne: true };
+
+  /**
+   * Jarvis is the ONE place the safe adds instead of swapping, and this is the fragment that does
+   * it: `{}` with the safe open — everything, private and not — and an exclusion with it shut.
+   * A list that answers "your notes" with only the secret ones is a list; an assistant that
+   * answers "what are my tasks?" with only the secret ones is broken.
+   *
+   * The other half of the bargain is that shut means SHUT. Every personal query below carries
+   * this, so with the safe locked a private record cannot be cited, summarised, counted or even
+   * acknowledged — it is not in the context at all, and Jarvis can only speak from the context.
+   * It was on links alone, which is why locked Jarvis would happily read out a private note.
+   *
+   * Project branches never carry it. A group record cannot be private (lib/privacy) and hiding
+   * shared work because you opened your own safe would be the exact opposite of the rule.
+   */
+  const personal = assistantFilter(includePrivate) ?? {};
+
+  const linkQuery: any = { userId, ...personal };
   const projects = await Project.find(await myProjectFilter(userId, email)).lean();
   const projectIds = projects.map(p => p._id);
   const pname = new Map(projects.map(p => [String(p._id), p.name]));
 
   const [links, tasks, moms, contacts, notes, docs] = await Promise.all([
     Link.find(linkQuery).populate('category', 'name').sort({ createdAt: -1 }).limit(600).lean(),
-    Task.find({ $or: [{ userId }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] })
+    // The assignee branches are group work — someone else handed it to me — so they stay open.
+    Task.find({ $or: [{ userId, ...personal }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] })
       .populate('assigneeId', 'email').sort({ completed: 1, dueAt: 1 }).limit(400).lean(),
     // my project meetings + my personal ones, which have no project to match on
-    Mom.find({ $or: [{ projectId: { $in: projectIds } }, { userId }] }).sort({ createdAt: -1 }).limit(60).lean(),
-    Contact.find({ userId }).lean(),
+    Mom.find({ $or: [{ projectId: { $in: projectIds } }, { userId, ...personal }] }).sort({ createdAt: -1 }).limit(60).lean(),
+    Contact.find({ userId, ...personal }).lean(),
     // Mine plus my projects' — a shared note or contract is context I am expected to know
-    Note.find({ $or: [{ userId }, { projectId: { $in: projectIds } }] }).sort({ updatedAt: -1 }).limit(300).lean(),
-    Doc.find({ $or: [{ user: userId }, { projectId: { $in: projectIds } }] }).sort({ createdAt: -1 }).limit(120).lean(),
+    Note.find({ $or: [{ userId, ...personal }, { projectId: { $in: projectIds } }] }).sort({ updatedAt: -1 }).limit(300).lean(),
+    Doc.find({ $or: [{ user: userId, ...personal }, { projectId: { $in: projectIds } }] }).sort({ createdAt: -1 }).limit(120).lean(),
   ]);
 
   const items: Candidate[] = [];
@@ -177,10 +195,17 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
  */
 async function applyActions(actions: any[], env: {
   userId: string; email: string; tz: string; d: Fmt;
-  projects: any[]; question: string; confirmOn: boolean;
+  projects: any[]; question: string; confirmOn: boolean; unlocked: boolean;
 }) {
-    const { userId, email, tz, d, projects, question, confirmOn } = env;
+    const { userId, email, tz, d, projects, question, confirmOn, unlocked } = env;
     const projectIds = projects.map(p => p._id);
+    /* The same safe rule the context was built under, carried onto the writes. With it shut a
+       private record is not in DATA, so the model has no id to send — but every update_ branch
+       below fetches by an id off the wire and then reports the title back, and "cannot even
+       acknowledge" has to survive an id arriving from anywhere else. Safe to AND over the whole
+       lookup rather than a branch of it: a group record can never be private, so this narrows
+       nothing shared. */
+    const personal = assistantFilter(unlocked) ?? {};
     const pending: JarvisPending[] = [];
     // Personal writes stay silent; a write landing in a group asks first, exactly like the sheet
     // the Links and Notes composers already show before the first share into a group.
@@ -255,7 +280,7 @@ async function applyActions(actions: any[], env: {
              ctx.ids — "the id was in the context we built, so it must be mine" — which was true
              only while the context held the whole vault. It is a scope check either way, but a
              real one belongs here, next to the write, not in a set assembled a hundred lines up. */
-          const task = await Task.findOne({ _id: a.id, $or: [{ userId }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] });
+          const task = await Task.findOne({ _id: a.id, ...personal, $or: [{ userId }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] });
           if (!task) continue;
           if (!mayWrite(task.projectId)) continue;   // visible in a view-only group is not editable
           if (hold(a, task.projectId)) continue;
@@ -286,7 +311,7 @@ async function applyActions(actions: any[], env: {
           created.push({ id: String(saved._id), type: 'task', title: saved.title, detail: `Updated${dueAt ? ` · due ${d(dueAt)}` : ''}`, urgent: !saved.completed && !!dueAt && dueAt.getTime() - Date.now() < 48 * 3600e3 });
           createdTasks.push({ _id: String(saved._id), title: saved.title, dueAt: dueAt ? dueAt.toISOString() : null, completed: saved.completed, createdAt: saved.createdAt ?? null, reminder: saved.reminder ?? null });
         } else if (a?.type === 'update_note' && a.id) {
-          const note = await Note.findOne({ _id: a.id, userId });
+          const note = await Note.findOne({ _id: a.id, userId, ...personal });
           if (!note) continue;
           const set = patch(a, { title: str, text: str });
           if (set.text !== undefined) { note.body = set.text; delete set.text; }
@@ -298,7 +323,7 @@ async function applyActions(actions: any[], env: {
           await note.save();
           created.push({ id: String(note._id), type: 'note', title: note.title || note.body.slice(0, 60), detail: 'Updated in Notes' });
         } else if (a?.type === 'update_contact' && a.id) {
-          const contact = await Contact.findOne({ _id: a.id, userId });
+          const contact = await Contact.findOne({ _id: a.id, userId, ...personal });
           if (!contact) continue;
           Object.assign(contact, patch(a, CONTACT_FIELDS));
           const add = str(a.appendNote);
@@ -395,7 +420,13 @@ async function applyActions(actions: any[], env: {
           created.push({ id: String(task._id), type: 'task', title: task.title, detail: dueAt ? `Created · due ${d(dueAt)}` : 'Created', urgent: !!dueAt && dueAt.getTime() - Date.now() < 48 * 3600e3 });
           createdTasks.push({ _id: String(task._id), title: task.title, dueAt: dueAt ? dueAt.toISOString() : null, createdAt: task.createdAt ?? null, reminder: task.reminder ?? null });
         } else if (a?.type === 'create_note' && (a.text || a.title)) {
-          const note = await Note.create({ userId, title: a.title ? String(a.title) : undefined, body: String(a.text || '') });
+          // Personal by construction — Jarvis has no way to file a note into a group — but it still
+          // goes through the rule rather than around it, so a model that one day starts emitting
+          // isPrivate cannot store a padlock the rest of the app would not have allowed.
+          const note = await Note.create({
+            userId, title: a.title ? String(a.title) : undefined, body: String(a.text || ''),
+            isPrivate: privacyOnWrite(a.isPrivate),
+          });
           created.push({ id: String(note._id), type: 'note', title: note.title || String(a.text).slice(0, 60), detail: 'Saved to Notes' });
         } else if (a?.type === 'save_link') {
           // extractUrl, not the raw string: a dictated URL arrives inside a sentence, and a model
@@ -463,7 +494,10 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
       { _id: userId, jarvisCountDate: today, jarvisCount: { $gt: 0 } }, { $inc: { jarvisCount: -1 } },
     ).catch(() => {});
 
-    const ctx = await gatherContext(userId, email, await hasSafe(userId), d);
+    // Read once and used twice: the context Jarvis is built from and the writes it is allowed to
+    // make have to be looking at the same safe, or it could edit what it cannot see.
+    const unlocked = await hasSafe(userId);
+    const ctx = await gatherContext(userId, email, unlocked, d);
 
     // Retrieval, not a dump: score the vault against the question here and send only what answers
     // it. ctx.items already holds nothing but rows myProjectFilter let through, and retrieve()
@@ -558,7 +592,7 @@ NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
     const parsed = res.data;
     // Everything the model asked to change goes through applyActions — the only path that writes.
     const { created, createdTasks, nav, pending } = await applyActions(parsed.actions || [], {
-      userId, email, tz, d, projects: ctx.projects, question, confirmOn,
+      userId, email, tz, d, projects: ctx.projects, question, confirmOn, unlocked,
     });
     if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); revalidatePath('/contacts'); }
 
@@ -608,7 +642,10 @@ export async function runJarvisActions(actions: unknown[], timeZone = '') {
 
     // confirmOn: false — this IS the confirmation, and asking again would be a loop.
     const { created, createdTasks, nav } = await applyActions(actions, {
+      // Re-read, not carried over from the first call: the safe can have been locked during the
+      // round trip through the browser, and this path re-checks everything for exactly that reason.
       userId, email, tz, d: fmtIn(tz), projects, question: '', confirmOn: false,
+      unlocked: await hasSafe(userId),
     });
     if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); revalidatePath('/contacts'); }
     return { success: true, items: created, createdTasks, nav };

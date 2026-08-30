@@ -2554,7 +2554,7 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .seg-group { display: flex; gap: 4px; padding: 4px; background: var(--bg-tertiary); border-radius: 12px; }
 .seg-btn { flex: 1; padding: 9px 12px; border-radius: 9px; border: none; background: none; color: var(--text-secondary); font: inherit; font-size: 0.85rem; font-weight: 700; cursor: pointer; transition: var(--transition); }
 .seg-btn.active { background: var(--accent-strong); color: #fff; }
-.file-drop { display: flex; align-items: center; justify-content: center; min-height: 84px; padding: 16px; border-radius: 14px; border: 1px dashed var(--border-color); background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.85rem; font-weight: 600; cursor: pointer; text-align: center; transition: var(--transition); word-break: break-all; }
+.file-drop { display: flex; width: 100%; align-items: center; justify-content: center; min-height: 84px; padding: 16px; border-radius: 14px; border: 1px dashed var(--border-color); background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.85rem; font-weight: 600; cursor: pointer; text-align: center; transition: var(--transition); word-break: break-all; }
 .file-drop:hover { border-color: var(--accent-color); color: var(--text-primary); }
 .file-drop.has-file { border-style: solid; border-color: var(--accent-color); color: var(--text-primary); }
 
@@ -2623,6 +2623,53 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .safe-row { display: flex; align-items: center; gap: 14px; padding: 14px 16px; }
 .safe-icon { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px; background: var(--bg-tertiary); color: var(--text-secondary); flex-shrink: 0; }
 .safe-icon.on { background: var(--accent-soft); color: var(--accent-text); }
+.safe-icon.sm { width: 32px; height: 32px; border-radius: 10px; }
+
+/* ---------- Private Safe: the swap, said out loud (components/PrivateSafe.tsx) ----------
+   Unlocking REPLACES the personal list, so every page under it is showing a different set of
+   records. Tinted rather than bordered-red: nothing is wrong, the list is simply not the one you
+   normally see. The grid keeps the Lock button on its own column so the sentence can wrap under
+   the title on a 360px phone instead of squeezing it. */
+.safe-banner {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+  column-gap: 12px; row-gap: 3px; padding: 12px 14px; margin-bottom: 16px;
+  border-radius: 16px; background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 32%, transparent);
+}
+.safe-banner > .safe-icon { grid-row: 1 / span 2; background: transparent; }
+.safe-banner-title { grid-column: 2; font-size: 0.88rem; font-weight: 800; color: var(--text-primary); }
+.safe-banner-sub { grid-column: 2; font-size: 0.76rem; font-weight: 600; line-height: 1.45; color: var(--text-secondary); }
+/* 44px tall on purpose: this is the way out of the safe, and it is thumb-sized in the webview. */
+.safe-lock {
+  grid-column: 3; grid-row: 1 / span 2; display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; flex-shrink: 0; min-height: 44px; padding: 0 14px; border-radius: 12px;
+  border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary);
+  font: inherit; font-size: 0.82rem; font-weight: 800; cursor: pointer; transition: var(--transition);
+}
+.safe-lock:hover { border-color: var(--accent-color); color: var(--accent-text); }
+
+/* The composer switch. The whole row is the label, so the tap target is the row and not the 44px
+   of slider — and it stays a row at any width, which the wrapping ones above do not. */
+.private-toggle {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 7px 12px;
+  border-radius: 14px; background: var(--bg-tertiary); border: 1px solid transparent; cursor: pointer;
+  transition: var(--transition);
+}
+.private-toggle.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent-color) 32%, transparent); }
+.private-toggle.on .safe-icon { background: transparent; color: var(--accent-text); }
+.private-toggle-text { flex: 1; min-width: 0; }
+.private-toggle-title { display: block; font-size: 0.82rem; font-weight: 700; color: var(--text-primary); }
+.private-toggle .field-hint { margin-top: 2px; }
+.private-toggle .switch { flex-shrink: 0; }
+/* What replaces the switch once a group owns the record. Deliberately quiet — a statement of
+   fact, not a warning. */
+.private-note {
+  display: flex; align-items: center; gap: 8px; min-height: 40px; margin: 0; padding: 8px 12px;
+  border-radius: 14px; background: var(--bg-tertiary); color: var(--text-tertiary);
+  font-size: 0.75rem; font-weight: 600; line-height: 1.45;
+}
+.private-note svg { flex-shrink: 0; }
+.quick-add-meta .private-toggle { flex: 1 1 100%; }   /* its own line, like the assignee row */
 
 /* ---------- Projects: grid + one-page workspace ---------- */
 .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
@@ -2886,3 +2933,31 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
    animationstart in AuthField. Without this a filled box can sit above "Please enter your email". */
 @keyframes authAutofill { from { /* no visual change */ } to { /* no visual change */ } }
 .field:-webkit-autofill { animation-name: authAutofill; animation-duration: 1ms; }
+
+/* ---------- Weekly digest ----------
+   Drawn once and used twice: in full on /digest, capped on Home under the vault tiles. The rows
+   deliberately match the card idiom already used for tasks and links elsewhere, so the digest reads
+   as the same app looking at the same things, not a second inbox. */
+.dg-title { font-size: 2rem; font-weight: 800; letter-spacing: -0.03em; color: var(--text-primary); margin-bottom: 4px; }
+.dg-lede { color: var(--text-secondary); font-size: 0.85rem; font-weight: 600; margin-bottom: 28px; }
+.dg-block { margin-top: 26px; }
+.dg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.dg-label { font-size: 0.7rem; font-weight: 800; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; }
+.dg-empty { margin: 0; color: var(--text-secondary); font-weight: 600; font-size: 0.88rem; }
+.dg-list { display: flex; flex-direction: column; gap: 10px; }
+.dg-row { display: flex; flex-direction: column; gap: 3px; padding: 13px 16px; border: 1px solid var(--border-color); border-radius: 16px; background: var(--bg-secondary); text-decoration: none; }
+.dg-row:hover { border-color: var(--accent-color); }
+.dg-row.link { flex-direction: row; align-items: center; gap: 12px; }
+.dg-row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dg-row-text { min-width: 0; }
+.dg-row-title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--text-primary); font-size: 0.92rem; }
+.dg-sub { display: block; font-size: 0.75rem; color: var(--text-secondary); font-weight: 600; }
+.dg-due { font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); }
+/* Late work is amber everywhere in this app; the digest is not the place to invent a second rule. */
+.dg-due.late { color: var(--warn-color); }
+.dg-thumb { width: 56px; height: 42px; object-fit: cover; border-radius: 10px; flex-shrink: 0; }
+.home-digest { margin-top: 8px; }
+
+/* A quiet note under a field — used where the app has filled something in for you and wants to say
+   so without making it look like an error. */
+.field-hint { display: block; margin-top: 5px; font-size: 0.72rem; font-weight: 600; color: var(--text-tertiary); }
