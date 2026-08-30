@@ -6,8 +6,10 @@ import { Suggestion } from "@/lib/models/Suggestion";
 import { getServerSession } from "next-auth";
 import { saveUpload } from "@/lib/storage";
 import { isAdmin, adminEmails } from "@/lib/isAdmin";
+import { feedbackDriveEmail } from "@/lib/feedbackDrive";
+import { User } from "@/lib/models/User";
 import { sendMail, suggestionEmail } from "@/lib/mailer";
-import { appUrl } from "@/lib/url";
+import { shareUrl } from '@/lib/url';
 
 /**
  * "Help us improve" — anyone signed in can send a bug, an idea, or anything else, with an
@@ -26,14 +28,31 @@ export async function submitSuggestion(formData: FormData) {
     const kindIn = String(formData.get('kind') || 'other') as typeof kinds[number];
     const kind = kinds.includes(kindIn) ? kindIn : 'other';
 
+    /* Fail open, always. A lost screenshot beats a lost bug report, and the reports worth having
+       come from the people least likely to have connected a Drive. Every failure below — no admin
+       Drive configured, that Drive disconnected, its quota full, the file too big — drops the image
+       and sends the report anyway.
+
+       Note this changes the old behaviour deliberately: the 4MB guard used to `return` an error and
+       throw the whole report away. */
     let shot;
+    let shotDropped: string | undefined;
     const file = formData.get('file') as File | null;
     if (file && file.size) {
-      // Same 4MB guard as note attachments: Vercel caps a serverless body at ~4.5MB and a
-      // readable message beats an opaque platform 413. Screenshots are downscaled client-side.
-      if (file.size > 4 * 1024 * 1024) return { success: false, error: 'Screenshot is too large (max 4MB)' };
-      const { key, url, mimeType, size } = await saveUpload(session.user.id, file);
-      shot = { key, url, mimeType, size };   // no extractText — it is a picture of a broken screen
+      const adminEmail = feedbackDriveEmail();
+      const owner = adminEmail
+        ? await User.findOne({ email: adminEmail, deletedAt: null }).select('_id').lean<{ _id: unknown } | null>()
+        : null;
+      if (!owner) {
+        shotDropped = 'unavailable';
+        console.error('[suggestion] no FEEDBACK_DRIVE_EMAIL with a connected Drive — screenshot dropped');
+      } else {
+        // The screenshot goes to the ADMIN's Drive, not the reporter's: it is being sent to us, and
+        // asking someone to connect Google before they can report a bug is how bugs stop arriving.
+        const saved = await saveUpload(String(owner._id), file, { source: 'feedback' });
+        if (saved.ok) shot = { key: saved.key, url: saved.url, mimeType: saved.mimeType, size: saved.size };
+        else { shotDropped = saved.reason; console.error('[suggestion] screenshot dropped:', saved.reason); }
+      }
     }
 
     const from = (session.user.email || '').toLowerCase();
@@ -52,7 +71,7 @@ export async function submitSuggestion(formData: FormData) {
     try {
       const to = adminEmails().join(',');
       if (to) {
-        const base = appUrl();
+        const base = shareUrl();
         await sendMail({
           to,
           replyTo: from || undefined,   // hitting reply answers the reporter, not us
@@ -66,7 +85,9 @@ export async function submitSuggestion(formData: FormData) {
       console.error('Suggestion saved but the notification email failed:', error);
     }
 
-    return { success: true };
+    // The toast says "Sent" either way, and adds what happened to the image when one was dropped —
+    // silently losing an attachment the person deliberately took is worse than admitting it.
+    return { success: true, shotDropped };
   } catch (error) {
     console.error('Failed to submit suggestion:', error);
     return { success: false, error: 'Could not send that — try again' };

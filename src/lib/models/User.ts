@@ -25,6 +25,15 @@ export interface IUser extends Document {
   // The user's own Sarvam API key, sealed by lib/secretBox. `last4` is the only part that is
   // ever allowed back out to a browser — enough to recognise which key is stored, useless alone.
   sarvamKey?: { box: string; last4: string };
+  // The user's Google Drive connection — the only file storage there is, so no Drive means no
+  // uploads. `box` is seal(refresh_token) via lib/secretBox, and it is the one field that must
+  // never be selected into anything a browser can read.
+  //
+  // `email` is deliberately NOT User.email: a password-only account connects whatever Google
+  // account it likes, and someone hunting for their own files needs to be told WHICH Drive they
+  // are in. `revokedAt` is stamped when Google finally answers invalid_grant — the box is kept
+  // alongside it so the card can say "reconnect" instead of "never connected".
+  drive?: { box: string; email: string; rootFolderId?: string; connectedAt: Date; revokedAt?: Date | null };
   // Granted by an admin to someone who paid the founder directly — spends the founder's env key.
   // `By`/`At` are the audit: with two admins, "who let them in" is the half worth keeping, and
   // the Event trail cannot hold this because every event belongs to a project and this has none.
@@ -81,6 +90,17 @@ const UserSchema: Schema<IUser> = new Schema({
   tourDone: { type: Boolean, default: false },
   // _id: false — this is one value, not a subdocument anyone needs to address
   sarvamKey: { type: { box: String, last4: String }, _id: false },
+  // _id: false for the same reason as sarvamKey — one value, not a subdocument to address
+  drive: {
+    type: {
+      box: String,
+      email: { type: String, lowercase: true },
+      rootFolderId: String,
+      connectedAt: Date,
+      revokedAt: { type: Date, default: null },
+    },
+    _id: false,
+  },
   sarvamAccess: { type: Boolean },
   sarvamAccessBy: { type: String },
   sarvamAccessAt: { type: Date },
