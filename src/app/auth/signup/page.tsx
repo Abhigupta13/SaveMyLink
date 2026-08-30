@@ -158,7 +158,7 @@ function SignupForm() {
 
         <p className="auth-foot">Already have an account? <Link href="/auth/signin">Sign in</Link></p>
         <p className="auth-foot" style={{ fontSize: '0.72rem' }}>
-          By creating an account you agree to our <Link href="/terms">Terms &amp; how your data is handled</Link>.
+          By creating an account you agree to our <Link href="/terms">Terms and conditions</Link>.
         </p>
     </AuthShell>
   );

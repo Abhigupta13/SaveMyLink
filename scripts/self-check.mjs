@@ -9,7 +9,8 @@ import { isAdmin, adminEmails } from '../src/lib/isAdmin.ts';
 import { suggestionEmail, inviteEmail, otpEmail } from '../src/lib/mailer.ts';
 import { zonedToUtc, safeZone, DEFAULT_TZ, formatTime, formatDay, formatDate, formatInZone } from '../src/lib/time.ts';
 import { checkOtp, hashOtp, newOtp, isSixDigits, MAX_OTP_ATTEMPTS } from '../src/lib/otp.ts';
-import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite, withinProject, canAccessDoc } from '../src/lib/scope.ts';
+import { projectScope, ownerScope, writerScope, isProjectOwner, isProjectCreator, isProjectViewer, canWrite, canChat, withinProject, canAccessDoc } from '../src/lib/scope.ts';
+import { privateFilter, canBePrivate, privacyOnWrite, assistantFilter } from '../src/lib/privacy.ts';
 import { mergeContacts, peopleByProject } from '../src/lib/contacts.ts';
 import { canWorkOn, canSignOff, needsOwner, assigneeEmailOf, assigneeEmailsOf, assigneesAfterLeaving } from '../src/lib/taskAccess.ts';
 import { allowedAssignees, MAX_ASSIGNEES } from '../src/lib/validation.ts';
@@ -23,6 +24,7 @@ import { retrieve, terms } from '../src/lib/retrieval.ts';
 import { spendQuestion, dayKey, capMessage, SHARED_OUT_MESSAGE } from '../src/lib/jarvisLimit.ts';
 import { isHowTo, EXTRA_PAGES, HOW_IT_WORKS } from '../src/lib/manual.ts';
 import { pickVoice } from '../src/lib/voice.ts';
+import { keyFor, ownsKey, ownerOfKey, driveIdOfKey, isDriveKey } from '../src/lib/driveKey.ts';
 import {
   reminderTimes, reminderChoice, countdownLabel, REMINDER_OPTIONS, REMINDER_VALUES,
   DEFAULT_CHOICE, SMART_FRACTION, SLOTS, NAG_DAYS, NAG_HOUR, PRE_SLOT, DUE_SLOT, NAG_SLOT_START,
@@ -612,6 +614,16 @@ const ownerAndViewer = { ...withViewer, ownerEmails: [VIEWER], memberEmails: ['d
 assert.equal(isProjectViewer(ownerAndViewer, VIEWER), false, 'an owner is never demoted by a viewer entry');
 assert.equal(canWrite(ownerAndViewer, VIEWER), true);
 
+// canChat is the ONE place a viewer may write, and the whole point of it being its own predicate
+// is that reversing that decision is a one-line change here rather than a hunt through the actions.
+// If these two lines ever disagree with canWrite for a viewer, the decision has been changed.
+assert.equal(canChat(withViewer, VIEWER), true, 'a viewer talks, even though they change nothing else');
+assert.equal(canWrite(withViewer, VIEWER), false, 'and still writes nothing else — the two answers differ on purpose');
+assert.equal(canChat(withViewer, 'dev@x.com'), true, 'a member talks');
+assert.equal(canChat(withViewer, 'me@x.com'), true, 'so does the creator');
+assert.equal(canChat(withViewer, 'nobody@x.com'), false, 'a stranger does not');
+assert.equal(canChat(null, 'dev@x.com'), false, 'no project, no chat');
+
 // A view-only client can be given work and still may not close it — the assigneeEmail branch
 // of canWorkOn is the one gate a viewer can otherwise reach, which is why the actions ask
 // canWriteProject first and this assertion exists to say so out loud.
@@ -741,6 +753,72 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
   const mom = readFileSync(new URL('../src/actions/mom.ts', import.meta.url), 'utf8');
   assert.ok(!mom.includes('momScope'), 'mom.ts no longer gates an existing meeting on its projectId alone');
   assert.equal((mom.match(/canAccess\(mom,/g) || []).length, 5, 'poll, extract, confirm, impact and update each check the document');
+}
+
+// ---------------------------------------------------------------------------
+// The Private Safe. Two rules that every read and every write in the app has to agree on, so they
+// live in one pure module and are held to account here rather than in eight action files.
+{
+  // 1. The safe SWAPS the personal vault — it does not add to it. Locked shows what is not
+  //    private, unlocked shows what is. Links and Categories have always behaved this way; this
+  //    is what makes notes, tasks, meetings, documents and contacts behave the same.
+  assert.deepEqual(privateFilter(false), { isPrivate: { $ne: true } }, 'locked EXCLUDES private records');
+  assert.deepEqual(privateFilter(true), { isPrivate: true }, 'unlocked shows private records and ONLY those');
+  // $ne rather than `false`, or every record written before the field existed disappears.
+  assert.notDeepEqual(privateFilter(false), { isPrivate: false }, 'a missing flag still counts as not private');
+
+  // 2. Private is personal-only. A record filed under a group belongs to that group — every
+  //    member reads it — so a padlock on it would be a lie that gets believed.
+  assert.equal(canBePrivate(null), true, 'a personal record may be private');
+  assert.equal(canBePrivate(undefined), true, 'and so may one whose project was never set');
+  assert.equal(canBePrivate(''), true, "Personal is spelt '' on the wire");
+  assert.equal(canBePrivate('someid'), false, 'a group record may not — its members can all open it');
+
+  // The rule that stops a false padlock: the client sends a checkbox, this decides. Filing into a
+  // group DROPS the flag rather than storing a marker that means nothing, and the caller says so.
+  assert.equal(privacyOnWrite(true, null), true, 'a private personal record is stored private');
+  assert.equal(privacyOnWrite(true, 'pid'), false, 'wanting privacy inside a group does not get it');
+  assert.equal(privacyOnWrite(false, null), false, 'and not asking never gets it either');
+  // Nothing but a real `true` counts — a checkbox arriving as 'true', 1 or {} is not consent.
+  for (const wanted of ['true', 1, {}, [], 'on', undefined, null]) {
+    assert.equal(privacyOnWrite(wanted, null), false, `only a boolean true sets the padlock (${JSON.stringify(wanted)})`);
+  }
+
+  // 3. Jarvis is the deliberate exception: it ADDS rather than swaps. Unlocked it may see private
+  //    content as well as normal; locked it must have no knowledge of private content whatsoever.
+  //    An assistant that answers "what are my tasks?" with only the secret ones is broken.
+  assert.equal(assistantFilter(true), null, 'unlocked, Jarvis sees everything — nothing to add');
+  assert.deepEqual(assistantFilter(false), { isPrivate: { $ne: true } }, 'locked, a private record is not in its context at all');
+  assert.notDeepEqual(assistantFilter(false), privateFilter(true), 'locked is never the private-only list');
+
+  // Structural: the swap belongs to the personal branch of a read, never the project branch —
+  // unlocking your own safe must not hide the work you share with other people.
+  const access = readFileSync(new URL('../src/lib/projectAccess.ts', import.meta.url), 'utf8');
+  assert.ok(/unlocked = false/.test(access), 'mineOrMyProjects defaults to LOCKED — a forgetful caller hides, never leaks');
+  assert.ok(/\{ \[ownerField\]: userId, \.\.\.privateFilter\(unlocked\) \}/.test(access), 'and applies it to the owner branch only');
+
+  // Structural: every read path that can surface a personal record asks the cookie, not the client.
+  for (const file of ['note.ts', 'task.ts', 'document.ts', 'mom.ts', 'contact.ts', 'search.ts', 'jarvis.ts']) {
+    const src = readFileSync(new URL(`../src/actions/${file}`, import.meta.url), 'utf8');
+    assert.ok(src.includes('hasSafe('), `${file} reads the safe state server-side`);
+  }
+  // And every write that can set the flag runs it through the rule instead of trusting the input.
+  for (const file of ['note.ts', 'task.ts', 'document.ts', 'mom.ts', 'contact.ts', 'jarvis.ts']) {
+    const src = readFileSync(new URL(`../src/actions/${file}`, import.meta.url), 'utf8');
+    assert.ok(src.includes('privacyOnWrite('), `${file} never stores a client-supplied isPrivate`);
+    assert.ok(!/isPrivate:\s*(data|opts|item|a)\.isPrivate\b/.test(src), `${file} never assigns the raw checkbox`);
+  }
+  // Jarvis takes the assistant rule end to end. Borrowing the list rule would leave it answering
+  // "what are my tasks?" with only the secret ones, which is the failure the exception exists for.
+  const jarvis = readFileSync(new URL('../src/actions/jarvis.ts', import.meta.url), 'utf8');
+  assert.ok(jarvis.includes('assistantFilter('), 'Jarvis adds rather than swaps');
+  assert.ok(!jarvis.includes('privateFilter('), 'and never borrows the list rule, which would blind it to normal work');
+
+  // The weekly digest is an email and a glance panel — there is no safe to unlock on a cron run,
+  // so it is permanently the locked view, for tasks as well as the links it always withheld.
+  const digest = readFileSync(new URL('../src/lib/digest.ts', import.meta.url), 'utf8');
+  assert.equal((digest.match(/\.\.\.privateFilter\(false\)/g) || []).length, 2, 'the digest withholds private links AND private tasks');
+  assert.ok(!digest.includes('privateFilter(true'), 'and never has a private-only mode to get wrong');
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -1328,6 +1406,104 @@ for (const [file, fn] of [['../src/components/MomSection.tsx', 'startRecording']
       'createTask stores a validated choice, or the profile default — never client text');
     assert.ok(task.includes('task.reminder = asChoice(data.reminder)'),
       'and an edit cannot store an unrecognised one either');
+  }
+}
+
+// ----------------------------------------------------------------------------------------------
+// Deleting a group. Every failure here is invisible from the screen — the tap says "deleted" and
+// looks right — and permanent: the rows it misses carry a projectId pointing at nothing, which puts
+// them in nobody's myProjectIds, so no read path can show them and no screen can delete them. The
+// documents among them go on occupying space in a real person's Google Drive with nothing left in
+// the app that could ever free it. None of that can be asserted without a database, so this reads
+// the source, which is also the only place the ORDER of two awaits is visible at all.
+{
+  const content = readFileSync(new URL('../src/lib/projectContent.ts', import.meta.url), 'utf8');
+  const project = readFileSync(new URL('../src/actions/project.ts', import.meta.url), 'utf8');
+  const account = readFileSync(new URL('../src/actions/account.ts', import.meta.url), 'utf8');
+
+  // ONE list of what a projectId hangs off. The original bug was two delete paths with two
+  // different lists, and the shorter one shipped.
+  for (const model of ['Note', 'Task', 'Mom', 'Document', 'Event', 'Message']) {
+    assert.ok(content.includes(`${model}.deleteMany({ projectId })`), `${model} goes with the group`);
+  }
+  for (const [name, src] of [['project.ts', project], ['account.ts', account]]) {
+    assert.ok(!/\w+\.deleteMany\(\{ projectId \}\)/.test(src),
+      `${name} deletes project content through the shared function, not a list of its own`);
+    // Both callers name the actor. deleteUpload only destroys bytes from the Drive of the person
+    // who clicked, and an argument nobody passes is a rule nobody enforces.
+    const calls = src.match(/deleteProjectContent\([^)]*\)/g) || [];
+    assert.ok(calls.length === 1, `${name} calls it exactly once`);
+    assert.ok(calls[0].includes(','), `${name} passes the actor: ${calls[0]}`);
+  }
+  assert.ok(/actorUserId: string\)/.test(content), 'the actor is required, so it cannot be forgotten');
+  assert.ok(/\], actorUserId\)/.test(content), 'and it reaches the storage layer that enforces the rule');
+
+  // Content first, the project row last. Reversed, a throw part-way through orphans everything
+  // with no project left to retry the delete from.
+  const del = project.slice(project.indexOf('export async function deleteProject'),
+    project.indexOf('export async function renameProject'));
+  assert.ok(del.length > 200, 'found deleteProject');
+  assert.ok(!del.includes('Project.findOneAndDelete'), 'the project row is not deleted by the lookup that authorises it');
+  assert.ok(del.indexOf('ownerId: session.user.id') < del.indexOf('deleteProjectContent('),
+    'the creator-only gate still runs before anything is erased');
+  assert.ok(del.indexOf('deleteProjectContent(') < del.indexOf('Project.deleteOne('),
+    'content is erased before the project row, so a failure is retryable');
+
+  // There is no S3 any more; a log line naming one sends the next person to the wrong console.
+  assert.ok(!/\bS3\b/.test(account), 'no stale S3 wording in the deletion path');
+}
+
+
+// ── Drive grants: the convenience path, and the two rules that keep it from becoming a leak ──
+// Both helpers are pure, so the selection can be asserted for real rather than read off the source.
+{
+  const { grantRecipients, MAX_GRANTS } = await import('../src/lib/driveGrantList.ts');
+  const { grantableFileIds } = await import('../src/lib/driveKey.ts');
+
+  // The uploader already owns the file. Google answers a permission naming the owner with an error,
+  // so leaving them in would burn a slot of the cap on every single upload.
+  assert.deepEqual(
+    grantRecipients(['A@x.com', 'a@x.com', 'me@x.com', null, ' '], 'ME@x.com'),
+    ['a@x.com'],
+    'recipients are lowercased, deduplicated, and never the uploader',
+  );
+  assert.equal(
+    grantRecipients(Array.from({ length: 60 }, (_, i) => `p${i}@x.com`), 'me@x.com').length,
+    MAX_GRANTS,
+    'one upload into a runaway member list cannot become hundreds of calls on somebody quota',
+  );
+
+  // The rule deleteUpload already enforces, on the other side of the same fence: a note moved into a
+  // project can carry attachments several people uploaded, and moving it is not permission to hand
+  // a colleague file to a new audience using their credential.
+  const mine = '6a8a7b8a70dc66bc42ec514e';
+  const yours = '6a8a7b8a70dc66bc42ec514f';
+  assert.deepEqual(
+    grantableFileIds([`${mine}/drive/FILE_A`, `${yours}/drive/FILE_B`], mine),
+    ['FILE_A'],
+    'only files in the actor own Drive are ever shared onward',
+  );
+  assert.deepEqual(grantableFileIds([`${mine}/drive/FILE_A`], ''), [],
+    'no actor, no grants — never a fallback to somebody else credential');
+  assert.deepEqual(grantableFileIds(['not-a-key', null], mine), [],
+    'a key that names no Drive file is skipped, not passed to Google');
+
+  // Convenience only. A grant that made a caller wait, or that a caller could branch on, would be
+  // one refactor away from the read path depending on it.
+  const grants = readFileSync(new URL('../src/lib/driveGrants.ts', import.meta.url), 'utf8');
+  assert.ok(/export function grantProjectReaders\([\s\S]*?\): void/.test(grants),
+    'grantProjectReaders returns nothing, so no read path can come to depend on the outcome');
+  assert.ok(grants.includes('after(') && grants.includes("from 'next/server'"),
+    'grants run in after(), off the response path');
+  assert.ok(/role: 'reader'/.test(readFileSync(new URL('../src/lib/drive.ts', import.meta.url), 'utf8')),
+    'reader, never writer — a teammate must not be able to delete the file out of the uploader Drive');
+
+  // Five call sites, not two: the two uploads plus the three places that MOVE content into a group.
+  for (const [file, count] of [['document.ts', 2], ['note.ts', 2], ['message.ts', 1]]) {
+    const src = readFileSync(new URL(`../src/actions/${file}`, import.meta.url), 'utf8');
+    const calls = (src.match(/grantProjectReaders\(/g) || []).length;
+    assert.equal(calls, count, `${file} grants at every site that puts a file in front of a group`);
+    assert.ok(!/await grantProjectReaders/.test(src), `${file} does not await grants`);
   }
 }
 

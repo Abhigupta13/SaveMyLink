@@ -2,19 +2,18 @@
 
 import { useEffect, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles, Languages, BellRing } from 'lucide-react';
-import { getContacts } from '@/actions/contact';
-import { getMyOpenTasks, getReminderDefault, setReminderDefault } from '@/actions/task';
+import { LogOut, Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles, Languages, BellRing, HardDrive } from 'lucide-react';
+import { getReminderDefault, setReminderDefault } from '@/actions/task';
 import ReminderPicker from '@/components/ReminderPicker';
 import { DEFAULT_CHOICE, type ReminderChoice } from '@/lib/reminderRule';
-import { getProjects } from '@/actions/project';
 import { useFeedback } from '@/components/ui/Feedback';
 import { useUser } from '@/components/UserContext';
 import ThemeToggle from '@/components/ThemeToggle';
 import SuggestBox from '@/components/SuggestBox';
 import DeleteAccountCard from '@/components/DeleteAccountCard';
+import DriveCard from '@/components/DriveCard';
 import Link from 'next/link';
-import { appUrl } from '@/lib/url';
+import { shareUrl } from '@/lib/url';
 import { amIAdmin } from '@/actions/admin';
 import { getJarvisConfirm, setJarvisConfirm } from '@/actions/jarvis';
 
@@ -22,23 +21,11 @@ export default function ProfilePage() {
   const { confirm, toast } = useFeedback();
   const { privateSafe, setPrivateSafe, setPinModalOpen } = useUser();
   const { data: session, status } = useSession();
-  const [stats, setStats] = useState<{ tasks: number; projects: number; contacts: number } | null>(null);
   const [admin, setAdmin] = useState(false);
   const [askFirst, setAskFirst] = useState(true);   // Jarvis confirms before writing into a group
   const [remind, setRemind] = useState<ReminderChoice>(DEFAULT_CHOICE);   // what every new task starts on
   const user = session?.user;
   const initial = (user?.name || user?.email || 'U')[0].toUpperCase();
-
-  useEffect(() => {
-    if (status !== 'authenticated') return;
-    Promise.all([getMyOpenTasks(), getProjects(), getContacts()]).then(([t, p, c]) => {
-      setStats({
-        tasks: t.success ? (t.tasks || []).length : 0,
-        projects: p.success ? (p.projects || []).length : 0,
-        contacts: c.success ? (c.contacts || []).length : 0,
-      });
-    });
-  }, [status]);
 
   useEffect(() => {
     if (status !== 'authenticated') return;
@@ -57,7 +44,7 @@ export default function ProfilePage() {
   const shareApp = async () => {
     // The live site, never whatever host this happens to be running on — a shared localhost
     // link is one the person receiving it cannot open.
-    const url = `${appUrl()}/download`;
+    const url = shareUrl('/download');
     const text = `I'm using ALL YOU NEED to keep my links, notes, tasks and meetings in one place — for work and everything else. Get it here: ${url}`;
     try {
       const { Capacitor } = await import('@capacitor/core');
@@ -80,18 +67,6 @@ export default function ProfilePage() {
         <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{user?.email}</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '28px' }}>
-        {[
-          { label: 'Open tasks', value: stats?.tasks },
-          { label: 'Projects', value: stats?.projects },
-          { label: 'Contacts', value: stats?.contacts },
-        ].map(s => (
-          <div key={s.label} className="card" style={{ textAlign: 'center', padding: '16px 8px' }}>
-            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)' }}>{s.value ?? '—'}</div>
-            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</div>
-          </div>
-        ))}
-      </div>
 
       <div className="card" style={{ marginBottom: '14px' }}>
         <span style={{ display: 'block', fontWeight: 700, marginBottom: '10px' }}>Appearance</span>
@@ -177,6 +152,22 @@ export default function ProfilePage() {
         </span>
       </Link>
 
+      {/* Files are the one thing this app does not store itself, so the connection lives here in
+          full rather than behind a row — someone whose upload just failed has to be able to see
+          why and fix it on the same screen. */}
+      <div className="card" style={{ display: 'grid', gap: '2px', marginTop: '14px' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span className="row-icon"><HardDrive size={18} strokeWidth={2.2} /></span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontWeight: 700 }}>Where your files are kept</span>
+            <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Uploads go straight into your own Google Drive
+            </span>
+          </span>
+        </span>
+        <DriveCard returnTo="/profile" />
+      </div>
+
       {admin && (
         <Link href="/admin" className="card" style={{
           display: 'flex', alignItems: 'center', gap: '12px',
@@ -225,7 +216,7 @@ export default function ProfilePage() {
       }}>
         <span className="row-icon"><FileText size={18} strokeWidth={2.2} /></span>
         <span style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ display: 'block', fontWeight: 700 }}>Terms &amp; your data</span>
+          <span style={{ display: 'block', fontWeight: 700 }}>Terms and conditions</span>
           <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
             What is stored, who can see it
           </span>

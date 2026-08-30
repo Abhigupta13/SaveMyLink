@@ -3,8 +3,26 @@ import GoogleProvider from "next-auth/providers/google";
 import connectToDatabase from "@/lib/mongodb";
 import { User } from "@/lib/models/User";
 import bcrypt from "bcryptjs";
+import { usableBase } from "@/lib/url";
 
 const googleEnabled = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+
+/**
+ * NextAuth reads NEXTAUTH_URL itself, so nothing here can correct a bad one — but it can refuse to
+ * fail silently. A value holding two URLs (`https://prod/ | http://localhost:3000`) parses into an
+ * origin plus a nonsense path, NextAuth adopts that path as its OAuth basePath, and Google answers
+ * the malformed redirect_uri with `Error 400: invalid_request` and no hint at all.
+ *
+ * One URL per variable, per environment: localhost in `.env.local`, the real domain in Vercel's
+ * dashboard. Both must be registered in the Google console as authorised redirect URIs — that is
+ * what makes one OAuth client serve development and production at the same time.
+ */
+if (!usableBase(process.env.NEXTAUTH_URL)) {
+  console.error(
+    '[auth] NEXTAUTH_URL is not a single usable URL:', JSON.stringify(process.env.NEXTAUTH_URL),
+    '\n       Google sign-in will fail with Error 400: invalid_request until this is one URL.',
+  );
+}
 
 export const authOptions = {
   providers: [

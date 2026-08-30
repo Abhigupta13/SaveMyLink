@@ -355,11 +355,12 @@ export default function LandingPage() {
           <div className="vault-card">
             <div className="vault-lock"><Lock size={22} aria-hidden="true" /></div>
             <h2>Yours alone.</h2>
-            <p className="lede">Everything you save is private by default. We don&apos;t read your content, we don&apos;t sell it, and we&apos;ll tell you the limits of that promise rather than let you assume a stronger one.</p>
+            <p className="lede">Everything you save is private by default, and your files never leave your own Google Drive. We don&apos;t read your content, we don&apos;t sell it, and we&apos;ll tell you the limits of that promise rather than let you assume a stronger one.</p>
             <div className="vault-rules">
               <div className="vault-rule"><b>Private by default</b><span>Nothing you save is visible to anyone else unless you put it in a project group.</span></div>
               <div className="vault-rule"><b>You choose who</b><span>A group is seen by the people you add to it, and nobody else.</span></div>
               <div className="vault-rule"><b>A Private Safe</b><span>Anything sensitive goes behind a PIN, hidden from the normal view until you unlock it.</span></div>
+              <div className="vault-rule"><b>Files stay in your Drive</b><span>Documents and attachments are saved to your own Google Drive, in a folder called ALL-YOU-NEED. Stop using this app tomorrow and every file is still sitting where it always was.</span></div>
             </div>
           </div>
         </div>
@@ -375,7 +376,7 @@ export default function LandingPage() {
       <footer className="foot">
         <Wordmark className="foot-logo" size={18} />
         <Link href="/download">Get the Android app</Link>
-        <Link href="/terms">Terms &amp; your data</Link>
+        <Link href="/terms">Terms and conditions</Link>
         <span>Works on iPhone via the web</span>
         <span>© {new Date().getFullYear()}</span>
       </footer>

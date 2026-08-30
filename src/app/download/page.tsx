@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import QRCode from 'qrcode';
-import { appUrl } from '@/lib/url';
+import { shareUrl } from '@/lib/url';
 import { Download, ShieldQuestion, Share2, Bell, Smartphone } from 'lucide-react';
 
 export const metadata: Metadata = {
@@ -49,7 +49,7 @@ async function qrSvg(url: string) {
 }
 
 export default async function DownloadPage() {
-  const base = appUrl();
+  const base = shareUrl();
   const qr = base ? await qrSvg(`${base}/download`) : null;
 
   return (
@@ -143,7 +143,7 @@ export default async function DownloadPage() {
       </div>
 
       <p className="auth-foot" style={{ marginTop: '20px' }}>
-        <Link href="/">Open the web app</Link> · <Link href="/terms">How your data is handled</Link>
+        <Link href="/">Open the web app</Link> · <Link href="/terms">Terms and conditions</Link>
       </p>
     </div>
   );

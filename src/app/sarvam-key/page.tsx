@@ -110,7 +110,7 @@ export default function SarvamKeyPage() {
 
       <p className="g-foot">
         <Link href="/profile">Back to profile</Link>
-        <Link href="/terms">Terms &amp; your data</Link>
+        <Link href="/terms">Terms and conditions</Link>
         <Link href="/your-data">Who can see my data</Link>
       </p>
     </div>

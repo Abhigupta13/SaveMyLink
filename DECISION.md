@@ -3,7 +3,7 @@
 A running record of what we chose, and why. Read the "why" — the choices are only obvious
 once you remember the reasoning, and the reasoning is what makes the next choice easy.
 
-Last updated: 25 Aug 2026.
+Last updated: 30 Aug 2026.
 
 ---
 
@@ -326,21 +326,25 @@ recognise the problem instantly because they live it.
 | — | **Route gate actually running** — `proxy.ts` moved to `src/` (it was never loaded at the repo root; pages exposed empty shells, never data) | ✅ built, proven by signed-out curls |
 | — | Landing page, brand mark, auth pages, Android icon (4 commits) | ✅ built, needs visual pass on a deploy |
 | 2 | "Who can see my data" — shared tags in search/digest/Jarvis, first-share confirm, Your data page | ✅ built, needs signed-in visual pass |
-| 3 | In-app introduction — **spotlight tour** (replaced the checklist, 26 Aug 2026), sample meeting via real extraction, empty-state hints | 🔄 tour in build; sample + hints built |
-| 4 | Free Hindi meetings — Gemini audio + bring-your-own Sarvam key | planned |
-| 5 | Jarvis — local retrieval (no extra AI call), per-user daily cap, conversation memory, powers, confirm-before-shared-write, voice rule | 🔄 in build (26 Aug 2026) |
-| 6 | Distribution — Play Store org account, iOS, **Android app shortcuts** (long-press menu + draggable per-tab icons, decided 25 Aug 2026) | paperwork can start now |
+| 3 | In-app introduction — **spotlight tour** (replaced the checklist, 26 Aug 2026), sample meeting via real extraction, empty-state hints | ✅ built, untested |
+| 4 | Free Hindi meetings — Gemini audio + bring-your-own Sarvam key | ✅ built · **gate test run against five real recordings**; Gemini is now the default free engine, Whisper the fallback |
+| 5 | Jarvis — local retrieval (no extra AI call), per-user daily cap, conversation memory, powers, confirm-before-shared-write, voice rule | ✅ built, untested |
+| — | Per-task reminder timing — you choose when a task starts chasing, default 85% of the way to the due date | ✅ built, untested |
+| — | Admin date-range control (Today · 7d · 30d · 90d · All time · Custom) | ✅ built, untested |
+| — | Account deletion with disclosed 90-day retention | ✅ built · **tested end to end 30 Aug 2026**, including the group-handover path |
+| — | Multi-assignee tasks — one shared task, several people, any of them ticks it | ✅ built · security passes ran |
+| 8 | **Project chat** — a room per group, `@person` / `/task` `/mom` `/note` references, 5s poll while open | ✅ built 30 Aug 2026, **attachments deferred** behind Drive storage |
+| — | Weekly digest on Home — "urgent, needs attention" + "saved this week" under the vault tiles | ✅ built 30 Aug 2026 |
+| 9 | **Private Safe everywhere** — `isPrivate` on notes, tasks, meetings, documents, contacts; Jarvis blind to private when locked | 🔄 in build 30 Aug 2026 |
+| 10 | **Files move to each user's own Google Drive** — `ALL-YOU-NEED/{personal, digilocker, <Group>}` | 🔄 in build 30 Aug 2026 · **blocked on Google Cloud Console + OAuth verification** |
+| 6 | Distribution — Play Store org account, iOS, **Android app shortcuts** (long-press menu + draggable per-tab icons, decided 25 Aug 2026) | paperwork can start now · **shortcuts not started** (no `shortcuts.xml`) |
 | 7 | Encrypt the Private Safe (server-held key) | when a prospect pushes back |
 
 ### Decided, not yet built
 
-- **Admin date-range control (queued 26 Aug 2026).** `/admin` gets a duration selector (Today · 7d ·
-  30d · 90d · All time · Custom from/to) that re-scopes the time-based metrics — new signups, active
-  users, suggestions, the trend chart. `getAdminStats(range)` replaces the hardcoded `weekAgo`/
-  `trendFrom` windows; all-time totals keep an all-time figure plus an in-range companion count.
-  Admin-gated as today.
+- ~~**Admin date-range control (queued 26 Aug 2026).**~~ **Built** — `src/lib/adminRange.ts`.
 
-- **Account deletion (disclosed retention), decided 26 Aug 2026 — NOT yet built.** A "Delete my
+- **Account deletion (disclosed retention), decided 26 Aug 2026 — ✅ BUILT.** A "Delete my
   account" button in Profile scrubs the user's links, notes, tasks, meetings/transcripts, documents
   (+ S3), contacts, Private Safe PIN and Sarvam key. **Retained for 90 days, then purged:** name,
   email, role-in-company. `/terms` states this in one plain sentence — retention is disclosed, never
@@ -367,6 +371,46 @@ recognise the problem instantly because they live it.
 - **Round 7:** server-held key, so a stolen database is useless while PIN reset by email still
   works. True user-only-passphrase encryption stays possible later as a paid tier.
 
+### Decided 30 Aug 2026
+
+- **Project chat is a room, not a task factory.** A group gets one thread. Messages do NOT become
+  tasks automatically; what keeps it from being a WhatsApp group is that you can point at the work —
+  `@person`, `/task`, `/mom`, `/note` — and those references are stored as data the server
+  re-resolves against that project, never as text. A mention reads inline in the sentence; a task or
+  meeting rides underneath as a card. **Everyone on the project can post, viewers included** — the
+  one place a viewer may write, isolated in `canChat` (`lib/scope.ts`) so reversing it is one line.
+  Removal is app-side and immediate. **The honest limit, said in the UI: nothing here rings a phone.**
+  There is no push channel of any kind, so a message cannot reach a closed app.
+  **Kill metric:** messages per active group per week. Under ~1 after four weeks, delete the feature.
+
+- **The Private Safe covers everything, and only personal things.** `isPrivate` now exists on notes,
+  tasks, meetings, documents and contacts as well as links. Two rules, in `lib/privacy.ts`:
+  **private is personal-only** — a record carrying a `projectId` belongs to its group and can never
+  be private, because a padlock teammates can open is worse than no padlock, it gets believed; and
+  **the safe swaps the personal vault rather than adding to it**, which is what links and categories
+  have always done. Group records are untouched by either state: unlocking your own safe must not
+  hide work you share. **Jarvis is the deliberate exception and adds instead of swapping** — locked,
+  it has no knowledge of private content at all; unlocked, it can see everything. An assistant that
+  answers "what are my tasks?" with only the secret ones is broken.
+
+- **Files move to each user's own Google Drive, and the app keeps none.** Folder tree
+  `ALL-YOU-NEED/{personal, digilocker, <Group name>}`, where a group always wins over the tab the
+  upload came from. Files land in the **uploader's** Drive; members get read access two ways — the
+  app proxies the bytes (authoritative, and the only path that works for a teammate with no Google
+  account) *and* a Drive `reader` permission is granted (convenience, best-effort, never depended
+  on). **A removed member keeps the Drive copy** — app access ends at once, the Drive permission is
+  not revoked. Chosen knowingly against `dropAssignee`'s rule, so it is now a disclosure obligation:
+  say it in the share sheet. Feedback screenshots go to an admin's Drive so a reporter with no Drive
+  can still send a bug report. The motive is cost, and the honest claim is "your files live in your
+  Drive", not "we cannot see them" — the server holds a token that can read them.
+  **Blocked on paperwork, not code:** the Drive API must be enabled and the callback URI registered,
+  and until the OAuth app is verified Google kills refresh tokens every 7 days.
+
+- **The weekly digest also appears on Home**, under the vault tiles: "urgent — needs attention" then
+  "saved this week", capped at four each with a link through to `/digest`. One query and one set of
+  components serve both screens (`lib/digest.ts`, `components/DigestSections.tsx`) — a second,
+  prettier copy for Home is how the two quietly stop agreeing about what "overdue" means.
+
 ### Open questions
 
 - **iOS timing.** $99/year, and no Mac needed (Capacitor + Codemagic's free tier covers the builds).
@@ -382,6 +426,31 @@ recognise the problem instantly because they live it.
   1,500 requests/day shared across **every user on one key** — that is a hard wall, not a slope,
   and it breaks for everyone at once. Round 5 moves it out of sight; pricing has to catch up
   eventually.
+
+### Known bugs, found 30 Aug 2026
+
+- **`NEXTAUTH_URL` points at a deployment that no longer exists.** Signing out redirects to
+  `https://save-my-link-akg.vercel.app`, which returns `404: DEPLOYMENT_NOT_FOUND`. Everything that
+  builds an absolute URL — invite links, the QR on `/download`, and the Drive OAuth callback — is
+  downstream of this, so it has to be settled before Drive can be registered in Google's console.
+- **Google sign-in is broken inside the Android app.** `GoogleButton` calls `signIn('google')` with
+  no platform check, and Google has blocked OAuth in embedded webviews since July 2023
+  (`disallowed_useragent`). Needs Custom Tabs (`@capacitor/browser`) — the same work Drive connect
+  needs, which is the argument for doing them together.
+- **`deleteProject` deletes only Tasks.** Notes, Meetings, Documents and the activity trail survive
+  as unreachable rows, and their files were never deleted. Chat messages are now cleaned up; the
+  rest are not. This gets worse the day files live in a user's Drive, where an orphan burns *their*
+  15GB. Fix by reusing `deleteProjectContent`, which already exists and is correct in `account.ts`.
+  Fixed 30 Aug 2026: `deleteProjectContent` moved to `lib/projectContent.ts` and shared by both
+  paths, content erased *before* the project row so a failure is retryable rather than orphaning,
+  and the actor passed to `deleteUpload` so a group delete never destroys a teammate's file out of
+  that teammate's own Drive. Still open: **chat attachments.** Messages are deleted but their
+  `attachments[].key`s are not collected, so those bytes stay in the poster's Drive with no row
+  left pointing at them — the same leak, one collection over, and it predates this round.
+- **`npm run dev` did not work on Windows.** `scripts/dev-safe.js` spawned `npx.cmd` without
+  `shell: true`, which Node 20+ refuses (`EINVAL`). Fixed 30 Aug 2026.
+- **The local-upload fallback writes inside `public/`**, so files were also served statically at
+  `/uploads/<key>` with no auth check at all. It disappears when Drive replaces the backend.
 
 ### Ideas not yet committed to
 

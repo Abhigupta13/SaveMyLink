@@ -1,6 +1,7 @@
 import { Project } from '@/lib/models/Project';
 import { User } from '@/lib/models/User';
 import { projectScope, ownerScope, writerScope, canAccessDoc } from '@/lib/scope';
+import { privateFilter } from '@/lib/privacy';
 
 /**
  * Membership is granted by raw email string, and until a signup proves it owns that address the
@@ -118,8 +119,23 @@ export async function projectPeople(projectId: unknown): Promise<string[]> {
     .filter((e): e is string => !!e);
 }
 
-/** Mine, or in one of my projects. The standard read scope for project-aware records. */
-export async function mineOrMyProjects(userId: string, email: string | null | undefined, ownerField = 'userId') {
+/**
+ * Mine, or in one of my projects. The standard read scope for project-aware records.
+ *
+ * `unlocked` is the Private Safe, and it applies to the OWNER branch alone: locked shows the
+ * personal records that are not private, unlocked shows the ones that are. The project branch is
+ * never touched — a group record cannot be private (lib/privacy), and unlocking your own safe
+ * must not hide the work you share with other people.
+ *
+ * It defaults to FALSE on purpose. A caller that forgets the argument hides private records
+ * rather than leaking them, which is the only direction this mistake is allowed to fail in.
+ */
+export async function mineOrMyProjects(
+  userId: string,
+  email: string | null | undefined,
+  ownerField = 'userId',
+  unlocked = false,
+) {
   const ids = await myProjectIds(userId, email);
-  return { $or: [{ [ownerField]: userId }, { projectId: { $in: ids } }] };
+  return { $or: [{ [ownerField]: userId, ...privateFilter(unlocked) }, { projectId: { $in: ids } }] };
 }

@@ -48,6 +48,9 @@ async function run() {
   const child = spawn(npxCmd, ['next', 'dev', '--webpack', '-H', '0.0.0.0'], {
     stdio: 'inherit',
     cwd: projectRoot,
+    // Node 20+ refuses to spawn a .cmd without a shell (EINVAL) — the fix for CVE-2024-27980.
+    // Safe here: every argument above is a literal, so there is nothing for a shell to interpret.
+    shell: process.platform === 'win32',
   });
 
   child.on('exit', (code, signal) => {

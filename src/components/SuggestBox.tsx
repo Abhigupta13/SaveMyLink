@@ -36,7 +36,12 @@ export default function SuggestBox() {
     if (shot) fd.append('file', await shrinkImage(shot));
     const res = await submitSuggestion(fd);
     setSending(false);
-    if (res.success) { close(); toast('Thanks — we got it', 'success'); }
+    if (res.success) {
+      close();
+      // The report always sends; say so plainly when the screenshot could not go with it, rather
+      // than letting someone believe we can see what they photographed.
+      toast(res.shotDropped ? "Thanks — we got it, but the screenshot couldn't be attached" : 'Thanks — we got it', 'success');
+    }
     else toast(res.error || 'Could not send that', 'error');
   };
 

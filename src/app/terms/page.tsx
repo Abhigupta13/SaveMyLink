@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Terms & your data · ALL YOU NEED',
+  title: 'Terms and conditions · ALL YOU NEED',
   description: 'What we store, who can see it, and what happens to a recording or a document you upload.',
 };
 
@@ -22,7 +22,8 @@ const SECTIONS: [string, string[]][] = [
     'Items marked private, and anything in the Private Safe, are hidden behind your 4-digit PIN and are not shown in the normal view until you unlock it.',
   ]],
   ['What we can see', [
-    'We host the app, so your data sits in a database we operate. Being straight about what that means: the Private Safe PIN hides content inside the app, but it is not encryption — someone with direct access to our servers could read what is stored, including private items, meeting transcripts and uploaded documents.',
+    'We host the app, so your links, notes, tasks, contacts, meeting transcripts and group chat messages sit in a database we operate. Being straight about what that means: the Private Safe PIN hides content inside the app, but it is not encryption — someone with direct access to our servers could read what is stored, including the items you marked private.',
+    'Uploaded files are the one exception, and deliberately so — they are not in our database at all. See “Files and uploads” below.',
     'We do not read your content, and we do not sell it, share it or use it to train anything. But we would rather tell you the limits of that promise than let you assume a stronger one.',
     'If you handle something you would not want any service operator to be able to read, keep it somewhere built for that.',
   ]],
@@ -33,7 +34,13 @@ const SECTIONS: [string, string[]][] = [
     'If you supply your own API key for a paid transcription provider, that key is stored encrypted, never shown back to you in full, and never sent to your browser. Usage on your own key is billed to you directly by that provider, not by us, and you can revoke it from their dashboard at any time.',
   ]],
   ['Files and uploads', [
-    'Documents and attachments are stored in private cloud storage. They are not publicly reachable — every download goes through the app and checks that you are allowed to see that file first.',
+    'Files you upload — documents in the Digi Locker, attachments on a note, anything sent in a group chat — are not stored on our servers. They go into your own Google Drive, in a folder called ALL-YOU-NEED, under your Google account and against your storage. You connect that Drive yourself and you can disconnect it whenever you like.',
+    'We ask Google for the narrowest access it offers: permission to see and manage only the files this app itself creates. The rest of your Drive is invisible to us. We cannot read a document you saved there before you connected, and we cannot see one you saved somewhere else afterwards.',
+    'Opening a file still goes through the app — we fetch it from the uploader’s Drive and check you are allowed to see it first. That is what lets a teammate who signed up with a password, and has no Google account at all, open a file shared with their group. It also means access stops the moment somebody is removed from that group.',
+    'A file you add to a group is also shared to your group-mates’ Google Drive accounts, so it shows up in their Drive as well as in the app. That is a convenience on top of the above, not the thing that makes it work — nobody needs it to open the file here. If someone later leaves the group they lose access in this app straight away, but the copy already shared to their Drive stays with them. You can take that back yourself, whenever you like, from that file’s sharing settings in your own Drive.',
+    'Deleting a file here moves it to your Google Drive trash rather than destroying it, so you have thirty days to change your mind in an app we do not control. We only ever delete from the Drive of the person who uploaded the file — a group-mate can remove a file from a note, but cannot reach into your Drive and destroy your copy.',
+    'The honest claim is that your files are yours and you can walk away with them, not that we cannot see them. We hold a token that can fetch a file when somebody opens it. What changed is that we no longer hold the file.',
+    'One consequence worth knowing before you rely on it: the Private Safe hides a document inside this app, but the file itself sits in your Google Drive in plain view of anyone who opens that Google account. The PIN is a lock on the app, not on the file.',
   ]],
   ['Email', [
     'We email you to confirm your address, to reset a password, when someone adds you to a project, and once to welcome you. We do not send marketing email.',
@@ -41,8 +48,9 @@ const SECTIONS: [string, string[]][] = [
   ]],
   ['Your account', [
     'You can delete anything you have saved from inside the app. If you want your account and everything in it removed, ask us and we will do it.',
-    'When you delete your account we erase your content immediately and keep only your name, email and role for up to 90 days for our records, then erase those too.',
+    'When you delete your account we erase your content immediately and keep only your name and email for up to 90 days for our records, then erase those too. Anything you added to a group stays with that group — it is the group’s record, not only yours.',
     'Deleting shared work inside a project is the project owner’s decision, so that one person tidying up cannot remove a teammate’s work.',
+    'Files you uploaded are moved to your Google Drive’s trash, where Google gives you thirty days to recover them before removing them for good. They were always in your account, so deleting this one does not take them from you.',
   ]],
   ['This will change', [
     'The app is early and actively being built. When something here changes in a way that matters — especially anything in "What we can see" — we will say so rather than quietly editing this page.',
@@ -53,7 +61,7 @@ export default function TermsPage() {
   return (
     <div className="page narrow">
       <h1 style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px' }}>
-        Terms &amp; your data
+        Terms and conditions
       </h1>
       <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '26px' }}>
         Plain language, no lawyer voice. If something here is unclear, use “Help us improve” in the app and ask.

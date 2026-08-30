@@ -7,7 +7,7 @@ import { validateName, validateEmail, validatePassword } from '@/lib/validation'
 import { Project } from '@/lib/models/Project';
 import { sendMail, otpEmail, welcomeEmail, mailConfigured } from '@/lib/mailer';
 import { newOtp, hashOtp, otpExpiry, checkOtp, isSixDigits, attemptsLeftMessage } from '@/lib/otp';
-import { appUrl } from '@/lib/url';
+import { shareUrl } from '@/lib/url';
 
 /** Issues a fresh code onto whichever pair of fields the caller owns, and returns the plaintext. */
 async function issueOtp(user: IUser, kind: 'reset' | 'verify') {
@@ -189,7 +189,7 @@ export async function verifyEmail(email: string, code: string) {
 
     const invited = await Project.exists({ memberEmails: user.email });
     if (!invited) {
-      const { subject, html, text } = welcomeEmail({ name: user.name, link: appUrl() || 'https://all-you-need.app' });
+      const { subject, html, text } = welcomeEmail({ name: user.name, link: shareUrl() });
       // A failed welcome must never undo a successful verification — they are in either way
       await sendMail({ to: user.email, subject, html, text })
         .catch(error => console.error('Welcome email failed:', user.email, error));
