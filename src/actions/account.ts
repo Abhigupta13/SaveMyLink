@@ -27,39 +27,10 @@ import { Suggestion } from '@/lib/models/Suggestion';
 import { Event } from '@/lib/models/Event';
 import { JarvisSession } from '@/lib/models/JarvisSession';
 import { Project } from '@/lib/models/Project';
-import { deleteUpload } from '@/lib/storage';
+import { deleteUploads } from '@/lib/storage';
+import { deleteProjectContent } from '@/lib/projectContent';
 import { chooseHandover, isPurgeDue, type HandoverCandidate } from '@/lib/accountDeletion';
 import { dropAssignee } from '@/lib/dropAssignee';
-
-/** Best-effort S3 cleanup: a missing object must never stall the deletion. */
-async function deleteKeys(keys: (string | undefined | null)[]) {
-  for (const key of keys) {
-    if (key) await deleteUpload(key).catch(err => console.error('S3 delete failed for', key, err));
-  }
-}
-
-/**
- * Erase every project-scoped record of a group that is being deleted outright (its sole remaining
- * member is the leaver). Stored objects for docs and note attachments go too — the files are
- * private and belong to nobody now.
- */
-async function deleteProjectContent(projectId: Types.ObjectId) {
-  const [docs, notes] = await Promise.all([
-    Document.find({ projectId }).select('key').lean<{ key?: string }[]>(),
-    Note.find({ projectId }).select('attachments.key').lean<{ attachments?: { key?: string }[] }[]>(),
-  ]);
-  await deleteKeys([
-    ...docs.map(d => d.key),
-    ...notes.flatMap(n => (n.attachments || []).map(a => a.key)),
-  ]);
-  await Promise.all([
-    Note.deleteMany({ projectId }),
-    Task.deleteMany({ projectId }),
-    Mom.deleteMany({ projectId }),
-    Document.deleteMany({ projectId }),
-    Event.deleteMany({ projectId }),
-  ]);
-}
 
 /**
  * Hand over, or delete, every group this user CREATED (ownerId is theirs — the permanent creator
@@ -82,7 +53,9 @@ async function handOverOwnedGroups(userId: string, email: string) {
 
     const decision = chooseHandover(pick(coOwnerEmails), pick(memberEmails));
     if (decision.action === 'delete') {
-      await deleteProjectContent(project._id);
+      // The leaver is the actor here, and the last person on the group — so their own attachments
+      // go from their own Drive, and anything an earlier member uploaded is detached, not destroyed.
+      await deleteProjectContent(project._id, userId);
       await project.deleteOne();
       continue;
     }
@@ -128,13 +101,16 @@ export async function eraseAccount(userId: string, email: string, role: string) 
   for (const p of on) await dropAssignee(p._id, lower, null);
 
   // 3. Their own PERSONAL content. Project-scoped work they authored stays with the surviving
-  //    group — that is the whole point of the handover. Gather S3 keys before deleting the rows.
+  //    group — that is the whole point of the handover. Gather the storage keys before the rows go.
   const [docs, notes] = await Promise.all([
     Document.find({ user: userId, projectId: null }).select('key').lean<{ key?: string }[]>(),
     Note.find({ userId, projectId: null }).select('attachments.key').lean<{ attachments?: { key?: string }[] }[]>(),
   ]);
   const suggestions = await Suggestion.find({ userId }).select('shot.key').lean<{ shot?: { key?: string } }[]>();
-  await deleteKeys([
+  // No actor argument, deliberately: a feedback screenshot was stored in an ADMIN's Drive so that
+  // reporting a bug never required a Drive of your own, and erasing this account has to reach it.
+  // Everything else in this list is the user's own, so the rule would have allowed it anyway.
+  await deleteUploads([
     ...docs.map(d => d.key),
     ...notes.flatMap(n => (n.attachments || []).map(a => a.key)),
     ...suggestions.map(s => s.shot?.key),
@@ -162,6 +138,9 @@ export async function eraseAccount(userId: string, email: string, role: string) 
       privatePin: 1, image: 1, contactsSeeded: 1, shareNoticeSeen: 1,
       introDone: 1, introDismissed: 1, tourDone: 1,
       sarvamKey: 1, sarvamAccess: 1, sarvamAccessBy: 1, sarvamAccessAt: 1,
+      // The retained stub must not keep a live third-party credential: the sealed refresh token is
+      // standing permission to write into their Drive, and a deleted account has none.
+      drive: 1,
     },
   });
 }
@@ -173,18 +152,27 @@ export async function eraseAccount(userId: string, email: string, role: string) 
  */
 export async function accountAuthMode() {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return { hasPassword: false, email: '' };
+  if (!session?.user) return { hasPassword: false, hasPin: false, email: '' };
   await connectToDatabase();
-  const user = await User.findById((session.user as { id: string }).id).select('password').lean<{ password?: string } | null>();
-  return { hasPassword: !!user?.password, email: session.user.email || '' };
+  const user = await User.findById((session.user as { id: string }).id)
+    .select('password privatePin').lean<{ password?: string; privatePin?: string } | null>();
+  // Only whether each exists, never the value — the delete screen decides which fields to show.
+  return { hasPassword: !!user?.password, hasPin: !!user?.privatePin, email: session.user.email || '' };
 }
 
 /**
- * Delete the signed-in user's account. `role` is captured on the delete screen (the one field we
- * keep beyond name and email). `password` carries the re-auth secret: the account password for a
- * password login, or the account email typed back for a Google-only login.
+ * Delete the signed-in user's account.
+ *
+ * `password` carries the re-auth secret: the account password for a password login, or the account
+ * email typed back for a Google-only login. `pin` is the Private Safe PIN, required only when one
+ * has been set.
+ *
+ * **Both, when both exist.** The safe is the one thing in the app the account password alone cannot
+ * open, so deleting everything on the password alone would let someone who got hold of an unlocked
+ * session destroy the contents of a safe they could never have read. Asking for the PIN makes the
+ * destructive path at least as hard as the reading path.
  */
-export async function deleteMyAccount({ role, password }: { role: string; password?: string }) {
+export async function deleteMyAccount({ password, pin }: { password?: string; pin?: string }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: 'Not authenticated' };
   const userId = (session.user as { id: string }).id;
@@ -205,7 +193,15 @@ export async function deleteMyAccount({ role, password }: { role: string; passwo
       return { error: 'Email does not match' };
     }
 
-    await eraseAccount(userId, email, role);
+    // And the safe's own PIN, when there is one. Checked separately so the message says which of
+    // the two was wrong — a single "that didn't work" on a screen with no undo is cruel.
+    if (user.privatePin) {
+      if (!pin || !(await bcrypt.compare(pin, user.privatePin))) {
+        return { error: 'Incorrect Private Safe PIN' };
+      }
+    }
+
+    await eraseAccount(userId, email, '');
     return { success: true };
   } catch (error) {
     console.error('Failed to delete account:', error);

@@ -10,9 +10,11 @@ import { User } from "@/lib/models/User";
 import { Contact } from "@/lib/models/Contact";
 import { sendMail, inviteEmail } from "@/lib/mailer";
 import { ownerFilter, myProjectFilter } from "@/lib/projectAccess";
-import { appUrl } from "@/lib/url";
+import { shareUrl } from '@/lib/url';
 import { isProjectCreator, type OwnableProject } from "@/lib/scope";
 import { Event, recordEvent } from "@/lib/models/Event";
+import { Message } from "@/lib/models/Message";
+import { deleteProjectContent } from "@/lib/projectContent";
 import { dropAssignee } from "@/lib/dropAssignee";
 import { sinceDays } from "@/lib/activity";
 import { getServerSession } from "next-auth";
@@ -145,7 +147,7 @@ export async function addMember(projectId: string, email: string) {
     // Tell them. Adding an email silently was the whole reason invites never worked: a typo
     // looked identical to success, and someone without an account was never asked to make one.
     const invitee = await User.findOne({ email: normalized }).select('name').lean() as any;
-    const base = appUrl();
+    const base = shareUrl();
     const link = invitee
       ? `${base}/projects/${projectId}`
       : `${base}/auth/signup?email=${encodeURIComponent(normalized)}`;
@@ -265,12 +267,22 @@ export async function deleteProject(projectId: string) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
-    // Owner only; project tasks go with it
     // Creator only, deliberately narrower than every other owner action: this is the one with no
     // undo, and a co-owner having a bad day should not be able to erase a team's whole history.
-    const res = await Project.findOneAndDelete({ _id: projectId, ownerId: session.user.id });
-    if (!res) return { success: false, error: 'Project not found or not owner' };
-    await Task.deleteMany({ projectId });
+    const project = await Project.findOne({ _id: projectId, ownerId: session.user.id }).select('_id');
+    if (!project) return { success: false, error: 'Project not found or not owner' };
+
+    // Content first, the project row LAST. The other way round was the bug: the delete led with
+    // findOneAndDelete, so anything that threw afterwards left notes, meetings, documents and the
+    // trail carrying a projectId pointing at nothing — in nobody's myProjectIds, so unreadable by
+    // every read path and undeletable through every screen, with the documents among them still
+    // occupying space in a member's own Drive. While the project row survives, a failed delete is
+    // simply the same delete again.
+    //
+    // The actor goes with it because the group's files come from several members' Drives, and
+    // lib/storage only ever destroys bytes belonging to the person who clicked.
+    await deleteProjectContent(project._id, session.user.id);
+    await Project.deleteOne({ _id: project._id });
 
     revalidatePath('/tasks');
     return { success: true };
@@ -417,7 +429,7 @@ export async function getProjectWorkspace(projectId: string, days?: number) {
       ...(project.viewerEmails || []),
     ].filter(Boolean))] as string[];
 
-    const [names, projects, tasks, moms, notes, docs, events] = await Promise.all([
+    const [names, projects, tasks, moms, notes, docs, events, messageCount] = await Promise.all([
       // Only this group's people, not every person in every group I am in
       displayNames(emails, session.user.id),
       // MomSection routes confirmed items into any group, so it needs the names of all of them
@@ -427,6 +439,10 @@ export async function getProjectWorkspace(projectId: string, days?: number) {
       getNotes(projectId),
       getDocuments(projectId),
       getProjectEvents(projectId, days),
+      // A count, not the messages: the chat card needs a number on the summary screen, and the
+      // panel fetches the thread itself when it is opened. Already gated — projectForMember ran
+      // above, and this query cannot widen past the projectId it just cleared.
+      Message.countDocuments({ projectId, deletedAt: null }),
     ]);
 
     return {
@@ -441,6 +457,7 @@ export async function getProjectWorkspace(projectId: string, days?: number) {
       notes: notes.success ? notes.notes : [],
       documents: docs.docs || [],
       events: events.success ? events.events : [],
+      messageCount,
     };
   } catch (error) {
     console.error('Failed to load project workspace:', error);
