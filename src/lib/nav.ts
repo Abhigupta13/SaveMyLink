@@ -3,6 +3,17 @@ import {
   Library, Users, Newspaper, Upload,
 } from 'lucide-react';
 
+/* Screens that carry their own frame and must not be given the app's.
+ *
+ * The auth pages have always been these. /suspended joins them for a stronger reason than looking
+ * right: it is the one screen an account that cannot act is allowed to see, and wrapping it in a
+ * bottom bar of seven destinations — every one of which now refuses — offers a way in that does
+ * not exist. The session callback drops `user` for a suspended account but the session object
+ * itself survives, so the "signed out" test the chrome already had does not catch them.
+ */
+export const ownsItsFrame = (pathname: string) =>
+  pathname.startsWith('/auth') || pathname.startsWith('/suspended');
+
 /* Single source of truth for destinations: the desktop rail, the phone bottom bar
    and the Home grid all read this, so adding a page updates every surface at once. */
 // `hint` is the WHY, shown on a section's empty state and gone once it isn't empty.

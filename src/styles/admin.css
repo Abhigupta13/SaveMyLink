@@ -234,3 +234,61 @@
   .a-descent { --a-rail: 24px; }
   .a-note { padding: 18px 20px; }
 }
+
+/* ── A card heading with a way out of it on the same row. The feedback card is the only one on
+      this page you can act on rather than only read, so its way in sits beside the heading rather
+      than in the page footer. Wraps on a narrow phone: the button drops under the heading rather
+      than squeezing the count into two lines. ── */
+.a-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.a-card-head > div { min-width: 0; }
+.a-head-btn {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 13px; border-radius: 11px;
+  border: 1px solid var(--border-color); background: var(--bg-primary);
+  color: var(--text-primary); font-size: 0.8rem; font-weight: 700;
+  text-decoration: none; white-space: nowrap;
+  transition: border-color .15s ease, color .15s ease;
+}
+.a-head-btn:hover { border-color: var(--accent-text); color: var(--accent-text); }
+
+/* ── Revoke access. A column of rows, not the tap-anywhere grid the Sarvam card uses: every action
+      here is a named button, because one of them cannot be undone and none of them should be
+      reachable by a mis-tap on a person's name. ── */
+.a-add { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); }
+.a-people { display: grid; gap: 8px; margin-top: 12px; }
+.a-person {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; border-radius: 16px;
+  background: var(--bg-primary); border: 1px solid var(--border-color);
+  animation: a-rise .34s ease-out both; animation-delay: calc(var(--i, 0) * 30ms);
+}
+/* A locked-out account is the one state you must not have to read to notice. */
+.a-person.out { border-color: color-mix(in srgb, var(--danger-color) 45%, var(--border-color)); }
+.a-person-who { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 190px; }
+.a-person-acts { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+.a-person-note { font-size: 0.72rem; font-weight: 700; color: var(--text-tertiary); flex-shrink: 0; }
+.a-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 32px; padding: 0 11px; border-radius: 10px;
+  border: 1px solid var(--border-color); background: var(--bg-secondary);
+  color: var(--text-primary); font: inherit; font-size: 0.78rem; font-weight: 700;
+  cursor: pointer; white-space: nowrap;
+  transition: border-color .15s ease, color .15s ease;
+}
+.a-btn:hover:not(:disabled) { border-color: var(--accent-text); color: var(--accent-text); }
+.a-btn.danger { color: var(--danger-color); }
+.a-btn.danger:hover:not(:disabled) { border-color: var(--danger-color); color: var(--danger-color); }
+.a-btn:disabled { opacity: .55; cursor: default; }
+/* The confirmation takes the whole row. It names the person and says the consequence in a sentence
+   rather than shrinking to "Sure?" beside the button that does it. */
+.a-person-confirm { display: flex; flex-direction: column; gap: 8px; flex: 1 1 100%; }
+.a-person-confirm > span { font-size: 0.78rem; font-weight: 600; line-height: 1.5; color: var(--danger-color); }
+
+/* A page window, and the sentence that says which one. Rendered even at one page: "1-7 of 7" is
+   what tells the admin the list is complete, which a bare cap never did. */
+.a-pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.a-pager-at { font-size: 0.76rem; font-weight: 700; color: var(--text-tertiary); white-space: nowrap; }
+.a-mark.danger { color: var(--danger-color); border-color: color-mix(in srgb, var(--danger-color) 40%, transparent); }
+/* The delete sentence is the only red prose on the page; suspend's reads as ordinary text. */
+.a-person-confirm > span.grave { color: var(--danger-color); }
+.a-person-confirm > span { color: var(--text-secondary); }

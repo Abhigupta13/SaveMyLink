@@ -12,6 +12,7 @@ import { validateEmail } from '@/lib/validation';
 import { authProviders } from '@/actions/auth';
 import { parkedSummary, cancelAddAccount } from '@/actions/accounts';
 import { finishIdentityChange } from '@/lib/clientIdentityReset';
+import { SUSPENDED_ERROR } from '@/lib/suspension';
 
 function SigninInner() {
   const router = useRouter();
@@ -84,7 +85,12 @@ function SigninInner() {
     // Only next-auth's credentials rejection means the password was wrong. Anything else is our
     // problem, not theirs, and saying "incorrect password" for it sends people hunting a password
     // that was never the issue.
-    if (res?.error) {
+    if (res?.error === SUSPENDED_ERROR) {
+      // Not a sign-in failure to correct — their password was right. There is a page that says what
+      // happened and how to ask for the account back, so send them to it rather than leaving them
+      // retrying a password that works.
+      router.push('/suspended');
+    } else if (res?.error) {
       setFormError(res.error === 'CredentialsSignin'
         ? 'Incorrect email or password. Please try again.'
         : 'Something went wrong signing you in. Please try again.');

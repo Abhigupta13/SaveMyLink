@@ -7,7 +7,7 @@ import PinModal from './PinModal';
 import VerifyBanner from './VerifyBanner';
 import { useSession } from 'next-auth/react';
 import { Search, Plus, Home, X } from 'lucide-react';
-import { NAV, MOBILE_NAV } from '@/lib/nav';
+import { NAV, MOBILE_NAV, ownsItsFrame } from '@/lib/nav';
 import Wordmark from './brand/Wordmark';
 
 export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
@@ -53,9 +53,10 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     else router.push('/search');
   };
 
-  // The landing and the auth pages carry their own brand; other public pages get the bare strip.
-  if (!session || pathname.startsWith('/auth')) {
-    if (pathname === '/' || pathname.startsWith('/auth')) return null;
+  // The landing, the auth pages and the suspended screen carry their own brand; other public pages
+  // get the bare strip.
+  if (!session || ownsItsFrame(pathname)) {
+    if (pathname === '/' || ownsItsFrame(pathname)) return null;
     return (
       <>
         <header className="topbar">

@@ -45,6 +45,13 @@ export interface IUser extends Document {
   // been nulled. The row itself lingers up to 90 days (purgeDeletedAccounts) so the disclosed
   // retention promise in /terms is one we actually keep, then it is removed for good.
   deletedAt?: Date | null;
+  // Locked out, not erased. An admin can set and clear this, and nothing else about the account
+  // changes: the content stays, the password stays, the groups stay. Sign-in is refused and any
+  // live session stops authorising on its next read, so a suspended account cannot act — it lands
+  // on /suspended, which tells them how to ask for it back. Deletion is the other, final answer;
+  // this is the one you can take back.
+  suspendedAt?: Date | null;
+  suspendedBy?: string;
   // Jarvis's per-user daily allowance. The pair is the whole mechanism: a count, and the day in
   // the user's own zone it belongs to. A count stamped with any other day reads as zero, so there
   // is no reset job to run and no midnight cron to get wrong.
@@ -109,6 +116,8 @@ const UserSchema: Schema<IUser> = new Schema({
   jarvisConfirmShared: { type: Boolean, default: true },
   // Absent on every live account, which reads as "not deleted" — the honest default.
   deletedAt: { type: Date, default: null },
+  suspendedAt: { type: Date, default: null },
+  suspendedBy: { type: String },
   role: { type: String },
   reminderDefault: { type: String, enum: REMINDER_VALUES },
 }, { timestamps: true });

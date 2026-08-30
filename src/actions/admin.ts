@@ -9,6 +9,7 @@ import { envAllowlisted } from "@/lib/sarvam";
 import { isValidObjectId } from "mongoose";
 import { DEFAULT_TZ } from "@/lib/time";
 import { resolveRange, type RangeInput } from "@/lib/adminRange";
+import { eraseAccount } from "@/actions/account";
 import { User } from "@/lib/models/User";
 import { Link } from "@/lib/models/Link";
 import { Note } from "@/lib/models/Note";
@@ -37,34 +38,61 @@ export async function amIAdmin() {
 }
 
 /**
- * Who may spend the founder's Sarvam balance.
+ * The one people list behind "Manage users".
  *
- * This is the ONE place in /admin that names individual users, and it is a deliberate exception
- * to the counts-only rule above: you cannot grant a person access without seeing which person.
- * It returns an address, a name and two booleans — never anything they have written.
+ * This is the ONE place in /admin that names individual users, and it is a deliberate exception to
+ * the counts-only rule above: you cannot grant, suspend or delete a person without seeing which
+ * person. It returns an address, a name and the states an admin can change — never anything they
+ * have written.
+ *
+ * One list rather than one per action, because for the admin they are one question about one
+ * person. Split across two cards, the same account had to be searched for twice and the two cards
+ * could disagree about it.
+ *
+ * `admin` is computed per row so the card can draw an admin as untouchable, but that is a label,
+ * not the gate: both destructive writers re-check it server-side.
  *
  * ponytail: a regex scan over users, capped at 50. There is no index for it and there should not
  * be one yet — this is two founders searching a few hundred rows. Add a text index when the
  * count makes it hurt.
  */
-export async function listUsersForSarvam(q?: string) {
+export async function listUsersForManage(q?: string, page?: number) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id || !isAdmin(session.user.email)) return { success: false as const, error: 'Not found' };
     await connectToDatabase();
 
     const term = String(q || '').trim();
-    const filter = term
+    const filter: Record<string, unknown> = term
       ? { $or: [{ email: new RegExp(escapeRegex(term), 'i') }, { name: new RegExp(escapeRegex(term), 'i') }] }
       : {};
+    // A deleted account is a name/email stub in retention, not a person you can act on. It has
+    // already had the final answer, and offering any of these three on one is offering a no-op.
+    filter.deletedAt = null;
+
+    /* A page at a time, and the window is the query rather than a slice of one. The old 50-row cap
+       was a silent truncation: past fifty accounts the list simply stopped, and nothing on the page
+       said so. `total` comes back so the card can say which slice of what you are looking at.
+
+       Clamped here, not trusted: the page number arrives from the client. */
+    const size = 10;
+    const want = Math.max(1, Math.floor(Number(page) || 1));
+    const total = await User.countDocuments(filter);
+    const pages = Math.max(1, Math.ceil(total / size));
+    // Deleting the last row of the last page would otherwise leave the admin on an empty page.
+    const current = Math.min(want, pages);
 
     const users = await User.find(filter)
-      .select('email name sarvamKey.last4 sarvamAccess sarvamAccessBy sarvamAccessAt')
-      // Everyone who already has access first — the list is for checking as much as granting
-      .sort({ sarvamAccess: -1, createdAt: -1 }).limit(50).lean();
+      .select('email name sarvamKey.last4 sarvamAccess sarvamAccessBy suspendedAt suspendedBy createdAt')
+      // The two states worth noticing float up, so a long list cannot bury somebody who is locked
+      // out or spending money on page nine. `_id` breaks ties: without a total order, Mongo may
+      // return the same document on two pages and skip another entirely.
+      .sort({ suspendedAt: -1, sarvamAccess: -1, createdAt: -1, _id: -1 })
+      .skip((current - 1) * size).limit(size).lean();
 
     return {
       success: true as const,
+      total, page: current, pages, size,
       users: users.map(u => ({
         id: String(u._id),
         email: u.email,
@@ -73,10 +101,14 @@ export async function listUsersForSarvam(q?: string) {
         access: !!u.sarvamAccess,
         envListed: envAllowlisted(u.email),
         grantedBy: u.sarvamAccessBy || '',
+        suspended: !!u.suspendedAt,
+        suspendedAt: u.suspendedAt ? new Date(u.suspendedAt).toISOString() : '',
+        suspendedBy: u.suspendedBy || '',
+        admin: isAdmin(u.email),
       })),
     };
   } catch (error) {
-    console.error('Failed to list users for Sarvam:', error);
+    console.error('Failed to list users for management:', error);
     return { success: false as const, error: 'Could not load the list' };
   }
 }
@@ -104,6 +136,79 @@ export async function setSarvamAccess(userId: string, on: boolean) {
   } catch (error) {
     console.error('Failed to set Sarvam access:', error);
     return { success: false as const, error: 'Could not change that' };
+  }
+}
+
+/**
+ * Lock an account out, or let it back in.
+ *
+ * An admin may not suspend another admin. The list is ADMIN_EMAILS, which is an env var — so this
+ * is not a privilege ladder to climb, it is a footgun to remove: two founders both hold this
+ * button, and one bad tap should not be able to lock the other out of the page that holds the
+ * button. Whoever needs the list changed changes the env var.
+ */
+export async function setUserSuspended(userId: string, on: boolean) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id || !isAdmin(session.user.email)) return { success: false as const, error: 'Not found' };
+    await connectToDatabase();
+    if (!isValidObjectId(userId)) return { success: false as const, error: 'Unknown account' };
+
+    const target = await User.findById(userId).select('email deletedAt')
+      .lean<{ email?: string; deletedAt?: Date | null } | null>();
+    if (!target || target.deletedAt) return { success: false as const, error: 'Unknown account' };
+    if (isAdmin(target.email)) {
+      return { success: false as const, error: 'That account is an admin — admins cannot be suspended here' };
+    }
+
+    await User.updateOne({ _id: userId }, on
+      ? { $set: { suspendedAt: new Date(), suspendedBy: (session.user.email || '').toLowerCase() } }
+      // Cleared, not stamped: `suspendedBy` describes a suspension that no longer exists, and
+      // leaving the last admin's name on a restored account reads as if they are still locked out.
+      : { $set: { suspendedAt: null }, $unset: { suspendedBy: 1 } });
+
+    return { success: true as const, suspended: on, by: (session.user.email || '').toLowerCase(), email: target.email || '' };
+  } catch (error) {
+    console.error('Failed to set suspension:', error);
+    return { success: false as const, error: 'Could not change that' };
+  }
+}
+
+/**
+ * The final answer: erase the account and everything personal in it.
+ *
+ * Runs `eraseAccount` — the exact path a user's own "delete my account" takes, which is why that
+ * function was split out from its session-bound wrapper. Groups they created hand over to the
+ * oldest survivor, their personal content and uploads go, and the row is reduced to the
+ * name/email/role stub that /terms promises for 90 days before purge.
+ *
+ * No undo. Same admin guard as suspension, for the stronger version of the same reason.
+ */
+export async function deleteUserAsAdmin(userId: string) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id || !isAdmin(session.user.email)) return { success: false as const, error: 'Not found' };
+    await connectToDatabase();
+    if (!isValidObjectId(userId)) return { success: false as const, error: 'Unknown account' };
+
+    const target = await User.findById(userId).select('email role deletedAt')
+      .lean<{ email?: string; role?: string; deletedAt?: Date | null } | null>();
+    if (!target?.email) return { success: false as const, error: 'Unknown account' };
+    if (target.deletedAt) return { success: true as const, already: true, email: target.email };
+    if (isAdmin(target.email)) {
+      return { success: false as const, error: 'That account is an admin — admins cannot be deleted here' };
+    }
+    // Deleting yourself from the admin page would be a strange way to do it, and the guard above
+    // already covers it for any real admin. This is the belt for a deploy with an empty list.
+    if (String(session.user.id) === String(userId)) {
+      return { success: false as const, error: 'Use Profile to delete your own account' };
+    }
+
+    await eraseAccount(userId, target.email, target.role || '');
+    return { success: true as const, already: false, email: target.email };
+  } catch (error) {
+    console.error('Failed to delete user as admin:', error);
+    return { success: false as const, error: 'Could not delete that account' };
   }
 }
 

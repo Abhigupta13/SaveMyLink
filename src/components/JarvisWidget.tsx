@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { Sparkles, X, Send, ArrowUpRight, Mic, Square, Volume2, VolumeX, Trash2, MessageSquare, Users } from 'lucide-react';
 import {
@@ -13,6 +13,7 @@ import { syncTask } from '@/lib/taskNotifications';
 import { getProjects } from '@/actions/project';
 import { markIntro } from '@/actions/intro';
 import { formatTime, formatDay } from '@/lib/time';
+import { ownsItsFrame } from '@/lib/nav';
 
 type Mode = 'idle' | 'capturing';
 type Tab = 'chat' | 'sessions';
@@ -50,6 +51,7 @@ const when = (iso: string) => {
 export default function JarvisWidget() {
   const { status } = useSession();
   const router = useRouter();
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -509,7 +511,10 @@ export default function JarvisWidget() {
     if (next) stopSpeaking();
   };
 
-  if (status !== 'authenticated') return null;
+  // A suspended account keeps a session object with no `user` on it, so `status` still reads
+  // 'authenticated' — the assistant would float over the one screen meant to be a dead end. Every
+  // action behind it refuses anyway; offering it is a button that can only fail.
+  if (status !== 'authenticated' || ownsItsFrame(pathname)) return null;
 
   const statusLabel =
     busy ? 'Thinking…'

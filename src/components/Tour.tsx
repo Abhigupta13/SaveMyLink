@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { usePathname, useRouter } from 'next/navigation';
 import { X, ArrowRight, Check, Loader2 } from 'lucide-react';
 import { tourStatus, markTourDone } from '@/actions/intro';
+import { ownsItsFrame } from '@/lib/nav';
 
 /**
  * A guided spotlight tour of the real app. It navigates page to page, cuts a bright hole around a
@@ -84,6 +85,15 @@ export default function Tour() {
   // Auto-start on a fresh account's first login; resume mid-tour after a reload; a launcher button
   // fires 'tour:start' to replay it. tourStatus withholds auto-start for anyone signed out.
   useEffect(() => {
+    /* Never on a screen that carries its own frame. A saved step resumes the tour without asking
+       the server first, so a suspended account with a half-finished tour in localStorage would get
+       it over /suspended — and the tour NAVIGATES, walking them into pages that now refuse.
+
+       window.location rather than the `pathname` hook, for the same reason the step effect below
+       reads it: this effect runs once on mount and must keep doing so. Taking `pathname` as a
+       dependency would re-run the whole auto-start check on every navigation and restart the tour
+       under someone already using the app. */
+    if (ownsItsFrame(window.location.pathname)) return;
     let saved: number | null = null;
     try { const v = localStorage.getItem(STORE); if (v !== null) saved = Number(v); } catch {}
     // The server answers first, always. Resuming straight off localStorage let a step left by

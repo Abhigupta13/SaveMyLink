@@ -20,6 +20,9 @@ export default withAuth({
 // visitor sees first. No route in this app has a dot in it, so the shape is safe to key on.
 export const config = {
   matcher: [
-    "/((?!api/auth|auth|terms|download|_next/static|_next/image|.*\\.[a-z0-9]+$|$).*)",
+    // `suspended` is public for the same reason `auth` is: the person who needs to read it is, by
+    // definition, the person this gate has just refused. Behind the gate it would bounce them to
+    // the sign-in page they cannot get past, and the screen explaining that would never be seen.
+    "/((?!api/auth|auth|terms|download|suspended|_next/static|_next/image|.*\\.[a-z0-9]+$|$).*)",
   ]
 }

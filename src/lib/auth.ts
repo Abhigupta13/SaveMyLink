@@ -4,6 +4,7 @@ import connectToDatabase from "@/lib/mongodb";
 import { User } from "@/lib/models/User";
 import bcrypt from "bcryptjs";
 import { usableBase } from "@/lib/url";
+import { SUSPENDED_ERROR } from "@/lib/suspension";
 
 const googleEnabled = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 
@@ -63,6 +64,13 @@ export const authOptions = {
           throw new Error("This account has been deleted");
         }
 
+        // Suspended is not deleted: the password still works and the content is all still there,
+        // which is exactly why the refusal has to be its own sentence. The sign-in page turns this
+        // one into a link to /suspended rather than showing it as a typo-style error.
+        if (user.suspendedAt) {
+          throw new Error(SUSPENDED_ERROR);
+        }
+
         const isPasswordCorrect = await bcrypt.compare(credentials.password, user.password);
 
         if (!isPasswordCorrect) {
@@ -91,6 +99,11 @@ export const authOptions = {
         const existing = await User.findOne({ email });
         // A deleted account cannot be revived by signing in with Google either.
         if (existing?.deletedAt) return false;
+        // Returning a URL from this callback redirects instead of erroring, which is the whole
+        // point for a suspension: the person is not doing anything wrong and there is something
+        // for them to read and act on. `false` here would have dumped them on a generic
+        // AccessDenied with no way to ask for the account back.
+        if (existing?.suspendedAt) return '/suspended';
         // Google has already proven the address. That is the whole job of our own OTP, so a
         // Google sign-in settles it — including for a password account that predates verification
         // and is now signing in this way (allowDangerousEmailAccountLinking makes them one row).
@@ -111,8 +124,14 @@ export const authOptions = {
         // ponytail: one indexed _id lookup per session read. Fold into the JWT if it ever profiles.
         try {
           await connectToDatabase();
-          const u = await User.findById(token.id).select('deletedAt').lean<{ deletedAt?: Date | null } | null>();
+          const u = await User.findById(token.id).select('deletedAt suspendedAt')
+            .lean<{ deletedAt?: Date | null; suspendedAt?: Date | null } | null>();
           if (u?.deletedAt) { session.user = undefined; return session; }
+          // Suspension has to bite the same way and in the same place. An admin suspends somebody
+          // who is signed in right now on a phone; their JWT is stateless and stays valid for days,
+          // so without this they keep using the app until it expires. Dropping the user here means
+          // every getServerSession-guarded action refuses from the next request onward.
+          if (u?.suspendedAt) { session.user = undefined; session.suspended = true; return session; }
         } catch (err) {
           console.error('[session] could not check account status:', err);
         }
