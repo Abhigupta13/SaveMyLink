@@ -2,14 +2,20 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Search, LayoutGrid, List } from 'lucide-react';
+import { LayoutGrid, List } from 'lucide-react';
 import { NAV } from '@/lib/nav';
 
-// every rail destination, plus Search which only exists as a FAB elsewhere
-const TILES = [
-  ...NAV,
-  { href: '/search', Icon: Search, title: 'Search', desc: 'Across links, tasks, notes, meetings' },
-];
+/* The vault, and only the vault: the places things are KEPT.
+ *
+ * Search and Import were the two tiles here that are not places — one is a verb you can already do
+ * from the FAB on every screen, the other is something you do once when you arrive and then never
+ * again. Both sat in the grid at the same weight as Links and Tasks, which is the weight of a
+ * destination you open every day.
+ *
+ * Neither is orphaned: Search stays on its FAB, and Import stays in the desktop rail, which draws
+ * every NAV entry.
+ */
+const TILES = NAV.filter(n => n.href !== '/import');
 
 export default function HomeTiles() {
   const [view, setView] = useState<'grid' | 'list'>('grid');
