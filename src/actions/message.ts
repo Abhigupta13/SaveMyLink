@@ -3,6 +3,8 @@
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import { Message, MAX_MESSAGE_CHARS, type IMessageRef, type MessageRefKind } from "@/lib/models/Message";
+import { ChatRead } from "@/lib/models/ChatRead";
+import { unreadMessageCount } from "@/lib/chatUnread";
 import Task from "@/lib/models/Task";
 import { Mom } from "@/lib/models/Mom";
 import { Note } from "@/lib/models/Note";
@@ -156,6 +158,47 @@ export async function getMessages(projectId: string, opts?: { after?: string; be
   } catch (error) {
     console.error('Failed to get messages:', error);
     return { success: false, error: 'Could not load the chat' };
+  }
+}
+
+/**
+ * The reader has seen this chat up to now. Called when the panel opens and again whenever the poll
+ * delivers into an open panel, so a conversation being watched live never accrues a badge.
+ *
+ * `lastReadAt` only ever moves forward. Two tabs, or a poll landing a moment after an open, arrive
+ * in whatever order the network gives them, and the older stamp winning would resurrect messages
+ * the person has already read. The upsert claims the row; the `$max` decides the value.
+ *
+ * Gated like every other read of this chat — a projectId you are not a member of writes nothing.
+ */
+export async function markChatRead(projectId: string) {
+  try {
+    const ctx = await chatSession(projectId);
+    if (!ctx) return { success: false as const, error: 'Not a member of this project' };
+
+    await ChatRead.updateOne(
+      { userId: ctx.userId, projectId },
+      { $max: { lastReadAt: new Date() } },
+      { upsert: true },
+    );
+    return { success: true as const };
+  } catch (error) {
+    // Best-effort by design: failing to record a read must never break opening the chat. The count
+    // stays high for now and the next open corrects it.
+    console.error('Failed to mark chat read:', error);
+    return { success: false as const, error: 'Could not mark the chat read' };
+  }
+}
+
+/** What the chat card shows: messages from other people that arrived after this reader last looked. */
+export async function getUnreadCount(projectId: string) {
+  try {
+    const ctx = await chatSession(projectId);
+    if (!ctx) return { success: false as const, error: 'Not a member of this project' };
+    return { success: true as const, unread: await unreadMessageCount(projectId, ctx.userId) };
+  } catch (error) {
+    console.error('Failed to count unread messages:', error);
+    return { success: false as const, error: 'Could not count unread messages' };
   }
 }
 

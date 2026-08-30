@@ -9,7 +9,7 @@ import {
   UserPlus, Users, StickyNote, FileText, BadgeCheck, Mic, CheckSquare, History, BookOpen,
   MessageSquare, Send, Paperclip,
 } from 'lucide-react';
-import { getMessages, sendMessage, editMessage, deleteMessage } from '@/actions/message';
+import { getMessages, sendMessage, editMessage, deleteMessage, markChatRead } from '@/actions/message';
 import { goConnectDrive } from '@/lib/driveConnect';
 import { useDriveGate } from '@/components/useDriveGate';
 import { getTasks, createTask, toggleTask, deleteTask, updateTask, signOffTask, getReminderDefault } from '@/actions/task';
@@ -172,7 +172,10 @@ export default function ProjectWorkspace() {
 
   // ---------- Chat ----------
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [chatCount, setChatCount] = useState(0);
+  /* Messages from other people that landed since this reader last opened the panel — not the size
+     of the thread. Zeroed locally the moment the panel opens, so stepping back out shows a settled
+     card instead of the old number until the next workspace load. */
+  const [unread, setUnread] = useState(0);
   const [chatDraft, setChatDraft] = useState('');
   const [chatRefs, setChatRefs] = useState<PendingRef[]>([]);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
@@ -268,7 +271,7 @@ export default function ProjectWorkspace() {
     setNotes(res.notes || []);
     setFiles(res.documents || []);
     setEvents(res.events || []);
-    setChatCount(res.messageCount || 0);
+    setUnread(res.unreadCount || 0);
     setNotesDraft(res.project.notes || '');
     setRenaming(res.project.name);
     setLoading(false);
@@ -339,6 +342,13 @@ export default function ProjectWorkspace() {
     const incoming = (res.messages || []) as ChatMessage[];
     if (!incoming.length) return;
     lastSeen.current = incoming[incoming.length - 1].createdAt;
+    /* Something arrived into an open panel, so it has been read by definition — this poll only
+       runs while the chat is on screen. Marking read only when the thread actually moves keeps
+       this to one small write per new message rather than one every five seconds per viewer.
+       Fire-and-forget: a failed stamp leaves the count high until the next open, which is a
+       stale badge, not a broken chat. */
+    markChatRead(projectId).catch(() => {});
+    setUnread(0);
     setMessages(prev => {
       // Merge by id, never append: a poll can race the optimistic echo of your own send, and a
       // re-read of the newest page has to be able to replace a row that was edited or removed.
@@ -354,11 +364,16 @@ export default function ProjectWorkspace() {
     // a removal, because neither moves createdAt.
     lastSeen.current = null;
     let alive = true;
+    /* Opening the panel is the read, whether or not anything new arrives in it. Without this an
+       empty poll leaves the badge standing on a chat the person is looking at.
+       Cleared on the server's answer rather than optimistically: a stamp that did not land should
+       not leave a card claiming everything has been read. */
+    markChatRead(projectId).then(() => { if (alive) setUnread(0); }).catch(() => {});
     const tick = () => { if (alive && document.visibilityState === 'visible') pullMessages(); };
     tick();
     const id = setInterval(tick, 5000);
     return () => { alive = false; clearInterval(id); };
-  }, [status, section, pullMessages]);
+  }, [status, section, pullMessages, projectId]);
 
   // A new message lands at the bottom, which is where the eye already is.
   useEffect(() => { if (section === 'chat') chatEnd.current?.scrollIntoView({ block: 'end' }); }, [messages, section]);
@@ -777,9 +792,18 @@ export default function ProjectWorkspace() {
     { key: 'meetings', label: 'Meetings', count: moms.length, Icon: Mic, note: toReview ? `${toReview} to review` : undefined },
     { key: 'tasks', label: 'All tasks', count: open.length, Icon: CheckSquare, note: overdue.length ? `${overdue.length} overdue` : undefined, warn: true },
     { key: 'notes', label: 'Notes', count: notes.length, Icon: StickyNote },
-    // The count comes from the workspace payload, not from `messages` — that array is empty until
-    // the panel has been opened, and a card reading "0" on a busy chat is worse than no card.
-    { key: 'chat', label: 'Chat', count: Math.max(chatCount, messages.filter(m => !m.deletedAt).length), Icon: MessageSquare },
+    /* The one card whose number is not a total. "47" on a group you have read every word of is a
+       number you can do nothing with; what is worth a glance from the summary screen is how much
+       of it is new to you. Which also means it is the one card that SHOULD read 0 once the panel
+       has been opened — the old `Math.max` against the loaded thread existed to stop exactly that,
+       and would now hold the badge up at the message count forever.
+
+       Labelled either way, because every card beside it counts totals and a bare "0" here would
+       otherwise read as an empty chat rather than a read one. */
+    {
+      key: 'chat', label: 'Chat', count: unread, Icon: MessageSquare,
+      note: unread ? 'unread' : 'all caught up',
+    },
     { key: 'people', label: 'People', count: memberOptions.length, Icon: Users },
     { key: 'activity', label: 'What changed', count: events.length, Icon: History },
     { key: 'files', label: 'Files', count: files.length, Icon: FileText },

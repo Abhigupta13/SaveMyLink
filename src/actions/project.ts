@@ -13,7 +13,7 @@ import { ownerFilter, myProjectFilter } from "@/lib/projectAccess";
 import { shareUrl } from '@/lib/url';
 import { isProjectCreator, type OwnableProject } from "@/lib/scope";
 import { Event, recordEvent } from "@/lib/models/Event";
-import { Message } from "@/lib/models/Message";
+import { unreadMessageCount } from "@/lib/chatUnread";
 import { deleteProjectContent } from "@/lib/projectContent";
 import { dropAssignee } from "@/lib/dropAssignee";
 import { sinceDays } from "@/lib/activity";
@@ -429,7 +429,7 @@ export async function getProjectWorkspace(projectId: string, days?: number) {
       ...(project.viewerEmails || []),
     ].filter(Boolean))] as string[];
 
-    const [names, projects, tasks, moms, notes, docs, events, messageCount] = await Promise.all([
+    const [names, projects, tasks, moms, notes, docs, events, unreadCount] = await Promise.all([
       // Only this group's people, not every person in every group I am in
       displayNames(emails, session.user.id),
       // MomSection routes confirmed items into any group, so it needs the names of all of them
@@ -442,7 +442,11 @@ export async function getProjectWorkspace(projectId: string, days?: number) {
       // A count, not the messages: the chat card needs a number on the summary screen, and the
       // panel fetches the thread itself when it is opened. Already gated — projectForMember ran
       // above, and this query cannot widen past the projectId it just cleared.
-      Message.countDocuments({ projectId, deletedAt: null }),
+      //
+      // UNREAD, not the total. A card reading "47" on a group you have read every word of tells
+      // you nothing you would act on; the only number worth a glance from the summary screen is
+      // how much of it is new to you.
+      unreadMessageCount(projectId, session.user.id),
     ]);
 
     return {
@@ -457,7 +461,7 @@ export async function getProjectWorkspace(projectId: string, days?: number) {
       notes: notes.success ? notes.notes : [],
       documents: docs.docs || [],
       events: events.success ? events.events : [],
-      messageCount,
+      unreadCount,
     };
   } catch (error) {
     console.error('Failed to load project workspace:', error);
