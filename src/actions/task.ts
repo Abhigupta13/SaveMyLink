@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject, projectPeople, isVerified } from "@/lib/projectAccess";
+import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject, projectPeople, isVerified, myProjectIds } from "@/lib/projectAccess";
 import { canWorkOn, canSignOff, assigneeEmailsOf } from "@/lib/taskAccess";
 import { allowedAssignees } from "@/lib/validation";
 import { privateFilter, privacyOnWrite } from "@/lib/privacy";
@@ -118,6 +118,24 @@ export async function getMyOpenTasks() {
 
     await claimAssignments(session.user.id, session.user.email);
 
+    /* Where the assignee branches may look: my own personal work, or a group I can actually open.
+       Being assigned something used to be enough on its own, with no project scope at all — so a
+       task in a group I am not on still reached Home, cross-entity search, the Jarvis prompt and
+       my phone reminders. Two problems with that, and they are the same problem seen from each end:
+
+         · As a leak: it is the channel a task injected into a stranger's queue arrives through.
+           confirmMomTasks used to assign to any address with no roster check (now fixed), and this
+           is where the title and description surfaced afterwards.
+         · As a bug: Home showed work that NO screen could open. getTasks' personal view filters
+           projectId: null so it never matched, and the group's own tab needs a membership I do not
+           have — so it sat on the home page, overdue, with nowhere to go and no way to close it.
+
+       Scoping it here makes Home agree with /tasks: what you are shown is what you can reach. */
+    const reachable = [
+      { projectId: null },
+      { projectId: { $in: await myProjectIds(session.user.id, session.user.email) } },
+    ];
+
     const tasks = await Task.find({
       completed: false,
       // assigneeIds as well as assigneeId, or a co-assignee's shared work would be missing from
@@ -126,8 +144,8 @@ export async function getMyOpenTasks() {
       // and stays visible either way, which is also why it can never have been private.
       $or: [
         { userId: session.user.id, projectId: null, ...privateFilter(await hasSafe(session.user.id)) },
-        { assigneeId: session.user.id },
-        { assigneeIds: session.user.id },
+        { assigneeId: session.user.id, $or: reachable },
+        { assigneeIds: session.user.id, $or: reachable },
       ],
       // createdAt + reminder because the phone computes its own fire times off them; projectId
       // drives the per-scope counts on /tasks.

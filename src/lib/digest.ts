@@ -3,7 +3,7 @@ import { Link } from '@/lib/models/Link';
 import Task from '@/lib/models/Task';
 import { Project } from '@/lib/models/Project';
 import { projectNameMap, sharedLabel } from '@/lib/visibility';
-import { myProjectFilter } from '@/lib/projectAccess';
+import { myProjectFilter, myProjectIds } from '@/lib/projectAccess';
 import { privateFilter } from '@/lib/privacy';
 
 /**
@@ -43,6 +43,19 @@ export async function weeklyDigest(userId: string, email: string): Promise<{ tas
   const weekAgo = new Date(Date.now() - 7 * 24 * 3600e3);
   const weekAhead = new Date(Date.now() + 7 * 24 * 3600e3);
 
+  /* Where an assignee branch may look: my own work, or a group I can actually open.
+     Being assigned something used to be enough on its own, with no project scope, so a task in a
+     group I am not on still reached Home and the weekly email. It showed as an overdue row with a
+     BLANK project chip and nowhere to go: the task list's personal view filters projectId null so
+     it never matched there, and the group's own tab needs a membership I do not have.
+     The blank chip was the tell. The name lookup below already runs through myProjectFilter, so
+     this function has always known it could not name that project — it just showed the task
+     anyway. Now both halves ask the same question. */
+  const reachable = [
+    { projectId: null },
+    { projectId: { $in: await myProjectIds(userId, email) } },
+  ];
+
   const [savedLinks, dueTasks] = await Promise.all([
     Link.find({ userId, ...privateFilter(false), createdAt: { $gte: weekAgo } })
       .populate('category', 'name').sort({ createdAt: -1 }).limit(30).lean(),
@@ -51,7 +64,11 @@ export async function weeklyDigest(userId: string, email: string): Promise<{ tas
       dueAt: { $lte: weekAhead },
       // The personal branch was the half still missing: a task in the safe was being written into
       // a weekly email. The assignee branches are group work and can never have been private.
-      $or: [{ userId, ...privateFilter(false) }, { assigneeId: userId }, { assigneeIds: userId }],
+      $or: [
+        { userId, ...privateFilter(false) },
+        { assigneeId: userId, $or: reachable },
+        { assigneeIds: userId, $or: reachable },
+      ],
     }).sort({ dueAt: 1 }).limit(30).lean(),
   ]);
 
