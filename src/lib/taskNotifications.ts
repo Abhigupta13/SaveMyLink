@@ -120,7 +120,31 @@ export async function cancelAllLocal() {
   } catch { /* non-fatal: a phone that refuses to list is not a reason to block the switch */ }
 }
 
-// One-time permission bootstrap (Android 13+ POST_NOTIFICATIONS + exact alarms)
+/**
+ * A week between asks for exact alarms.
+ *
+ * The previous version asked exactly once, ever, and wrote the "asked" flag BEFORE opening the
+ * settings screen — so backing out of that screen, or never finding the toggle, permanently
+ * downgraded every reminder to inexact with no second chance and nothing on screen to say so.
+ * On Android 14+ that is the default outcome, because exact alarms are not granted automatically
+ * to an app that is not a clock. Reminders are the reason people install this, so "silently late,
+ * forever, after one mis-tap" is the wrong failure.
+ *
+ * Asking again is the fix; asking on every open would be nagging. A week is long enough not to be
+ * a nuisance and short enough that a person who meant to do it gets another chance.
+ */
+const EXACT_ALARM_ASKED_AT = 'exactAlarmAskedAt';
+const EXACT_ALARM_ASK_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Private-mode browsers and locked-down webviews throw on access rather than returning null. */
+function readStamp(key: string): number {
+  try { return Number(localStorage.getItem(key)) || 0; } catch { return 0; }
+}
+function writeStamp(key: string, value: number) {
+  try { localStorage.setItem(key, String(value)); } catch { /* storage disabled; ask again next open */ }
+}
+
+// Permission bootstrap (Android 13+ POST_NOTIFICATIONS + exact alarms)
 export async function ensurePermissions() {
   const p = await plugin();
   if (!p) return;
@@ -130,11 +154,16 @@ export async function ensurePermissions() {
   scheduleWeeklyDigest(); // now that permission exists
   try {
     const { exact_alarm } = await ln.checkExactNotificationSetting();
-    if (exact_alarm !== 'granted' && !localStorage.getItem('exactAlarmPrompted')) {
-      localStorage.setItem('exactAlarmPrompted', '1');
-      // Opens system settings; without it alarms fire inexactly (minutes late)
-      await ln.changeExactNotificationSetting();
-    }
+    // Granted is the end of it — the check is the source of truth, so nothing needs remembering
+    // once it passes, and a person who grants it later is never asked again.
+    if (exact_alarm === 'granted') return;
+
+    const asked = readStamp(EXACT_ALARM_ASKED_AT);
+    if (asked && Date.now() - asked < EXACT_ALARM_ASK_EVERY_MS) return;
+
+    writeStamp(EXACT_ALARM_ASKED_AT, Date.now());
+    // Opens system settings; without it alarms fire inexactly (minutes late)
+    await ln.changeExactNotificationSetting();
   } catch {
     // Older Android — exact alarms need no special access
   }
