@@ -214,20 +214,13 @@ export async function refreshMetadata(linkId: string) {
   }
 }
 
-export async function migrateExistingLinksToPrivate() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return { error: 'Not authenticated' };
-  const userId = (session.user as any).id;
-
-  await connectToDatabase();
-  try {
-    const result = await Link.updateMany({ userId }, { isPrivate: true });
-    revalidatePath('/');
-    return { success: true, modifiedCount: result.modifiedCount };
-  } catch (err: any) {
-    return { error: err.message };
-  }
-}
+/* Removed: migrateExistingLinksToPrivate(). A one-off migration from when the Private Safe first
+   shipped, with no callers left anywhere and no UI that could reach it. It was session-gated, so it
+   could only ever affect the caller's own library — but its whole body was
+   `Link.updateMany({ userId }, { isPrivate: true })`, i.e. one call to an endpoint no screen
+   exposes swept every link the caller owns behind the PIN, with no confirmation and no undo.
+   Dead destructive code on a live RPC surface is worth less than nothing; toggleLinkPrivacy below
+   is the supported way to move a single link. */
 
 export async function toggleLinkPrivacy(linkId: string, isPrivate: boolean) {
   const session = await getServerSession(authOptions);

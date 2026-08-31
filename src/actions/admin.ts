@@ -9,7 +9,9 @@ import { envAllowlisted } from "@/lib/sarvam";
 import { isValidObjectId } from "mongoose";
 import { DEFAULT_TZ } from "@/lib/time";
 import { resolveRange, type RangeInput } from "@/lib/adminRange";
-import { eraseAccount } from "@/actions/account";
+// lib/, not actions/: eraseAccount takes its victim as an argument instead of reading a session,
+// so it must never be an exported Server Action. This caller is the admin gate for it.
+import { eraseAccount } from "@/lib/accountErase";
 import { User } from "@/lib/models/User";
 import { Link } from "@/lib/models/Link";
 import { Note } from "@/lib/models/Note";
