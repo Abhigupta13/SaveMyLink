@@ -265,7 +265,12 @@
 /* A locked-out account is the one state you must not have to read to notice. */
 .a-person.out { border-color: color-mix(in srgb, var(--danger-color) 45%, var(--border-color)); }
 .a-person-who { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 190px; }
-.a-person-acts { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+/* It MUST be allowed to shrink, or its own flex-wrap never engages. A flex item with
+   `flex-shrink: 0` is sized to max-content, so on a phone the three buttons came to 300px inside a
+   280px row and Delete hung out over the card's edge instead of dropping to a second line — the
+   whole point of the wrap. `min-width: 0` is the other half: the default `auto` floors an item at
+   its widest child and re-creates the overflow on its own. */
+.a-person-acts { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .a-person-note { font-size: 0.72rem; font-weight: 700; color: var(--text-tertiary); flex-shrink: 0; }
 .a-btn {
   display: inline-flex; align-items: center; gap: 5px;
@@ -273,6 +278,9 @@
   border: 1px solid var(--border-color); background: var(--bg-secondary);
   color: var(--text-primary); font: inherit; font-size: 0.78rem; font-weight: 700;
   cursor: pointer; white-space: nowrap;
+  /* The buttons keep their size and WRAP; they do not squash. A squashed row of three would sit
+     under the 44px touch minimum and put Delete a thumb's width from Suspend. */
+  flex-shrink: 0;
   transition: border-color .15s ease, color .15s ease;
 }
 .a-btn:hover:not(:disabled) { border-color: var(--accent-text); color: var(--accent-text); }
