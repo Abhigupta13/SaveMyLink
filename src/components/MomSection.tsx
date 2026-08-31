@@ -76,6 +76,9 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     brief: { Icon: BookOpen, label: 'Brief' },
   } as const;
   const [drafts, setDrafts] = useState<Record<string, Draft[]>>({});
+  // The momId currently being confirmed, or null. Guards against a double tap creating every
+  // extracted task, note and brief twice.
+  const [confirming, setConfirming] = useState<string | null>(null);
   const toLocalInput = (iso?: string | null) => {
     if (!iso) return '';
     const d = new Date(iso);
@@ -109,6 +112,37 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
    */
   const micBusy = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The tick count, mirrored out of state so the interval can read it without the updater having
+  // to do anything but return a number. See the cap check in startRecording.
+  const elapsedRef = useRef(0);
+  /* The live getUserMedia stream. Held in a ref purely so unmount can release it: the tracks were
+     only ever stopped inside recorder.onstop, so navigating away mid-recording left the microphone
+     OPEN — the browser's recording indicator stayed lit for the rest of the session, on a page the
+     user had left. That is the most serious thing in this file. */
+  const streamRef = useRef<MediaStream | null>(null);
+  /* False once this component is gone. waitForTranscript polls every 8s up to 150 times — twenty
+     minutes — and nothing stopped it when the page changed: it kept calling a server action and
+     setting state on an unmounted component for the whole window. Every loop checks this. */
+  const aliveRef = useRef(true);
+
+  /* The one cleanup that had to exist and did not. Three separate leaks, all of them outliving the
+     screen: the elapsed-time interval, the transcript poll, and the microphone itself. */
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (timerRef.current) clearInterval(timerRef.current);
+      // stop() fires onstop, which would try to run the whole upload pipeline from a dead
+      // component — so drop the handler first and release the hardware by hand.
+      const rec = recorderRef.current;
+      if (rec) {
+        rec.onstop = null;
+        if (rec.state !== 'inactive') { try { rec.stop(); } catch { /* already stopping */ } }
+      }
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    };
+  }, []);
   const [editing, setEditing] = useState<string | null>(null);   // momId whose title/summary is being edited
   const [draftMom, setDraftMom] = useState<{ title: string; summary: string }>({ title: '', summary: '' });
   const [showTranscript, setShowTranscript] = useState<string | null>(null);
@@ -157,6 +191,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     micBusy.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;   // so unmount can release the mic even if onstop never runs
       const recorder = new MediaRecorder(stream, {
         mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : undefined,
         audioBitsPerSecond: 32000, // ~14MB/hour — fits transcription file caps
@@ -166,6 +201,11 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       recorder.onstop = async () => {
         micBusy.current = false;
         stream.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+        // Unmount clears this handler before stopping, so reaching here means the component is
+        // still alive. Belt and braces: uploading a recording into a screen that is gone would
+        // set state on nothing and give the user no way to see the result.
+        if (!aliveRef.current) return;
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         await runPipeline(blob);
       };
@@ -174,12 +214,22 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       setRecording(true);
       setElapsed(0);
       setStageTitle(meetingTitle());
-      timerRef.current = setInterval(() => setElapsed(s => {
-        // Past this the upload is rejected by the host before any engine sees it, and on the paid
-        // path it would also be a real bill. Stop it ourselves rather than lose the recording.
-        if (s + 1 >= MAX_SECONDS) { stopRecording(); toast('Stopped at 20 minutes — longer meetings after the next round.', 'error'); }
-        return s + 1;
-      }), 1000);
+      /* The cap lives in the interval callback, NOT inside the state updater.
+         It used to call stopRecording() and toast() from within `setElapsed(s => …)`. A state
+         updater has to be pure: React invokes it twice under StrictMode, so that was two stops on
+         one recorder — the second an InvalidStateError — and two toasts. Counting in a ref keeps
+         the updater a pure `s => s + 1` while the side effects stay here, where they are allowed.
+         Past 20 minutes the host rejects the upload before any engine sees it, and on the paid
+         path it would also be a real bill, so stopping ourselves saves the recording. */
+      elapsedRef.current = 0;
+      timerRef.current = setInterval(() => {
+        elapsedRef.current += 1;
+        setElapsed(elapsedRef.current);
+        if (elapsedRef.current >= MAX_SECONDS) {
+          stopRecording();
+          toast('Stopped at 20 minutes — longer meetings after the next round.', 'error');
+        }
+      }, 1000);
     } catch (err) {
       micBusy.current = false;   // nothing to stop, so nothing else will release it
       toast('Microphone unavailable. Check app permissions.', 'error');
@@ -191,6 +241,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     setRecording(false);
     if (timerRef.current) clearInterval(timerRef.current);
   };
+
 
   const meetingTitle = () => `Meeting ${formatDay(new Date())}`;
 
@@ -216,6 +267,10 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     // a reload picks it back up rather than the meeting being lost to a slow queue.
     for (let i = 0; i < 150; i++) {
       await new Promise(r => setTimeout(r, 8000));
+      // Left the page? Stop. The job id is on the MOM, so a reload picks the poll back up — which
+      // is exactly why continuing here bought nothing and cost a server call every 8s for twenty
+      // minutes, plus state updates on a component that no longer exists.
+      if (!aliveRef.current) return false;
       const res = await pollMomTranscription(momId);
       if (!res.success) { say(''); toast(res.error || 'Something went wrong', 'error'); fetchMoms(); return false; }
       if (res.done) return true;
@@ -329,7 +384,23 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     setDrafts(prev => ({ ...prev, [momId]: prev[momId].filter((_, i) => i !== idx) }));
   };
 
+  /* `confirming` is what stops a second tap duplicating the whole meeting. confirmMomTasks walks
+     up to 25 items, and each one resolves a project, a roster and an assignee — seconds of work
+     with no feedback, on a phone, which is exactly when people tap again. `tasksConfirmed` is only
+     written at the very end server-side, so it cannot serialise the second call; the guard has to
+     be here. Keyed by momId because several meetings render at once and one confirming must not
+     disable the others. */
   const handleConfirm = async (momId: string) => {
+    if (confirming) return;
+    setConfirming(momId);
+    try {
+      await runConfirm(momId);
+    } finally {
+      setConfirming(null);
+    }
+  };
+
+  const runConfirm = async (momId: string) => {
     const items = (drafts[momId] || []).filter(d => d.title.trim()).map(d => ({
       kind: d.kind,
       title: d.title.trim(),
@@ -676,12 +747,13 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
                     </div>
 
                     <button onClick={() => handleConfirm(mom._id)} className="btn-primary"
+                      disabled={confirming !== null}
                       style={{ marginTop: '14px', padding: '12px 28px', borderRadius: '14px', fontWeight: 800 }}>
-                      Create {(['task', 'note', 'brief'] as const)
+                      {confirming === mom._id ? 'Creating…' : <>Create {(['task', 'note', 'brief'] as const)
                         .map(k => [list.filter(d => d.kind === k).length, k] as const)
                         .filter(([n]) => n)
                         .map(([n, k]) => `${n} ${k === 'brief' ? 'brief note' : k}${n === 1 ? '' : 's'}`)
-                        .join(' + ')}
+                        .join(' + ')}</>}
                     </button>
                   </div>
                 );

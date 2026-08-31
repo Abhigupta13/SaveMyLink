@@ -363,8 +363,23 @@ export default function JarvisWidget() {
       const startedAt = Date.now();
       let quietSince: number | null = null;
       let spoke = false;
+
+      /* Close the AudioContext on EVERY way out of the loop, exactly once.
+         Only the `rec.state !== 'recording'` branch used to close it — and that branch was
+         unreachable, because all three normal exits below call rec.stop() and return without
+         scheduling another tick, so nothing ever looked at rec.state again. One context leaked per
+         voice question. Chrome caps a page at six concurrent AudioContexts, so the seventh
+         `new AudioContext()` threw, fell into the outer catch, and told the user "Microphone is not
+         available." — a microphone fault message for a resource leak, after about six questions. */
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        ctx.close().catch(() => {});
+      };
+
       const tick = () => {
-        if (rec.state !== 'recording') { ctx.close().catch(() => {}); return; }
+        if (rec.state !== 'recording') { release(); return; }
         analyser.getByteTimeDomainData(buf);
         let peak = 0;
         for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
@@ -372,9 +387,9 @@ export default function JarvisWidget() {
         if (peak > 6) { spoke = true; quietSince = null; } else if (quietSince === null) quietSince = now;
 
         // Only close the clip once you've actually said something and then gone quiet
-        if (spoke && quietSince && now - startedAt > MIN_SPEECH_MS && now - quietSince > SILENCE_MS) { rec.stop(); return; }
-        if (!spoke && now - startedAt > WAIT_FOR_SPEECH_MS) { rec.stop(); return; }
-        if (now - startedAt > 60000) { rec.stop(); return; }
+        if (spoke && quietSince && now - startedAt > MIN_SPEECH_MS && now - quietSince > SILENCE_MS) { rec.stop(); release(); return; }
+        if (!spoke && now - startedAt > WAIT_FOR_SPEECH_MS) { rec.stop(); release(); return; }
+        if (now - startedAt > 60000) { rec.stop(); release(); return; }
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
