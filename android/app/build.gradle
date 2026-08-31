@@ -7,8 +7,11 @@ android {
         applicationId "com.swaraj.savemylink"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // Bump both on every APK that reaches a phone. Android refuses to install a build whose
+        // versionCode is not greater than the installed one, so leaving this at 1 across rebuilds
+        // is why a re-download reported "App not installed" and looked like a broken file.
+        versionCode 2
+        versionName "1.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,7 +19,30 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // One signing key for the sideloaded build, committed and shared.
+    //
+    // Gradle's default is ~/.android/debug.keystore, which is generated per machine. The APK on the
+    // download page was signed on a laptop this repo has never seen, so a rebuild anywhere else
+    // produced an APK Android refuses to install over it (INSTALL_FAILED_UPDATE_INCOMPATIBLE) —
+    // reported as "App not installed", indistinguishable from a corrupt download.
+    //
+    // A committed debug key is not a secret, and is not meant to be: it is the same posture as the
+    // well-known keystore the Android SDK ships. It is fine for a sideloaded APK, where the install
+    // warning already tells the user Google has not vouched for this build. It must NEVER become
+    // the Play release key — that one is generated with the Play org account, kept out of git, and
+    // if it leaks the listing cannot be recovered.
+    signingConfigs {
+        debug {
+            storeFile file('../keystore/debug.keystore')
+            storePassword 'android'
+            keyAlias 'savemylink'
+            keyPassword 'android'
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
