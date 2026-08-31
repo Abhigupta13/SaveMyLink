@@ -212,7 +212,9 @@ export default function NotesPage() {
           {noteIdRef.current && canRemove(editing) && <button className="icon-btn danger" onClick={() => remove(noteIdRef.current!)} title="Delete"><Trash2 size={16} /></button>}
           <button className="btn-primary" onClick={save} style={{ padding: '9px 20px', borderRadius: '12px', fontWeight: 800 }}>Done</button>
         </div>
-        <input className="field" placeholder="Title" value={title} onChange={e => setTitle(e.target.value)}
+        {/* bare-input: the note editor IS the field, so a focus ring drawn tight around the title
+            would sit hard against the first letter — it pads vertically only. */}
+        <input className="field bare-input" placeholder="Title" value={title} onChange={e => setTitle(e.target.value)}
           style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '10px', background: 'transparent', border: 'none', padding: '4px 0' }} autoFocus={!editing._id} />
 
         {projects.length > 0 && (
@@ -234,7 +236,7 @@ export default function NotesPage() {
           <PrivateToggle value={notePrivate} onChange={setNotePrivate}
             groupName={projects.find(p => String(p._id) === noteProject)?.name} />
         </div>
-        <textarea className="field" placeholder="Write anything…" value={body} onChange={e => setBody(e.target.value)}
+        <textarea className="field bare-input" placeholder="Write anything…" value={body} onChange={e => setBody(e.target.value)}
           rows={attachments.length ? 10 : 16} style={{ background: 'transparent', border: 'none', padding: '4px 0', resize: 'vertical', lineHeight: 1.65, fontSize: '0.95rem' }} />
 
         {(attachments.length > 0 || uploading) && (

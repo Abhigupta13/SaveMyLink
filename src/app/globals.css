@@ -168,6 +168,43 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 20%, transparent);
 }
 
+/* Inputs that are only the TEXT LAYER inside their own styled container, or inside a writing
+   surface that is already the field: the search bars, the quick-add row, the picker filter, the
+   note editor. Every one of them sets `border: none` and pads vertically only, because the box
+   around them is drawn by something else.
+   The focus rule above still fired on them, painting a second ring hard against the text — and
+   with no horizontal padding to sit in, the very first character touched it. That is the gap the
+   search bar was missing. The container shows focus instead, via :focus-within.
+   Listed by selector rather than inferred: CSS cannot ask "does this input have a border of its
+   own", and a blanket :not() would quietly strip the ring from real bordered fields. */
+.bare-input:focus,
+.search-input:focus,
+.search-bar input:focus,
+.picker-search input:focus,
+.quick-add-main input[type="text"]:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* The cross-entity search bar on /search. Was a pile of inline styles, which is why it could not
+   express :focus-within and had to let the input show focus for it. */
+.search-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 4px 4px 4px 18px; margin-bottom: 32px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color); border-radius: 20px;
+  transition: var(--transition);
+}
+.search-bar:focus-within {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+.search-bar input {
+  flex: 1; min-width: 0;
+  padding: 14px 0; border: none; background: transparent; outline: none;
+  color: var(--text-primary); font-size: 1rem; font-weight: 600;
+}
+
 /* The native option popup has no background of its own, so it paints on the UA
    default (white) while inheriting our near-white text — invisible in dark mode.
    Setting it here covers every <select> in the app, however it was styled. */

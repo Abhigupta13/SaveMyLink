@@ -68,13 +68,15 @@ function SearchPageInner() {
         <button className="icon-btn" onClick={() => router.back()} aria-label="Go back" title="Go back"><ArrowLeft size={18} /></button>
         <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--text-primary)', margin: 0 }}>Search everything</h1>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '4px 4px 4px 18px', background: 'var(--bg-secondary)', borderRadius: '20px', border: '1px solid var(--border-color)', marginBottom: '32px' }}>
-        <Search size={20} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+      {/* .search-bar rather than inline styles: the focus ring belongs on this container, and an
+          inline style cannot express :focus-within. The input inside is only the text layer. */}
+      <div className="search-bar">
+        <Search size={20} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} aria-hidden="true" />
         <input
           type="text" value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Links, tasks, projects, meeting transcripts…"
+          aria-label="Search everything"
           autoFocus
-          style={{ flex: 1, padding: '14px 0', border: 'none', background: 'transparent', color: 'var(--text-primary)', outline: 'none', fontSize: '1rem', fontWeight: 600 }}
         />
       </div>
 
