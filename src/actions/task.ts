@@ -5,7 +5,7 @@ import connectToDatabase from "@/lib/mongodb";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
 import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject, projectPeople, isVerified, myProjectIds } from "@/lib/projectAccess";
-import { canWorkOn, canSignOff, assigneeEmailsOf } from "@/lib/taskAccess";
+import { canWorkOn, canSignOff, assigneeEmailsOf, whyCannotWorkOn } from "@/lib/taskAccess";
 import { allowedAssignees } from "@/lib/validation";
 import { privateFilter, privacyOnWrite } from "@/lib/privacy";
 import { hasSafe } from "@/lib/safeCookie";
@@ -243,7 +243,7 @@ export async function updateTask(id: string, data: { title?: string; description
     }
     const isOwner = await amProjectOwner(task.projectId, session.user.id, session.user.email);
     if (!canWorkOn(task, session.user.id, session.user.email, isOwner)) {
-      return { success: false, error: 'Task not found' };
+      return { success: false, error: whyCannotWorkOn(task) };
     }
     const wasAssigned = assigneeEmailsOf(task);
 
@@ -340,7 +340,7 @@ export async function toggleTask(id: string) {
     }
     const isOwner = await amProjectOwner(task.projectId, session.user.id, session.user.email);
     if (!canWorkOn(task, session.user.id, session.user.email, isOwner)) {
-      return { success: false, error: 'Task not found' };
+      return { success: false, error: whyCannotWorkOn(task) };
     }
 
     task.completed = !task.completed;

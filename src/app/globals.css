@@ -2569,7 +2569,15 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
      the WebView already insets content below the system bars and reports no inset. It is here so
      that if edge-to-edge is ever turned on, the header gains the real inset instead of sliding
      under the clock. (The same term on .bottom-nav is inert today for exactly this reason.) */
-  main { padding-top: calc(24px + env(safe-area-inset-top, 0px)); }
+  /* Nothing of its own. .page already brings its own top padding, and on every screen except Home
+     the .phone-head above has just supplied the gap under the status bar — adding main's on top of
+     both stacked to 48px between the header and the page title, which is the space that read as a
+     hole. The env() term stays because it is the one part that is not double-counted: it is zero
+     today and would be the real inset if edge-to-edge is ever enabled. */
+  main { padding-top: env(safe-area-inset-top, 0px); }
+  /* Home has no .phone-head — its wordmark and bell live inside the greeting — so the breathing
+     room under the status bar has to come from the greeting itself. */
+  .home-greeting { margin-top: 10px; }
 }
 @media (min-width: 768px) { main { padding-top: 20px; } }
 

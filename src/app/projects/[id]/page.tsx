@@ -443,10 +443,14 @@ export default function ProjectWorkspace() {
     }
   };
 
+  /* Says why when the server refuses, like handleDelete beside it already does. Without it the box
+     ticked and silently un-ticked, which is indistinguishable from a broken checkbox — and in a
+     GROUP the refusal is usually a rule about whose task it is, so it is exactly the case where
+     the person needs telling rather than left guessing. */
   const handleToggle = async (id: string) => {
     setTasks(prev => prev.map(x => x._id === id ? { ...x, completed: !x.completed } : x));
     const res = await toggleTask(id);
-    if (!res.success) fetchTasks();
+    if (!res.success) { fetchTasks(); toast(res.error || 'Could not update that task', 'error'); }
     else fetchEvents();
   };
 

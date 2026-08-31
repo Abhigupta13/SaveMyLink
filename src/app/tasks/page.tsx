@@ -212,17 +212,28 @@ export default function TasksPage() {
     else { setTasks(prev => prev.filter(x => x._id !== tempId)); toast(res.error || 'Something went wrong', 'error'); }
   };
 
+  /* The optimistic tick is reverted by the refetch when the server refuses — but the REASON was
+     being dropped on the floor, so the box ticked, silently un-ticked, and the person was left
+     with no idea whether they had mis-tapped or the app was broken. A refusal here is usually a
+     rule (someone else's task, or nobody assigned yet), and a rule the user cannot see is
+     indistinguishable from a bug. */
   const handleToggle = async (id: string) => {
     setTasks(prev => prev.map(x => x._id === id ? { ...x, completed: !x.completed } : x));
     const res = await toggleTask(id);
-    if (!res.success) fetchTasks(activeProject?._id);
+    if (!res.success) {
+      fetchTasks(activeProject?._id);
+      toast(res.error || 'Could not update that task', 'error');
+    }
     refreshReminders();
   };
 
   const handleDelete = async (id: string) => {
     setTasks(prev => prev.filter(x => x._id !== id));
     const res = await deleteTask(id);
-    if (!res.success) fetchTasks(activeProject?._id);
+    if (!res.success) {
+      fetchTasks(activeProject?._id);
+      toast(res.error || 'Could not delete that task', 'error');
+    }
     refreshReminders();
   };
 

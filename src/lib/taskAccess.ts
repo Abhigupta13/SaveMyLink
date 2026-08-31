@@ -111,6 +111,28 @@ export function canWorkOn(task: TaskLike, myUserId: Id, myEmail: string | null |
 }
 
 /**
+ * What to tell someone canWorkOn just refused.
+ *
+ * Lives beside the rule rather than at the call site, because a rule and its explanation drifting
+ * apart is how an app ends up saying something that is no longer true. Both toggleTask and
+ * updateTask use it.
+ *
+ * These paths used to answer 'Task not found' — the vague form that stops a stranger probing which
+ * ids exist. Wrong here: canWriteProject runs first, so the caller is already in the group and is
+ * looking at the task on their own screen. Naming the rule leaks nothing they cannot see, while
+ * "not found" about a row they are staring at reads as the app being broken.
+ *
+ * Two cases, because they need different actions from the person reading them: somebody else holds
+ * it, or nobody does. The second is not a permission problem to argue with — it is a task waiting
+ * to be picked up.
+ */
+export function whyCannotWorkOn(task: TaskLike): string {
+  return assigneeEmailsOf(task).length
+    ? 'Only the person this is assigned to, or the group’s owner, can tick this off'
+    : 'Nobody is on this yet — assign it to someone before it can be ticked off';
+}
+
+/**
  * Sign-off is the Accountable half, and it only exists inside a group: a personal task has no
  * owner and no second party, so there is nobody for the stamp to mean anything to.
  *
