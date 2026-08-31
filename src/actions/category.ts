@@ -19,27 +19,22 @@ export async function getCategories(privateSafe: boolean = false) {
   if (privateSafe && !(await hasSafe(userId))) privateSafe = false;
   const userObjectId = new mongoose.Types.ObjectId(userId);
   
-  // Find categories belonging to this user in this mode
-  // Also include "ownerless" categories temporarily (for migration)
-  const categories = await Category.find({ 
-    $or: [
-      { userId: userObjectId }, 
-      { userId: { $exists: false } },
-      { userId: userId } // Handle string IDs just in case
-    ],
+  /* This user's categories in this mode, and nobody else's.
+     There used to be an `{ userId: { $exists: false } }` branch here for a pre-ownership
+     migration, followed by a loop that stamped whatever it matched with the CURRENT user's id.
+     Neither half was scoped to anyone: every account saw every ownerless category, and the first
+     account to open a page took permanent ownership of them. A read leak you can fix by reverting
+     the code; this one wrote as it read.
+     Checked against the live database before removing it — 14 categories, 0 ownerless, and every
+     category's links belong to its own owner — so the branch was protecting nothing and leaking
+     to everyone. If a row ever does arrive without an owner it should be attributed from the
+     owner of the links pointing at it, by a migration, not by whoever loads a page first.
+     userId is a required ObjectId on the schema, so mongoose casts the string form for us and the
+     old "just in case" string branch was the same query written twice. */
+  const categories = await Category.find({
+    userId: userObjectId,
     isPrivate: privateSafe === true ? true : { $ne: true }
   }).lean();
-  
-  // Tag "ownerless" categories with current user if found, preserving their privacy state
-  const ownerless = categories.filter(c => !c.userId);
-  if (ownerless.length > 0) {
-    for (const cat of ownerless) {
-      await Category.updateOne(
-        { _id: cat._id },
-        { $set: { userId: userObjectId, isPrivate: cat.isPrivate || false } }
-      );
-    }
-  }
 
   // Build link query for aggregation based on mode
   const linkQuery: any = { userId: userObjectId };
