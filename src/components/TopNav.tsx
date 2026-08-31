@@ -88,7 +88,9 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
           ))}
         </nav>
         <div className="rail-bottom">
-          <NotificationsBell />
+          {/* A rail item, not a bare icon button: it now reads as part of the nav it sits in
+              rather than something dropped into the corner. */}
+          <NotificationsBell variant="rail" />
           <button className={`rail-avatar ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')} title="Profile">{initial}</button>
         </div>
       </aside>

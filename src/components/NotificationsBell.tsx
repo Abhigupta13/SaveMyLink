@@ -16,7 +16,16 @@ import { unreadNotificationCount } from '@/actions/notifications';
  * Renders nothing at all when there is nothing to say — an always-present bell showing zero is
  * furniture, and this app puts the bell next to a wordmark where space is already tight.
  */
-export default function NotificationsBell({ className = '' }: { className?: string }) {
+/**
+ * `rail` renders it as one of the desktop rail's own items — icon above a label, full width — so it
+ * matches Home, Links and Notes instead of being a bordered 36px box tucked at the bottom-left.
+ * That was the bug: .rail-avatar centres itself with `margin: 0 auto`, this did not, so under
+ * .rail-bottom's default stretch a fixed-width child sat hard against the left edge, unlabelled,
+ * in a column where everything else is centred and captioned.
+ */
+export default function NotificationsBell({
+  className = '', variant = 'icon',
+}: { className?: string; variant?: 'icon' | 'rail' }) {
   const [count, setCount] = useState(0);
   const pathname = usePathname();
 
@@ -32,12 +41,28 @@ export default function NotificationsBell({ className = '' }: { className?: stri
     ? `Notifications, ${count} new`
     : 'Notifications';
 
+  /* 9+ rather than a three-digit number: the badge rides on a small control, and the difference
+     between 40 and 400 unread changes nothing about what the person does next. */
+  const badge = count > 0 && <span className="bell-badge" aria-hidden="true">{count > 9 ? '9+' : count}</span>;
+  const active = pathname === '/notifications';
+
+  if (variant === 'rail') {
+    return (
+      <Link
+        href="/notifications"
+        className={`rail-item bell-rail ${active ? 'active' : ''} ${className}`.trim()}
+        aria-label={label} aria-current={active ? 'page' : undefined}
+      >
+        <span className="bell-wrap" aria-hidden="true"><Bell size={20} strokeWidth={2.2} />{badge}</span>
+        <span>Alerts</span>
+      </Link>
+    );
+  }
+
   return (
     <Link href="/notifications" className={`bell-wrap icon-btn ${className}`.trim()} aria-label={label} title={label}>
       <Bell size={18} strokeWidth={2.2} aria-hidden="true" />
-      {/* 9+ rather than a three-digit number: the badge sits on a 44px control and the difference
-          between 40 and 400 unread changes nothing about what the person does next. */}
-      {count > 0 && <span className="bell-badge" aria-hidden="true">{count > 9 ? '9+' : count}</span>}
+      {badge}
     </Link>
   );
 }

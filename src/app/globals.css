@@ -2548,8 +2548,12 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .rail-wordmark .logo-light { display: block; color: var(--text-secondary); -webkit-text-fill-color: currentColor; font-weight: 800; font-size: 0.56rem; letter-spacing: 0.04em; }
 .bottom-avatar { width: 35px; height: 35px; border-radius: 50%; background: var(--accent-gradient); color: #fff; font-size: 0.75rem; font-weight: 800; display: flex; align-items: center; justify-content: center; }
 /* Desktop hides both the wordmark (the rail carries the brand) and the header bell (the rail
-   carries that too) — otherwise the bell would appear twice on Home. */
-.home-wordmark, .phone-wordmark, .home-head-right { display: none; }
+   carries that too) — otherwise the bell would appear twice.
+   `.phone-head` itself, not just the wordmark inside it. Hiding only the child left the container
+   rendering on desktop with the bell still in it, floating at the top-left of the content area
+   beside the rail's brand — a second bell, and the one nobody could explain. TopNav renders that
+   header at every width; it is CSS alone that decides where it belongs. */
+.home-wordmark, .phone-wordmark, .home-head-right, .phone-head { display: none; }
 @media (max-width: 767px) {
   /* Room for the wordmark AND the bell beside it. This padding is what keeps "Hi, Abhishek" from
      running under them; it was sized for the wordmark alone before the bell arrived. */
@@ -2923,6 +2927,13 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
 
+/* The feedback dialog's footer. Send leads; the way out is beside it rather than an × in the
+   corner, because on the way out of the app this dialog arrived uninvited. */
+.suggest-intro { margin: -4px 0 2px; font-size: 0.85rem; line-height: 1.45; color: var(--text-secondary); }
+.suggest-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.suggest-actions .btn-primary { flex: 1; height: 46px; border-radius: 14px; font-weight: 800; }
+.suggest-later { flex-shrink: 0; min-height: 46px; padding: 0 18px; border-radius: 14px; font-weight: 700; }
+
 /* ---------- Notifications ---------- */
 .notif-list { display: grid; gap: 8px; }
 .notif-row { display: flex; align-items: flex-start; gap: 11px; padding: 13px 14px; border-radius: 16px;
@@ -2948,6 +2959,11 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .bell-wrap { position: relative; display: inline-flex; align-items: center; justify-content: center;
   flex-shrink: 0; text-decoration: none; color: var(--text-secondary); }
 .bell-wrap:hover { color: var(--accent-text); }
+/* Desktop rail variant: .rail-item already supplies the column layout, centring, label type and
+   the active/hover treatment, so this only has to stop looking like a link and leave room for the
+   badge, which would otherwise be clipped by the item's own rounding. */
+.bell-rail { text-decoration: none; overflow: visible; }
+.bell-rail .bell-wrap { color: inherit; }
 /* Phone: the brand header — a three-column app bar. An empty column the width of the bell, the
    wordmark, then the bell. The spacer is what keeps the wordmark centred on the SCREEN rather
    than in whatever space the bell leaves over: pulling it off-centre to add one button would have
@@ -2957,11 +2973,18 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
    against the status bar. Absolute positioning was the first attempt and it fought the layout:
    centring a 44px touch target against a row only as tall as an 18px wordmark put the bell at
    -4px, clipped off the top of the screen. Flex alignment does it without the arithmetic. */
-.phone-head { display: flex; align-items: center; min-height: 44px;
-  padding: calc(14px + env(safe-area-inset-top, 0px)) 14px 0; }
-.phone-head::before { content: ""; width: 44px; flex-shrink: 0; }
-.phone-head .phone-wordmark { flex: 1; min-width: 0; margin: 0; width: auto; }
-.phone-head .bell-wrap { flex-shrink: 0; }
+/* Inside the phone query, and that is load-bearing rather than tidiness. Unscoped, this
+   `display: flex` sits LATER in the file than the desktop `display: none` that hides this header,
+   wins on source order, and leaves the whole bar rendering on desktop — where the wordmark child
+   is separately hidden but the bell is not. The result was a second, unexplained bell floating at
+   the top-left of the content area beside the rail's brand. */
+@media (max-width: 767px) {
+  .phone-head { display: flex; align-items: center; min-height: 44px;
+    padding: calc(14px + env(safe-area-inset-top, 0px)) 14px 0; }
+  .phone-head::before { content: ""; width: 44px; flex-shrink: 0; }
+  .phone-head .phone-wordmark { flex: 1; min-width: 0; margin: 0; width: auto; }
+  .phone-head .bell-wrap { flex-shrink: 0; }
+}
 .bell-badge { position: absolute; top: -2px; right: -2px; min-width: 17px; height: 17px; padding: 0 4px;
   border-radius: 999px; background: var(--danger-color); color: white; font-size: 0.6rem; font-weight: 800;
   display: inline-flex; align-items: center; justify-content: center; pointer-events: none; }
@@ -3187,6 +3210,49 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .dg-due.late { color: var(--warn-color); }
 .dg-thumb { width: 56px; height: 42px; object-fit: cover; border-radius: 10px; flex-shrink: 0; }
 .home-digest { margin-top: 8px; }
+
+/* ---------- How punctual you are ----------
+   Sits between the vault tiles and the digest, and borrows the digest's own header row (.dg-head /
+   .dg-label / .dg-empty) so the three blocks below the tiles read as one column rather than as three
+   widgets that arrived separately.
+
+   The dial is the same technique as the admin hero's, restated here rather than imported: that sheet
+   is scoped under `.adm` and belongs to one screen, and Home is the page every person opens. `--c`
+   is the circle's circumference and `--p` the 0–1 fraction, both set inline by the component, so the
+   arc is real geometry rather than a width the CSS guessed at. */
+.pun { margin-top: 26px; }
+.pun-window { font-size: 0.72rem; font-weight: 700; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.pun-body { display: flex; align-items: center; gap: 16px; padding: 16px; border: 1px solid var(--border-color); border-radius: 18px; background: var(--bg-secondary); box-shadow: var(--card-shadow); }
+
+.pun-dial { position: relative; flex-shrink: 0; width: 96px; height: 96px; margin: 0; }
+.pun-dial svg { display: block; width: 100%; height: 100%; transform: rotate(-90deg); }
+.pun-dial .track { fill: none; stroke: var(--bg-tertiary); stroke-width: 8; }
+.pun-dial .val { fill: none; stroke: var(--accent-color); stroke-width: 8; stroke-linecap: round; stroke-dasharray: var(--c); stroke-dashoffset: calc(var(--c) * (1 - var(--p))); }
+/* Centred over the ring rather than under it, so the figure and the thing it measures are one object. */
+.pun-dial figcaption { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+.pun-pct { font-family: var(--font-display); font-weight: 300; font-size: 26px; line-height: 1; letter-spacing: -.02em; font-variation-settings: 'opsz' 144, 'SOFT' 50; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.pun-cap { font-size: 0.58rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); }
+
+/* Capped rather than filling the row. The card spans the page like the digest blocks under it, but
+   three short counts stretched across 1100px stop reading as one figure broken into parts and start
+   reading as three unrelated numbers that happen to share a border. */
+.pun-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; flex: 1; min-width: 0; max-width: 460px; }
+.pun-kpi { min-width: 0; }
+.pun-kpi-value { display: block; font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 26px; line-height: 1; letter-spacing: -.02em; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+/* Nothing in a bucket is good news in two of the three, so it greys out rather than shouting a zero. */
+.pun-kpi-value.zero { color: var(--text-tertiary); opacity: .55; }
+/* Late work is amber everywhere in this app — the same rule the digest's due dates follow. */
+.pun-kpi-value.warn { color: var(--warn-color); }
+.pun-kpi-label { display: block; margin-top: 6px; font-size: 0.68rem; line-height: 1.3; font-weight: 700; color: var(--text-secondary); }
+.pun-note { margin-top: 8px; font-size: 0.7rem; font-weight: 600; color: var(--text-tertiary); }
+
+/* On a phone the three counts sit under the dial instead of beside it: at 96px the ring leaves about
+   a hundred points for three columns, and "Still open, past due" cannot live in a third of that. */
+@media (max-width: 520px) {
+  .pun-body { flex-direction: column; align-items: stretch; gap: 14px; }
+  .pun-dial { align-self: center; }
+  .pun-kpis { gap: 8px; }
+}
 
 /* A quiet note under a field — used where the app has filled something in for you and wants to say
    so without making it look like an error. */
