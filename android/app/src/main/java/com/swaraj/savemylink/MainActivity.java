@@ -71,6 +71,20 @@ public class MainActivity extends BridgeActivity {
             return;
         }
 
+        // An APK is not a file somebody wants filed away in Downloads — it is something they want
+        // to install, and DownloadManager only ever saves. Downloading one here therefore looked
+        // like nothing happened: no prompt, no installer, just a file.
+        //
+        // Handing it to the system browser is better than driving the installer from here, because
+        // installing requires being an allowed install source (REQUEST_INSTALL_PACKAGES). Chrome
+        // already is; this app is deliberately not, and asking for it would add the one permission
+        // the download page promises this app never requests. The browser also gives the exact
+        // flow that page's install steps already describe, so the instructions stay true.
+        if (isApk(url, mimeType)) {
+            openExternally(Uri.parse(url));
+            return;
+        }
+
         try {
             String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
@@ -104,6 +118,14 @@ public class MainActivity extends BridgeActivity {
             // A failed download must say so. The whole point of this class is that it used to not.
             Toast.makeText(this, "Could not start the download.", Toast.LENGTH_LONG).show();
         }
+    }
+
+    /** Checked on both, because a server is free to send either one and only one has to be right. */
+    private boolean isApk(String url, String mimeType) {
+        if ("application/vnd.android.package-archive".equals(mimeType)) return true;
+        int query = url.indexOf('?');
+        String path = query == -1 ? url : url.substring(0, query);
+        return path.toLowerCase().endsWith(".apk");
     }
 
     /** Send a link the page opened in a new window to the real browser, where it belongs. */

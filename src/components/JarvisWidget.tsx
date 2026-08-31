@@ -9,7 +9,7 @@ import {
   deleteJarvisSession, runJarvisActions, JarvisItem, JarvisTurn, Msg, JarvisSessionMeta, JarvisPending,
 } from '@/actions/jarvis';
 import { pickVoice } from '@/lib/voice';
-import { mergeFinals } from '@/lib/transcript';
+import { mergeFinals, joinTranscripts } from '@/lib/transcript';
 import { syncTask } from '@/lib/taskNotifications';
 import { getProjects } from '@/actions/project';
 import { markIntro } from '@/actions/intro';
@@ -285,18 +285,20 @@ export default function JarvisWidget() {
       // already settled, so appending turned "do you have any contact about Sarabjit Bal" into
       // "do do you do you have do you have any…". Deriving it fresh makes this handler
       // idempotent: however many times an index is replayed, the text cannot double up.
-      let finals = '';
-      let interim = '';
+      // Merged pairwise, never concatenated. Chrome's results are disjoint pieces of the sentence,
+      // but Android's WebView emits each result as a longer PREFIX of the same sentence — so
+      // joining them built "I am / I am checking / I am checking if" into a ladder before anything
+      // else got involved. joinTranscripts collapses that and still joins genuine pieces. The same
+      // rule then merges the bank from earlier sessions, which a WebView also repeats.
+      const finalParts: string[] = [];
+      const interimParts: string[] = [];
       for (let i = 0; i < e.results.length; i++) {
         const r = e.results[i];
-        if (r.isFinal) finals += r[0].transcript + ' ';
-        else interim += r[0].transcript;
+        (r.isFinal ? finalParts : interimParts).push(r[0].transcript);
       }
+      const finals = joinTranscripts(finalParts);
       finalRef.current = finals;
-      // Merged, not concatenated. Android's WebView keeps e.results across a restarted session, so
-      // `finals` can already contain what onend banked — adding the bank on top is what turned one
-      // sentence into a ladder of its own prefixes. See lib/transcript.
-      const shown = (mergeFinals(committedRef.current, finals) + interim).trim();
+      const shown = mergeFinals(mergeFinals(committedRef.current, finals), joinTranscripts(interimParts));
       setQ(shown);
       if (shown) { setHeardBoth(true); armSubmit(); }   // pause timer starts only once you speak
     };

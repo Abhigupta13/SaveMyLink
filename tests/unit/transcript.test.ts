@@ -1,74 +1,97 @@
 import { describe, test, expect } from 'vitest';
-import { mergeFinals } from '@/lib/transcript';
+import { mergeFinals, joinTranscripts } from '@/lib/transcript';
 
 /**
- * The repetition bug, pinned.
+ * The repetition bug, pinned with the two real transcripts it was reported with.
  *
- * Reported as "Jarvis recording shows repetitive words", and the screenshot showed one short
- * sentence rendered as a ladder of its own prefixes:
+ * Both showed one short sentence rendered as a ladder of its own prefixes. The words were
+ * recognised correctly every time; they were written down more than once. It happens at two levels
+ * and the first fix only caught the second, which is why it was reported again:
  *
- *   add add task add task to add task to fish add task to fish fix ...
- *
- * The words were recognised correctly every time; they were written down more than once. A speech
- * session is restarted whenever the engine ends it, and the previous session's finals were banked
- * and prepended — correct only if a restarted session starts with an empty results list. Chrome
- * clears it. Android's WebView does not, so the bank was added to text that already contained it.
+ *   1. WITHIN one session - Android's WebView makes every result a longer prefix of the same
+ *      sentence, so looping and concatenating builds the ladder directly.
+ *   2. ACROSS restarted sessions - onend banks a finished session's finals, and a WebView keeps its
+ *      results list across the restart, so the bank is already in there.
  */
 
 describe('mergeFinals', () => {
-  test('nothing banked yet: the session speaks for itself', () => {
+  test('disjoint pieces are joined with a space', () => {
+    expect(mergeFinals('do you have', 'any contact')).toBe('do you have any contact');
+  });
+
+  test('a cumulative result replaces rather than appends', () => {
+    expect(mergeFinals('I am', 'I am checking')).toBe('I am checking');
+  });
+
+  test('a replayed shorter result does not shorten what we already have', () => {
+    expect(mergeFinals('I am checking if', 'I am')).toBe('I am checking if');
+  });
+
+  test('empties on either side are left alone', () => {
     expect(mergeFinals('', 'add task')).toBe('add task');
-  });
-
-  test('an engine that CLEARS the results list: the bank is what carries the earlier words', () => {
-    expect(mergeFinals('add ', 'task to fix the mic')).toBe('add task to fix the mic');
-  });
-
-  /** The reported bug. Before: 'add ' + 'add task' = 'add add task'. */
-  test('an engine that KEEPS the results list: the bank is already in there', () => {
-    expect(mergeFinals('add ', 'add task')).toBe('add task');
-    expect(mergeFinals('add task ', 'add task to fish')).toBe('add task to fish');
-  });
-
-  /**
-   * The property that actually prevents the ladder. onresult fires many times per session and each
-   * one recomputes from the whole list, so merging has to be safe to apply to its own output -
-   * however many times an index is replayed, the text cannot grow.
-   */
-  test('is idempotent: applying it to its own output changes nothing', () => {
-    const banked = 'add task ';
-    const finals = 'add task to fish';
-    const once = mergeFinals(banked, finals);
-    expect(mergeFinals(banked, once)).toBe(once);
-    expect(mergeFinals(once, once)).toBe(once);
-  });
-
-  test('a whole dictation, one restart per phrase, never doubles', () => {
-    // Each entry is what a restarted session reports when the engine kept the list.
-    const sessions = ['add', 'add task', 'add task to', 'add task to fix', 'add task to fix the mic'];
-    let banked = '';
-    for (const finals of sessions) banked = mergeFinals(banked, finals);
-    expect(banked).toBe('add task to fix the mic');
-  });
-
-  test('and the same dictation on an engine that clears between phrases', () => {
-    const sessions = ['add ', 'task ', 'to ', 'fix ', 'the mic'];
-    let banked = '';
-    for (const finals of sessions) banked = mergeFinals(banked, finals);
-    expect(banked).toBe('add task to fix the mic');
-  });
-
-  test('an empty session leaves the bank alone', () => {
     expect(mergeFinals('add task', '')).toBe('add task');
     expect(mergeFinals('', '')).toBe('');
   });
 
+  test('is idempotent: applying it to its own output changes nothing', () => {
+    const once = mergeFinals('I am', 'I am checking if the bike');
+    expect(mergeFinals('I am', once)).toBe(once);
+    expect(mergeFinals(once, once)).toBe(once);
+  });
+
+  test('stray whitespace never becomes a double space', () => {
+    expect(mergeFinals('do you have ', '  any contact ')).toBe('do you have any contact');
+  });
+});
+
+describe('joinTranscripts — the reported ladders', () => {
+  /** Second report, verbatim from the screenshot. */
+  test('a cumulative WebView result list collapses to the sentence', () => {
+    const results = [
+      'I am', 'I am checking', 'I am checking if', 'I am checking if the',
+      'I am checking if the bike', 'I am checking if the bike recording',
+      'I am checking if the bike recording is', 'I am checking if the bike recording is fixed',
+    ];
+    expect(joinTranscripts(results)).toBe('I am checking if the bike recording is fixed');
+  });
+
+  /** First report. Concatenating these is what produced "add add task add task to ...". */
+  test('the first report collapses too', () => {
+    const results = ['add', 'add task', 'add task to', 'add task to fix', 'add task to fix the mic recording'];
+    expect(joinTranscripts(results)).toBe('add task to fix the mic recording');
+  });
+
+  test('a disjoint Chrome result list is still joined, not collapsed', () => {
+    expect(joinTranscripts(['do you have', 'any contact', 'about Sarabjit Bal']))
+      .toBe('do you have any contact about Sarabjit Bal');
+  });
+
+  test('a mixed list — cumulative then a genuinely new piece', () => {
+    expect(joinTranscripts(['open', 'open the', 'open the locker', 'and find my passport']))
+      .toBe('open the locker and find my passport');
+  });
+
+  test('an empty list is an empty string, not "undefined"', () => {
+    expect(joinTranscripts([])).toBe('');
+  });
+});
+
+describe('across restarted sessions', () => {
   /**
-   * Deliberately NOT deduplicated: two sessions that genuinely begin the same way are only a prefix
-   * match by coincidence, and dropping one would delete words the person said. The engine-kept case
-   * always contains the bank as a prefix of a LONGER string; this is a different shape.
+   * onend banks the finished session; the next session is merged onto the bank. Both engines end
+   * up at the same sentence, which is the whole point of not branching on which one we are on.
    */
-  test('a genuine repeat that is not a prefix of the bank is kept', () => {
-    expect(mergeFinals('add task ', 'and add a note')).toBe('add task and add a note');
+  test('an engine that KEEPS its results list', () => {
+    const sessions = ['add', 'add task', 'add task to fix the mic'];
+    let banked = '';
+    for (const s of sessions) banked = mergeFinals(banked, s);
+    expect(banked).toBe('add task to fix the mic');
+  });
+
+  test('an engine that CLEARS its results list', () => {
+    const sessions = ['add', 'task', 'to fix the mic'];
+    let banked = '';
+    for (const s of sessions) banked = mergeFinals(banked, s);
+    expect(banked).toBe('add task to fix the mic');
   });
 });
