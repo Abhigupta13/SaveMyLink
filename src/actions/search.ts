@@ -43,14 +43,26 @@ export async function searchAll(q: string) {
   const myProjects = await Project.find(await myProjectFilter(userId, email))
     .select('_id name notes').lean();
   const projectIds = myProjects.map(p => p._id);
+  // Where an assignee branch may look: my own personal work, or a group I can actually open.
+  const reachable = [{ projectId: null }, { projectId: { $in: projectIds } }];
 
   const [links, tasks, moms, notes] = await Promise.all([
     Link.find(linkQuery).populate('category', 'name color').sort({ createdAt: -1 }).limit(20).lean(),
     Task.find({
       $and: [
-        // A task handed to you out of a group is the group's record, so the assignee branches
-        // stay open in both states — only the plain personal branch swaps.
-        { $or: [{ userId, ...personal }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] },
+        /* A task handed to you out of a group is the group's record, so the assignee branches
+           stay open in both states — only the plain personal branch swaps.
+           That comment was about the Private Safe, and it was the only thing the assignee branches
+           had ever been reasoned about: they carried no project scope at all, so a task in a group
+           you are NOT on was findable here. Search would return it, and then no screen could open
+           it — the task list's personal view filters projectId null, and the group's own tab needs
+           a membership you do not have. Same fix as lib/digest and getMyOpenTasks. */
+        { $or: [
+          { userId, ...personal },
+          { assigneeId: userId, $or: reachable },
+          { assigneeIds: userId, $or: reachable },
+          { projectId: { $in: projectIds } },
+        ] },
         { $or: [{ title: regex }, { description: regex }] },
       ],
     }).sort({ completed: 1, createdAt: -1 }).limit(20).lean(),

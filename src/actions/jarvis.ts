@@ -92,11 +92,22 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   const projects = await Project.find(await myProjectFilter(userId, email)).lean();
   const projectIds = projects.map(p => p._id);
   const pname = new Map(projects.map(p => [String(p._id), p.name]));
+  // Where an assignee branch may look: my own personal work, or a group I can actually open.
+  const reachable = [{ projectId: null }, { projectId: { $in: projectIds } }];
 
   const [links, tasks, moms, contacts, notes, docs] = await Promise.all([
     Link.find(linkQuery).populate('category', 'name').sort({ createdAt: -1 }).limit(600).lean(),
-    // The assignee branches are group work — someone else handed it to me — so they stay open.
-    Task.find({ $or: [{ userId, ...personal }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] })
+    /* The assignee branches are group work — someone else handed it to me — so they stay open.
+       Open in BOTH safe states, which is what that meant, but not open to every group: they used
+       to carry no project scope, so a task in a group I am not on became prompt context and Jarvis
+       could quote work I have no way to open. Scoped to what I can actually reach, exactly as
+       lib/digest, getMyOpenTasks and search now are. */
+    Task.find({ $or: [
+      { userId, ...personal },
+      { assigneeId: userId, $or: reachable },
+      { assigneeIds: userId, $or: reachable },
+      { projectId: { $in: projectIds } },
+    ] })
       .populate('assigneeId', 'email').sort({ completed: 1, dueAt: 1 }).limit(400).lean(),
     // my project meetings + my personal ones, which have no project to match on
     Mom.find({ $or: [{ projectId: { $in: projectIds } }, { userId, ...personal }] }).sort({ createdAt: -1 }).limit(60).lean(),
