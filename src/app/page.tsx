@@ -33,10 +33,14 @@ export default async function Home() {
   return (
     <main className="page">
       <header className="home-greeting">
-        {/* Home draws its own header, so the bell TopNav adds elsewhere has to be placed here too
-            — otherwise the one screen people open most is the one with no way to reach it. */}
-        <NotificationsBell className="home-bell" />
-        <Wordmark className="home-wordmark" size={20} />
+        {/* Home draws its own header, so the bell TopNav adds elsewhere has to live here too —
+            otherwise the screen people open most is the one with no way to reach it.
+            Wordmark and bell share ONE positioned row rather than each being pinned to the same
+            top-right corner, which is what put the bell on top of the wordmark on a real phone. */}
+        <div className="home-head-right">
+          <Wordmark className="home-wordmark" size={20} />
+          <NotificationsBell className="home-bell" />
+        </div>
         <h1>Hi, {user.name?.split(' ')[0] || 'there'}</h1>
         <p>What&apos;s on your mind?</p>
       </header>

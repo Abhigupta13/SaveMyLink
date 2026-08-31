@@ -66,15 +66,23 @@ export default function ProfilePage() {
     // link is one the person receiving it cannot open.
     const url = shareUrl('/download');
     const text = `I'm using ALL YOU NEED to keep my links, notes, tasks and meetings in one place — for work and everything else. Get it here: ${url}`;
+    /* `text` only — never text AND url together.
+       Both Capacitor's Share and the Web Share API hand the receiving app ONE string, and when a
+       url is supplied alongside text they concatenate the two. Since the sentence already ends
+       with the link, every share went out with the address twice:
+         "...Get it here: https://…/download https://…/download"
+       Passing the url separately instead would fix the duplicate but lose the link entirely in the
+       many targets that read only text. MomSection's share has always passed text alone; this is
+       the same shape. */
     try {
       const { Capacitor } = await import('@capacitor/core');
       if (Capacitor.isNativePlatform()) {
         const { Share } = await import('@capacitor/share');
-        await Share.share({ title: 'ALL YOU NEED', text, url });
+        await Share.share({ title: 'ALL YOU NEED', text });
         return;
       }
     } catch { /* fall through */ }
-    if (navigator.share) return void navigator.share({ title: 'ALL YOU NEED', text, url }).catch(() => {});
+    if (navigator.share) return void navigator.share({ title: 'ALL YOU NEED', text }).catch(() => {});
     await navigator.clipboard.writeText(text);
     toast('Invite link copied', 'success');
   };

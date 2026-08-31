@@ -2547,9 +2547,18 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .rail-wordmark .wordmark-text { display: block; font-weight: 900; font-size: 0.62rem; line-height: 1.15; letter-spacing: 0.02em; color: var(--accent-text); }
 .rail-wordmark .logo-light { display: block; color: var(--text-secondary); -webkit-text-fill-color: currentColor; font-weight: 800; font-size: 0.56rem; letter-spacing: 0.04em; }
 .bottom-avatar { width: 35px; height: 35px; border-radius: 50%; background: var(--accent-gradient); color: #fff; font-size: 0.75rem; font-weight: 800; display: flex; align-items: center; justify-content: center; }
-.home-wordmark, .phone-wordmark { display: none; }
+/* Desktop hides both the wordmark (the rail carries the brand) and the header bell (the rail
+   carries that too) — otherwise the bell would appear twice on Home. */
+.home-wordmark, .phone-wordmark, .home-head-right { display: none; }
 @media (max-width: 767px) {
-  .home-greeting { position: relative; padding-right: 34vw; }
+  /* Room for the wordmark AND the bell beside it. This padding is what keeps "Hi, Abhishek" from
+     running under them; it was sized for the wordmark alone before the bell arrived. */
+  .home-greeting { position: relative; padding-right: calc(34vw + 46px); }
+  /* ONE positioned row holding both, rather than two things each pinned to the same corner —
+     which is exactly how the bell ended up sitting on top of the wordmark on a real phone. */
+  .home-head-right { display: flex; align-items: center; gap: 10px; position: absolute; top: 0; right: 0; }
+  /* Inside that row it is a flex item, not its own absolutely-positioned thing. */
+  .home-head-right .home-wordmark { position: static; top: auto; right: auto; }
   .home-wordmark { display: inline-flex; position: absolute; top: 2px; right: 0; white-space: nowrap; font-weight: 900; font-size: clamp(0.74rem, 3.2vw, 0.95rem); letter-spacing: 0.05em; color: var(--accent-text); }
   .phone-wordmark { display: inline-flex; margin: 14px auto 0; width: 100%; justify-content: center; text-decoration: none; white-space: nowrap; font-weight: 900; font-size: clamp(0.74rem, 3.2vw, 0.95rem); letter-spacing: 0.05em; color: var(--accent-text); }
   .home-wordmark .logo-light, .phone-wordmark .logo-light { font-size: inherit; color: var(--text-tertiary); font-weight: 800; letter-spacing: 0.05em; margin-left: 0.3em; }
@@ -2924,12 +2933,15 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .bell-wrap { position: relative; display: inline-flex; align-items: center; justify-content: center;
   flex-shrink: 0; text-decoration: none; color: var(--text-secondary); }
 .bell-wrap:hover { color: var(--accent-text); }
-/* Phone: the brand header becomes a row so the bell can sit opposite the wordmark. */
-.phone-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.phone-head .phone-wordmark { margin: 0; }
-/* Home draws its own header; the bell is absolutely placed so it cannot reflow the greeting. */
-.home-greeting { position: relative; }
-.home-bell { position: absolute; top: 0; right: 0; }
+/* Phone: the brand header, with the bell added at the right.
+   The wordmark stays CENTRED, which is how every page but Home already looked — pulling it left to
+   make a flex row for the bell would have changed the header of the whole app to add one button.
+   So the bell is taken out of flow and pinned to the right instead, and the two cannot meet: a
+   123px wordmark centred in 375 ends at 249, the bell starts at 317. */
+.phone-head { position: relative; }
+/* 14px matches .page's own phone gutter, so the bell lines up with the content below it rather
+   than sitting closer to the edge than anything else on the screen. */
+.phone-head .bell-wrap { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); }
 .bell-badge { position: absolute; top: -2px; right: -2px; min-width: 17px; height: 17px; padding: 0 4px;
   border-radius: 999px; background: var(--danger-color); color: white; font-size: 0.6rem; font-weight: 800;
   display: inline-flex; align-items: center; justify-content: center; pointer-events: none; }
