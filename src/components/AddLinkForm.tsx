@@ -129,20 +129,28 @@ export default function AddLinkForm({ initialUrl, initialTitle, categories: init
               <div className="loading-spinner"></div>
             </div>
           ) : previewMetadata ? (
-            <div className="preview-content-box" style={{
-              position: 'relative', width: '100%', height: '180px', background: 'var(--bg-tertiary)', borderRadius: '20px', overflow: 'hidden', border: '1px solid var(--border-color)'
-            }}>
-              {previewMetadata.image ? (
-                <img src={previewMetadata.image} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)', fontWeight: 600 }}>NO PREVIEW</div>
-              )}
-              <div style={{
-                position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.95) 0%, transparent 100%)', padding: '20px 16px'
+            /* Same rule as the saved card: with no image there is no image box. The 180px slab
+               reading "NO PREVIEW" under a black gradient looked like the fetch had failed, when
+               most of the time the site simply publishes no thumbnail. What the form actually owes
+               the person here is confirmation of what was found, so the title stands on its own. */
+            previewMetadata.image ? (
+              <div className="preview-content-box" style={{
+                position: 'relative', width: '100%', height: '180px', background: 'var(--bg-tertiary)', borderRadius: '20px', overflow: 'hidden', border: '1px solid var(--border-color)'
               }}>
-                <p style={{ fontSize: '0.85rem', color: 'white', margin: 0, fontWeight: 700, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{previewMetadata.title}</p>
+                <img src={previewMetadata.image} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div style={{
+                  position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.95) 0%, transparent 100%)', padding: '20px 16px'
+                }}>
+                  <p style={{ fontSize: '0.85rem', color: 'white', margin: 0, fontWeight: 700, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{previewMetadata.title}</p>
+                </div>
               </div>
-            </div>
+            ) : previewMetadata.title ? (
+              <div className="preview-content-box" style={{
+                width: '100%', background: 'var(--bg-tertiary)', borderRadius: '16px', padding: '12px 14px', border: '1px solid var(--border-color)'
+              }}>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', margin: 0, fontWeight: 700, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{previewMetadata.title}</p>
+              </div>
+            ) : null
           ) : null}
         </div>
       )}

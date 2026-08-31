@@ -133,23 +133,17 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
   return (
     <div className="link-card-container">
       <a href={link.url || undefined} target={link.url ? '_blank' : undefined} rel="noopener noreferrer" className="link-card">
-        {showPreview && (
+        {/* No image, no band. A 180px slab reading "No Preview Available" with a Refresh button in
+            it was the loudest thing on a card whose actual content is the title — and on a wall of
+            cards it read as the app being broken rather than as a site declining to publish a
+            thumbnail. lib/metadata now tries considerably harder to find one (JSON-LD, image_src,
+            a real browser UA), so reaching here means there genuinely is not one to show.
+            The manual retry is not lost: the edit modal carries a Refresh button, shown on exactly
+            this condition, and it is a better home for a rarely-wanted action than every card. */}
+        {showPreview && link.previewImageUrl && (
           <div className="card-image-wrap">
-            {link.previewImageUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={link.previewImageUrl} alt={link.title || 'Preview'} className="card-image" />
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No Preview Available</div>
-                <button 
-                  onClick={handleRefreshMetadata}
-                  disabled={isRefreshing}
-                  className="refresh-preview-btn"
-                >
-                  {isRefreshing ? 'Refreshing...' : 'Refresh Preview'}
-                </button>
-              </div>
-            )}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={link.previewImageUrl} alt={link.title || 'Preview'} className="card-image" />
             {link.quality && <span className="card-badge card-quality">{link.quality}</span>}
             {link.duration && <span className="card-badge card-duration">{link.duration}</span>}
           </div>

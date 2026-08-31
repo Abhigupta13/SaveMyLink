@@ -46,6 +46,15 @@ export async function getLinks(categoryId?: string, page: number = 1, limit: num
   if (categoryId && categoryId !== 'all') {
     if (categoryId === 'favorites') {
       query.isFavorite = true;
+    } else if (categoryId === 'haspreview') {
+      // Only links that actually carry a thumbnail. Filtered HERE rather than in LinksDisplay
+      // because that component pages through the list — a client-side predicate would hide rows
+      // out of the pages already loaded while totalCount and hasMore still counted them, so the
+      // grid would look short and infinite scroll would stop early.
+      // $nin over both because createLink, refreshMetadata and bulkCreateLinks all write
+      // `metadata.image || ''` — an absent preview is an EMPTY STRING on rows saved through those
+      // paths and missing entirely on older ones. Checking only one of the two silently halves it.
+      query.previewImageUrl = { $nin: [null, ''] };
     } else {
       query.category = categoryId;
     }

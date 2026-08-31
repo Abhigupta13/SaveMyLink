@@ -376,30 +376,12 @@ select.category-select {
   cursor: not-allowed;
 }
 
-/* Dashboard Categories */
-.category-filter {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px; /* Reduced from 24px */
-  position: relative;
-}
-
-.category-list {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding-bottom:2px;
-  flex: 1;
-  flex-wrap: nowrap; /* Force single line scroll */
-  -webkit-overflow-scrolling: touch; /* Smooth momentum scroll on iOS */
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-.category-list::-webkit-scrollbar {
-  display: none;
-}
+/* Dashboard Categories — the row itself is defined ONCE, further down next to
+   .category-scroll-area. There used to be a second, older definition here of .category-filter,
+   .category-list and .category-filter-btn, which meant every property of that row was resolved by
+   source order across two blocks 90 lines apart: the old one set overflow-x on .category-list while
+   the new one set it on .category-scroll-area, so the row had two nested scrollers and editing
+   either block produced results that looked arbitrary. */
 
 .grid-toggle-btn {
   background: var(--bg-secondary);
@@ -422,27 +404,6 @@ select.category-select {
   border-color: var(--accent-color);
 }
 
-.category-filter-btn {
-  padding: 4px 12px;
-  border-radius: 16px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  font-size: 0.75rem;
-  white-space: nowrap;
-  font-weight: 500;
-  transition: var(--transition);
-}
-
-.category-filter-btn.active {
-  background: var(--accent-strong);
-  border-color: var(--accent-color);
-  color: white;
-}
-
-.category-filter-btn:hover:not(.active) {
-  background: var(--bg-tertiary);
-}
-
 /* Grid Layout */
 .links-grid {
   display: grid;
@@ -463,6 +424,14 @@ select.category-select {
   }
 }
 
+/* ---------- The filter row above the links grid ----------
+   One horizontal scroller (.category-scroll-area) holding an unbounded number of chips, with the
+   view controls pinned outside it so they never scroll away.
+
+   It SCROLLS rather than wrapping, which is the opposite of the choice admin.css makes for its
+   window picker — deliberately. That picker has five fixed options, so wrapping costs one extra
+   line at worst. Categories are user-created and unbounded, and wrapping thirty of them pushes the
+   links themselves off a phone screen entirely. */
 .category-filter {
   display: flex;
   align-items: center;
@@ -474,9 +443,20 @@ select.category-select {
 
 .category-scroll-area {
   flex: 1;
+  /* min-width: 0 or this flex child refuses to shrink below its content width, and the row pushes
+     the whole page into a horizontal scroll instead of scrolling inside itself. */
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
   padding: 4px 0;
+  /* The affordance. Scrollbars are hidden on every scroller in this app, so a row cut off at a hard
+     edge looks like a row that simply ends — on a phone only about one and a half chips are visible
+     past "All" and the two icon chips, and nobody swipes an edge that gives them no reason to.
+     Fading the last 22px means the final chip visibly runs out of the frame instead.
+     This cannot lie about there being more: when the chips do not fill the row, the faded strip is
+     over empty background and nothing appears to fade at all. */
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
 }
 
 .category-scroll-area::-webkit-scrollbar {
@@ -494,6 +474,8 @@ select.category-select {
   gap: 6px;
   align-items: center;
   padding-left: 8px;
+  /* Never squashed by a long category list — these are the controls, not content. */
+  flex-shrink: 0;
 }
 
 .category-filter-btn {
@@ -504,7 +486,26 @@ select.category-select {
   font-size: 0.8rem;
   font-weight: 700;
   color: var(--text-secondary);
+  white-space: nowrap;
+  /* Without this a long list squeezes every chip until the labels wrap mid-word — flex items
+     default to shrinking, and the row is the one place where the label IS the control. */
+  flex-shrink: 0;
   transition: var(--transition);
+}
+
+/* The square chips (favourites, has-a-preview). Sized to match the 40px view controls opposite
+   them so the row reads as one band rather than two heights. */
+.category-filter-btn.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  padding: 0;
+}
+
+.category-filter-btn:hover:not(.active) {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-color);
 }
 
 .category-filter-btn.active {
@@ -513,6 +514,37 @@ select.category-select {
   color: white;
   border-color: transparent;
   box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-color) 20%, transparent);
+}
+
+/* The two view controls opposite the chips. */
+.category-action-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: var(--transition);
+}
+
+.category-action-btn:hover { background: var(--bg-tertiary); border-color: var(--accent-color); }
+
+/* Phones. The chips were about 35px tall against the 44px this codebase argues for elsewhere, and
+   the two view controls plus their padding reserved 94px of a 343px content width — more than a
+   quarter of the row — before a single category was drawn. */
+@media (max-width: 640px) {
+  .category-filter { gap: 8px; }
+  .category-actions { gap: 4px; padding-left: 4px; }
+  .category-filter-btn {
+    min-height: 44px;
+    padding: 8px 14px;
+  }
+  .category-filter-btn.icon { width: 44px; }
+  .category-action-btn { width: 44px; height: 44px; }
 }
 
 /* Floating Action Button */
