@@ -11,6 +11,8 @@ import { useDriveGate } from '@/components/useDriveGate';
 import { getProjects, createProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
 import { useFeedback } from '@/components/ui/Feedback';
+import Loading from '@/components/ui/Loading';
+import LoadError from '@/components/ui/LoadError';
 import { useShareNotice } from '@/components/ShareNotice';
 import { useUser } from '@/components/UserContext';
 import { SafeBanner, SafeEmpty, PrivateToggle, droppedPrivacy } from '@/components/PrivateSafe';
@@ -41,6 +43,8 @@ export default function NotesPage() {
   const [projects, setProjects] = useState<any[]>([]);
   const [scope, setScope] = useState<any | null>(null);   // null = Personal, same as Tasks and Meetings
   const [loading, setLoading] = useState(true);
+  // Distinct from "no notes": empty means empty, this means we could not find out.
+  const [failed, setFailed] = useState(false);
   const [editing, setEditing] = useState<any | null>(null); // note being edited, or {} for new
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -60,16 +64,27 @@ export default function NotesPage() {
   // dynamically rendered, so useSearchParams needs no Suspense boundary here.
   const wantedProject = useSearchParams().get('project');
 
+  /* A throw used to leave the spinner running forever, and a resolved `success: false` rendered
+     "No notes yet" — telling someone their notes are gone when the load merely failed. `failed`
+     keeps those two apart. Only the notes call decides it: the projects call feeds the scope
+     picker, and losing that should not blank a page full of notes we did fetch. */
   const load = useCallback(async () => {
-    const [res, p] = await Promise.all([getNotes(), getProjects()]);
-    if (res.success) setNotes(res.notes || []);
-    if (p.success) {
-      setProjects(p.projects || []);
-      // Only a project actually returned to me — the id came from a URL and is not to be trusted
-      // into the picker just because it was typed there.
-      if (wantedProject) setScope((p.projects || []).find((x: { _id: string }) => String(x._id) === wantedProject) || null);
+    setFailed(false);
+    try {
+      const [res, p] = await Promise.all([getNotes(), getProjects()]);
+      if (res.success) setNotes(res.notes || []);
+      else setFailed(true);
+      if (p.success) {
+        setProjects(p.projects || []);
+        // Only a project actually returned to me — the id came from a URL and is not to be trusted
+        // into the picker just because it was typed there.
+        if (wantedProject) setScope((p.projects || []).find((x: { _id: string }) => String(x._id) === wantedProject) || null);
+      }
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [wantedProject]);
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
   // `capture` is ignored on desktop, where the button would just be a second file picker.
@@ -286,7 +301,9 @@ export default function NotesPage() {
       )}
 
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
+        <Loading label="Loading your notes" />
+      ) : failed ? (
+        <LoadError what="your notes" onRetry={load} />
       ) : filtered.length === 0 && privateSafe && !scope && !q ? (
         // "No notes yet" here would be about a vault that is not on screen.
         <SafeEmpty noun="notes" />

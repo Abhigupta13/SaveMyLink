@@ -8,6 +8,8 @@ import { useSession } from 'next-auth/react';
 import { Plus, Users, CheckSquare, Mic, FolderOpen } from 'lucide-react';
 import { listProjects, createProject, getProjectStats } from '@/actions/project';
 import { useFeedback } from '@/components/ui/Feedback';
+import Loading from '@/components/ui/Loading';
+import LoadError from '@/components/ui/LoadError';
 
 export default function ProjectsPage() {
   const { toast } = useFeedback();
@@ -16,16 +18,27 @@ export default function ProjectsPage() {
   const [projects, setProjects] = useState<any[]>([]);
   const [stats, setStats] = useState<Record<string, { open: number; done: number; moms: number }>>({});
   const [loading, setLoading] = useState(true);
+  // Distinct from "no projects": empty means empty, this means we could not find out.
+  const [failed, setFailed] = useState(false);
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     // listProjects, not getProjects: this grid draws a name and three counts, and the full
     // version also resolves a display name for every member of every group to render none of them.
-    const [p, s] = await Promise.all([listProjects(), getProjectStats()]);
-    if (p.success) setProjects(p.projects || []);
-    if (s.success) setStats(s.stats || {});
-    setLoading(false);
+    setFailed(false);
+    try {
+      const [p, s] = await Promise.all([listProjects(), getProjectStats()]);
+      // The project list is the page. Stats are decoration on each card, so a stats failure
+      // leaves the cards standing with zeroes rather than replacing the whole grid with an error.
+      if (p.success) setProjects(p.projects || []);
+      else setFailed(true);
+      if (s.success) setStats(s.stats || {});
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
@@ -70,7 +83,9 @@ export default function ProjectsPage() {
       </form>
 
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
+        <Loading label="Loading your projects" />
+      ) : failed ? (
+        <LoadError what="your projects" onRetry={load} />
       ) : projects.length === 0 ? (
         <div className="empty-state">
           <p style={{ fontWeight: 800, marginBottom: '4px' }}>No projects yet</p>

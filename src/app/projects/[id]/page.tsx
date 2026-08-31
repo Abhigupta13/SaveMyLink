@@ -158,6 +158,8 @@ export default function ProjectWorkspace() {
   const [notesDraft, setNotesDraft] = useState('');
   const [noteDraft, setNoteDraft] = useState({ title: '', body: '' });
   const [savingNote, setSavingNote] = useState(false);
+  // Same guard as savingNote, for the task composer — see handleCreate.
+  const [adding, setAdding] = useState(false);
   const [notesSaved, setNotesSaved] = useState(true);
   const [renaming, setRenaming] = useState('');
   const [renameOpen, setRenameOpen] = useState(false);
@@ -416,17 +418,29 @@ export default function ProjectWorkspace() {
   }, [menuOpen]);
 
   // ---------- tasks ----------
+  /* `adding` guards the double tap. The only guard before was `disabled={!title.trim()}`, and the
+     title is not cleared until AFTER the await returns — so on a slow connection the button stayed
+     enabled for the whole round trip and a second tap created the same task again, in a group
+     where everyone sees it. handleAddNote already does exactly this; the task composer beside it
+     did not. */
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
-    const res = await createTask(title, {
-      dueAt: due ? new Date(due).toISOString() : undefined,
-      projectId,
-      assigneeEmails: assignee.length ? assignee : [myEmail],
-      reminder: remind || undefined,   // undefined = whatever my profile default is, resolved server-side
-    });
-    if (res.success) { setTitle(''); setDue(''); setAssignee([]); fetchTasks(); fetchEvents(); }
-    else toast(res.error || 'Something went wrong', 'error');
+    if (!title.trim() || adding) return;
+    setAdding(true);
+    try {
+      const res = await createTask(title, {
+        dueAt: due ? new Date(due).toISOString() : undefined,
+        projectId,
+        assigneeEmails: assignee.length ? assignee : [myEmail],
+        reminder: remind || undefined,   // undefined = whatever my profile default is, resolved server-side
+      });
+      if (res.success) { setTitle(''); setDue(''); setAssignee([]); fetchTasks(); fetchEvents(); }
+      else toast(res.error || 'Something went wrong', 'error');
+    } catch {
+      toast('Something went wrong', 'error');
+    } finally {
+      setAdding(false);
+    }
   };
 
   const handleToggle = async (id: string) => {
@@ -967,7 +981,7 @@ export default function ProjectWorkspace() {
             {canEdit && <form onSubmit={handleCreate} className="quick-add" style={{ marginTop: '16px' }}>
               <div className="quick-add-main">
                 <input type="text" placeholder={`Add a task to ${project.name}…`} value={title} onChange={e => setTitle(e.target.value)} />
-                <button type="submit" className="btn-primary" disabled={!title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>Add</button>
+                <button type="submit" className="btn-primary" disabled={adding || !title.trim()} style={{ padding: '9px 18px', borderRadius: '12px', fontWeight: 800, opacity: title.trim() ? 1 : 0.5 }}>{adding ? 'Adding…' : 'Add'}</button>
               </div>
               <div className="quick-add-meta">
                 <input className="field" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} title="Due"

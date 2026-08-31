@@ -13,6 +13,8 @@ import ReminderPicker from '@/components/ReminderPicker';
 import type { ReminderChoice } from '@/lib/reminderRule';
 import { reconcile, ensurePermissions } from '@/lib/taskNotifications';
 import { useFeedback } from '@/components/ui/Feedback';
+import Loading from '@/components/ui/Loading';
+import LoadError from '@/components/ui/LoadError';
 import { useShareNotice } from '@/components/ShareNotice';
 import { useUser } from '@/components/UserContext';
 import { SafeBanner, SafeEmpty, PrivateToggle, droppedPrivacy } from '@/components/PrivateSafe';
@@ -72,6 +74,8 @@ export default function TasksPage() {
   const [due, setDue] = useState('');
   const [assignee, setAssignee] = useState<string[]>([]);   // several people, one shared task
   const [loading, setLoading] = useState(true);
+  // Distinct from "no tasks": empty means empty, this means we could not find out.
+  const [failed, setFailed] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const [editing, setEditing] = useState<any | null>(null); // task being edited
   const [draft, setDraft] = useState<{ title: string; description: string; dueAt: string; assigneeEmails: string[]; projectId: string; reminder: ReminderChoice | null; isPrivate: boolean }>(
@@ -145,10 +149,20 @@ export default function TasksPage() {
   /** Personal tasks are always yours. Inside a group, view-only means read-only here too. */
   const canEdit = !activeProject || canWrite(activeProject, myEmail);
 
+  /* A throw used to leave the spinner running for the rest of the session, and a resolved
+     `success: false` rendered "Nothing here yet" — which reads as "your tasks are done" when it
+     actually means we never found out. `failed` keeps them apart. */
   const fetchTasks = useCallback(async (projectId?: string) => {
-    const res = await getTasks(projectId);
-    if (res.success) setTasks(res.tasks || []);
-    setLoading(false);
+    setFailed(false);
+    try {
+      const res = await getTasks(projectId);
+      if (res.success) setTasks(res.tasks || []);
+      else setFailed(true);
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
   }, []);
   const fetchProjects = useCallback(async () => {
     const res = await getProjects();
@@ -325,7 +339,7 @@ export default function TasksPage() {
           <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '460px' }}>
             <div className="modal-header">
               <h2 className="modal-title">Edit task</h2>
-              <button className="modal-close" onClick={() => setEditing(null)}><X size={22} /></button>
+              <button className="modal-close" onClick={() => setEditing(null)} aria-label="Close"><X size={22} /></button>
             </div>
             <div style={{ display: 'grid', gap: '10px' }}>
               <input className="field" value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} placeholder="Task" autoFocus />
@@ -398,7 +412,9 @@ export default function TasksPage() {
       </form>
 
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
+        <Loading label="Loading your tasks" />
+      ) : failed ? (
+        <LoadError what="your tasks" onRetry={() => fetchTasks(activeProject?._id)} />
       ) : tasks.length === 0 && privateSafe && !activeProject ? (
         // "Nothing here yet" would be about the list the safe is currently hiding.
         <SafeEmpty noun="tasks" />

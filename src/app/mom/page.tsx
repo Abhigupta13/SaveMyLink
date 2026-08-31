@@ -19,14 +19,18 @@ function MomPageInner() {
 
   useEffect(() => {
     if (status !== 'authenticated') return;
+    // .catch, not a bare .then: a rejected promise skipped setLoading(false) entirely and left the
+    // meetings page spinning for the rest of the session.
     getProjects().then(res => {
       const list = res.success ? res.projects || [] : [];
       setProjects(list);
       // Landing here without ?project means Personal — the transcript decides where items go
       const wanted = params.get('project');
       setActive(list.find((p: any) => p._id === wanted) || null);
-      setLoading(false);
-    });
+    }).catch(() => {
+      // The picker is a filter over meetings, not the meetings themselves — losing it should not
+      // take the page down, so this leaves Personal selected rather than showing an error.
+    }).finally(() => setLoading(false));
   }, [status, params]);
 
   // Personal meetings still need me in the assignee list

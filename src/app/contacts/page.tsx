@@ -6,6 +6,8 @@ import { useSession } from 'next-auth/react';
 import { Phone, Mail, MessageCircle, Plus, Pencil, Trash2, X, UserPlus } from 'lucide-react';
 import { getContacts, createContact, updateContact, deleteContact, inviteContact, ContactInput } from '@/actions/contact';
 import { useFeedback } from '@/components/ui/Feedback';
+import Loading from '@/components/ui/Loading';
+import LoadError from '@/components/ui/LoadError';
 import { useUser } from '@/components/UserContext';
 import { SafeBanner, SafeEmpty, PrivateToggle } from '@/components/PrivateSafe';
 
@@ -18,6 +20,8 @@ export default function ContactsPage() {
   const { status } = useSession();
   const [contacts, setContacts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // Distinct from `contacts.length === 0`: empty means empty, this means we could not find out.
+  const [failed, setFailed] = useState(false);
   const [form, setForm] = useState<ContactInput | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -25,10 +29,21 @@ export default function ContactsPage() {
   // the message goes out under the user's name, so it stays the user's decision.
   const [invitee, setInvitee] = useState<{ email: string; name: string } | null>(null);
 
+  /* try/catch/finally, not a bare await. A throw here used to leave `loading` true forever — the
+     spinner spun for the rest of the session — and a resolved `success: false` fell through to the
+     "No contacts yet." empty state, which tells the user their address book is gone when it is
+     only unreachable. `failed` separates the two. */
   const load = useCallback(async () => {
-    const res = await getContacts();
-    if (res.success) setContacts(res.contacts || []);
-    setLoading(false);
+    setFailed(false);
+    try {
+      const res = await getContacts();
+      if (res.success) setContacts(res.contacts || []);
+      else setFailed(true);
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
   }, []);
   useEffect(() => { if (status === 'authenticated') load(); }, [status, load]);
 
@@ -143,7 +158,9 @@ export default function ContactsPage() {
       )}
 
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}><div className="loading-spinner"></div></div>
+        <Loading label="Loading your contacts" />
+      ) : failed ? (
+        <LoadError what="your contacts" onRetry={load} />
       ) : (
         <>
           {filtered.length === 0 && !form && (

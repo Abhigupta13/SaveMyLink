@@ -10,6 +10,8 @@ import { useDriveGate } from '@/components/useDriveGate';
 import { getProjects } from '@/actions/project';
 import { ExternalLink, Download, X } from 'lucide-react';
 import { useFeedback } from '@/components/ui/Feedback';
+import Loading from '@/components/ui/Loading';
+import LoadError from '@/components/ui/LoadError';
 import { useShareNotice } from '@/components/ShareNotice';
 import { useUser } from '@/components/UserContext';
 import { SafeBanner, SafeEmpty, PrivateToggle, droppedPrivacy } from '@/components/PrivateSafe';
@@ -43,6 +45,8 @@ export default function DLockerPage() {
   const [projects, setProjects] = useState<any[]>([]);
   const [activeFolder, setActiveFolder] = useState<string>(ALL);
   const [isLoading, setIsLoading] = useState(true);
+  // Distinct from "no documents": empty means empty, this means we could not find out.
+  const [failed, setFailed] = useState(false);
   const [isAddingDoc, setIsAddingDoc] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [preview, setPreview] = useState<any | null>(null);
@@ -71,11 +75,21 @@ export default function DLockerPage() {
     if (untouched) { autoNamed.current = file.name; setDocName(file.name); }
   };
 
+  /* A throw used to leave the spinner running forever, and a response with no `docs` rendered
+     "Your Digi Locker is empty" — the worst wording in the app to show someone whose documents
+     merely failed to load. `failed` keeps empty and broken apart. */
   const fetchDocs = useCallback(async () => {
     setIsLoading(true);
-    const res = await getDocuments();
-    if (res.docs) setDocs(res.docs);
-    setIsLoading(false);
+    setFailed(false);
+    try {
+      const res = await getDocuments();
+      if (res.docs) setDocs(res.docs);
+      else setFailed(true);
+    } catch {
+      setFailed(true);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -211,10 +225,16 @@ export default function DLockerPage() {
   if (status === 'loading' || isLoading) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '80px 16px' }}>
-        <div className="loading-spinner"></div>
+        <Loading label="Opening your Digi Locker" />
         <p style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Opening your Digi Locker…</p>
       </div>
     );
+  }
+
+  // Before the empty state, never instead of it: "Your Digi Locker is empty" is the last thing
+  // someone whose documents just failed to load should be told.
+  if (failed) {
+    return <LoadError what="your documents" onRetry={fetchDocs} />;
   }
 
   return (
@@ -284,7 +304,9 @@ export default function DLockerPage() {
           <SafeEmpty noun="files" />
         ) : (
           <div className="empty-locker-state">
-            <div className="empty- locker-icon">🗄️</div>
+            {/* was "empty- locker-icon" — a stray space split it into two classes that match no
+                rule, so .empty-locker-icon (globals.css) had never once applied to this icon. */}
+            <div className="empty-locker-icon">🗄️</div>
             <h2>{docs.length ? `Nothing in ${activeFolder} yet` : 'Your Digi Locker is empty'}</h2>
             {!docs.length && <p className="empty-hint">{hintFor('/d-locker')}</p>}
             <p>{docs.length
@@ -349,13 +371,16 @@ export default function DLockerPage() {
           <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
             <div className="modal-header">
               <h2 className="modal-title">Add to Digi Locker</h2>
-              <button className="modal-close" onClick={() => setIsAddingDoc(false)}>&times;</button>
+              <button className="modal-close" onClick={() => setIsAddingDoc(false)} aria-label="Close">&times;</button>
             </div>
 
             <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '14px' }}>
               <div>
-                <label className="field-label">Document name</label>
-                <input className="field" type="text" placeholder="e.g. My Resume, Passport Copy"
+                {/* htmlFor + id on every field in this form. They were siblings in a plain div with
+                    no association, so each input announced as unlabelled and tapping the caption
+                    did not focus it. feedback-inbox/page.tsx uses this same class correctly. */}
+                <label className="field-label" htmlFor="doc-name">Document name</label>
+                <input className="field" id="doc-name" type="text" placeholder="e.g. My Resume, Passport Copy"
                   value={docName} onChange={(e) => setDocName(e.target.value)} required autoFocus />
                 {docName && docName === autoNamed.current && (
                   <span className="field-hint">Taken from the file — edit it if you like.</span>
@@ -363,16 +388,16 @@ export default function DLockerPage() {
               </div>
 
               <div>
-                <label className="field-label">Folder</label>
+                <label className="field-label" htmlFor="doc-folder">Folder</label>
                 {/* Native datalist: pick an existing folder or type a new one — that is how a folder gets created */}
-                <input className="field" type="text" list="folder-options" placeholder="Personal, Taxes, Passport…"
+                <input className="field" id="doc-folder" type="text" list="folder-options" placeholder="Personal, Taxes, Passport…"
                   value={docFolder} onChange={(e) => setDocFolder(e.target.value)} />
               </div>
 
               {projects.length > 0 && (
                 <div>
-                  <label className="field-label">Share with a project</label>
-                  <select className="field" value={docProject} onChange={(e) => setDocProject(e.target.value)}>
+                  <label className="field-label" htmlFor="doc-project">Share with a project</label>
+                  <select className="field" id="doc-project" value={docProject} onChange={(e) => setDocProject(e.target.value)}>
                     <option value="">Just me</option>
                     {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
                   </select>
@@ -405,8 +430,8 @@ export default function DLockerPage() {
                 </div>
               ) : (
                 <div>
-                  <label className="field-label">URL</label>
-                  <input className="field" type="url" placeholder="https://example.com/file.pdf"
+                  <label className="field-label" htmlFor="doc-url">URL</label>
+                  <input className="field" id="doc-url" type="url" placeholder="https://example.com/file.pdf"
                     value={externalLink} onChange={(e) => setExternalLink(e.target.value)} required />
                 </div>
               )}

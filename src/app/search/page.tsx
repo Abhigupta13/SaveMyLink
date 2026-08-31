@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { searchAll } from '@/actions/search';
 import { Search, ArrowLeft } from 'lucide-react';
+import Loading from '@/components/ui/Loading';
+import LoadError from '@/components/ui/LoadError';
 import { formatDay } from '@/lib/time';
 
 function SearchPageInner() {
@@ -13,17 +15,31 @@ function SearchPageInner() {
   const [q, setQ] = useState(searchParams.get('q') || '');
   const [results, setResults] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  // Bumped by the retry button. Re-running the same query needs something in the dep list to
+  // change, and editing `q` to force that would alter what the user typed.
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     if (!q.trim()) { setResults(null); return; }
+    /* A failed search used to render NOTHING — no spinner (cleared below), no results, no error,
+       no empty state. Just a blank page under the search box, indistinguishable from "still
+       typing". `failed` gives it something to say. */
     const timer = setTimeout(async () => {
       setLoading(true);
-      const res = await searchAll(q);
-      if (res.success) setResults(res);
-      setLoading(false);
+      setFailed(false);
+      try {
+        const res = await searchAll(q);
+        if (res.success) setResults(res);
+        else setFailed(true);
+      } catch {
+        setFailed(true);
+      } finally {
+        setLoading(false);
+      }
     }, 400);
     return () => clearTimeout(timer);
-  }, [q]);
+  }, [q, retry]);
 
   const section = (label: string, items: any[], render: (item: any) => React.ReactNode) =>
     items?.length > 0 && (
@@ -62,7 +78,8 @@ function SearchPageInner() {
         />
       </div>
 
-      {loading && <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}><div className="loading-spinner"></div></div>}
+      {loading && <Loading variant="inline" label="Searching" />}
+      {failed && !loading && <LoadError what="those results" onRetry={() => setRetry(n => n + 1)} />}
 
       {results && !loading && (
         <>
