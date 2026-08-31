@@ -15,8 +15,12 @@ import { privateFilter } from '@/lib/privacy';
  *
  * ponytail: one indexed lookup per project-scope call. Move it into the JWT in lib/auth.ts if it
  * ever shows up in profiling.
+ *
+ * Exported because "every project-scoped read routes through this file" turned out not to be true:
+ * claimAssignments in actions/task.ts stamps a user's id onto any task matching their claimed
+ * address, which is a read grant that never touched a project scope. It asks this directly now.
  */
-async function isVerified(userId: string) {
+export async function isVerified(userId: string) {
   const user = await User.findById(userId).select('emailVerified').lean<{ emailVerified?: Date | null } | null>();
   return !!user?.emailVerified;
 }

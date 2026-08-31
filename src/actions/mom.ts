@@ -8,7 +8,8 @@ import { Project } from "@/lib/models/Project";
 import { Contact } from "@/lib/models/Contact";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember, projectForWriter, canAccess, canDelete, myProjectFilter } from "@/lib/projectAccess";
+import { projectForMember, projectForWriter, canAccess, canDelete, myProjectFilter, projectPeople } from "@/lib/projectAccess";
+import { allowedAssignees } from "@/lib/validation";
 import { chatJSON } from "@/lib/llm";
 import { transcribeAudio } from "@/lib/geminiAudio";
 import {
@@ -23,6 +24,7 @@ import { dateTitle, cleanMeetingTitle } from "@/lib/meetingTitle";
 import { asChoice } from "@/lib/reminderRule";
 import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
+import { Types } from "mongoose";
 import { revalidatePath } from "next/cache";
 import path from 'path';
 import { unlink } from 'fs/promises';
@@ -503,6 +505,9 @@ export async function confirmMomTasks(
     // confirm row chose, else the profile default, and anything unrecognised is not stored.
     const me = await User.findById(session.user.id).select('reminderDefault').lean<{ reminderDefault?: string } | null>();
     const fallbackReminder = asChoice(me?.reminderDefault);
+    // One roster read per group for the whole batch, not one per action item. A meeting can file
+    // 25 items into the same project, and each of them asks the same question.
+    const roster = new Map<string, string[]>();
 
     for (const item of items) {
       if (!item.title?.trim()) continue;
@@ -540,10 +545,26 @@ export async function confirmMomTasks(
         continue;
       }
 
-      let assigneeId;
-      if (item.assigneeEmail) {
-        const user = await User.findOne({ email: item.assigneeEmail.toLowerCase() }).select('_id');
-        assigneeId = user?._id;
+      /* Assignment only exists inside a group — the same rule createTask states, and the one this
+         path was missing. It used to look item.assigneeEmail up in User and store whatever came
+         back, with no roster check and no project required. From a PERSONAL meeting (no projectId,
+         so no membership gate runs at all) that let anyone file a task onto any registered address:
+         the title and description then surface in that person's My Tasks, cross-entity search,
+         weekly digest, phone reminders and the Jarvis prompt — and they cannot delete it, because
+         canDelete falls back to the creator for a task with no project. lib/dropAssignee states the
+         invariant it broke: being an assignee is read access.
+         Now it goes through the roster gate every other write uses, so an address that is not on
+         the project is dropped in silence like an unticked chip, rather than failing the save. */
+      let assigneeEmails: string[] = [];
+      const byEmail = new Map<string, Types.ObjectId>();
+      if (projectId) {
+        const key = String(projectId);
+        if (!roster.has(key)) roster.set(key, await projectPeople(projectId));
+        assigneeEmails = allowedAssignees(item.assigneeEmail, null, roster.get(key)!);
+        if (assigneeEmails.length) {
+          const found = await User.find({ email: { $in: assigneeEmails } }).select('_id email').lean();
+          for (const u of found) byEmail.set(String(u.email).toLowerCase(), u._id);
+        }
       }
       // Already a real ISO instant by the time it round-trips back from the confirm screen —
       // zonedToUtc passes those straight through, so it cannot be shifted a second time.
@@ -555,8 +576,8 @@ export async function confirmMomTasks(
         dueAt: due || undefined,
         userId: session.user.id,
         projectId: projectId || undefined,
-        assigneeId,
-        assigneeEmail: item.assigneeEmail?.toLowerCase(),
+        assigneeId: byEmail.get(assigneeEmails[0]),
+        assigneeEmail: assigneeEmails[0],
         momId: mom._id,
         reminder: asChoice(item.reminder) ?? fallbackReminder,
         isPrivate,

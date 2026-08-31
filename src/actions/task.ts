@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/mongodb";
 import Task from "@/lib/models/Task";
 import { User } from "@/lib/models/User";
-import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject, projectPeople } from "@/lib/projectAccess";
+import { projectForMember, projectForWriter, canDelete, amProjectOwner, canWriteProject, projectPeople, isVerified } from "@/lib/projectAccess";
 import { canWorkOn, canSignOff, assigneeEmailsOf } from "@/lib/taskAccess";
 import { allowedAssignees } from "@/lib/validation";
 import { privateFilter, privacyOnWrite } from "@/lib/privacy";
@@ -29,9 +29,20 @@ async function myReminderDefault(userId: string): Promise<ReminderChoice | undef
  * was written, and each of them attaches their id here on their first read. $addToSet rather than
  * $push so a repeated read cannot list somebody twice, and the $ne narrows it to rows that would
  * actually change.
+ *
+ * Gated on email verification, for the same reason projectScope is. Assignment is granted by raw
+ * address, so until a signup proves the account owns that address the match is only a claim — and
+ * this function converts a claim into a durable id on the row. Without the gate: a task is shared
+ * to boss@theirclient.com before they have an account, someone else registers that address, never
+ * opens the inbox, signs in (authorize checks deletedAt and suspendedAt, not emailVerified) and
+ * loads /tasks. Their id is stamped on, and getMyOpenTasks and searchAll both match assigneeId
+ * with no project scope and no verification check of their own — so the title, description, due
+ * date and group of somebody else's work is theirs to read. Writes were always refused
+ * (writerScope with verified=false); this closes the read half.
  */
 async function claimAssignments(userId: string, email?: string | null) {
   if (!email) return;
+  if (!(await isVerified(userId))) return;
   const at = email.toLowerCase();
   await Task.updateMany(
     { assigneeEmail: at, assigneeId: null },
