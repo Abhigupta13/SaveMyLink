@@ -6,6 +6,7 @@ import LandingPage from '@/components/LandingPage';
 import HomeTiles from '@/components/HomeTiles';
 import Wordmark from '@/components/brand/Wordmark';
 import GettingStarted from '@/components/GettingStarted';
+import UpdateBanner from '@/components/UpdateBanner';
 import { introStatus } from '@/actions/intro';
 import { weeklyDigest } from '@/lib/digest';
 import { NeedsAttention, SavedThisWeek } from '@/components/DigestSections';
@@ -35,6 +36,10 @@ export default async function Home() {
         <h1>Hi, {user.name?.split(' ')[0] || 'there'}</h1>
         <p>What&apos;s on your mind?</p>
       </header>
+
+      {/* Native app only, and only when the installed APK is behind. The web is never out of date,
+          so this renders nothing there. */}
+      <UpdateBanner />
 
       {intro && <GettingStarted progress={intro} />}
 
