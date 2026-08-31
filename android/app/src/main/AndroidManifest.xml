@@ -21,6 +21,19 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Google refuses OAuth inside an embedded WebView (disallowed_useragent), so sign-in
+                 and Drive consent run in a Chrome Custom Tab instead. A Custom Tab shares cookies
+                 with Chrome, not with this WebView, so the finished flow has to get back into the
+                 app somehow — it redirects to com.swaraj.savemylink://auth, which lands here.
+                 launchMode="singleTask" above is what routes it to the running instance rather
+                 than a second copy of the app. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="@string/custom_url_scheme" />
+            </intent-filter>
         </activity>
 
         <!-- Receives shared text/URLs from the Android share sheet (send-intent plugin) -->

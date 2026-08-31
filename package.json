@@ -6,13 +6,20 @@
     "dev": "node scripts/dev-safe.js",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "selfcheck": "node --experimental-strip-types --no-warnings scripts/self-check.mjs",
+    "verify": "npm run typecheck && npm run test && npm run lint:budget",
+    "lint:budget": "node scripts/lint-budget.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1116.0",
     "@aws-sdk/s3-request-presigner": "^3.1116.0",
     "@capacitor/android": "^8.5.0",
     "@capacitor/app": "^8.1.1",
+    "@capacitor/browser": "^8.0.4",
     "@capacitor/core": "^8.5.0",
     "@capacitor/local-notifications": "^8.3.1",
     "@capacitor/share": "^8.0.1",
@@ -44,6 +51,7 @@
     "eslint-config-next": "16.2.2",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   }
 }

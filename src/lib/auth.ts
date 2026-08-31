@@ -40,6 +40,30 @@ export const authOptions = {
        */
       authorization: { params: { prompt: 'select_account' } },
     })] : []),
+    /**
+     * The Android app's Google sign-in, completed.
+     *
+     * Google refuses OAuth from an embedded WebView, so the app runs the real flow in a Chrome
+     * Custom Tab and comes back over a deep link holding a one-time code. This provider is what
+     * turns that code into a session — deliberately a provider rather than a route that mints a
+     * JWT itself, because minting is forbidden (see the box in lib/accountLocker.ts). NextAuth
+     * issues the cookie here on exactly the same terms as a password sign-in.
+     *
+     * Not shown in any UI: authProviders() only advertises Google, and this is only ever called
+     * by NativeAuthListener with a code the person cannot see or type.
+     */
+    CredentialsProvider({
+      id: "native-handoff",
+      name: "SaveMyLink app",
+      credentials: {
+        code: { label: "Code", type: "text" },
+        verifier: { label: "Verifier", type: "text" },
+      },
+      async authorize(credentials) {
+        const { redeemNativeCode } = await import("@/lib/nativeRedeem");
+        return await redeemNativeCode(credentials?.code ?? '', credentials?.verifier ?? '');
+      },
+    }),
     CredentialsProvider({
       name: "Credentials",
       credentials: {

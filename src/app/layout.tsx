@@ -8,6 +8,7 @@ import { UserProvider } from "@/components/UserContext";
 import AuthProvider from "@/components/AuthProvider";
 import { Suspense } from "react";
 import SendIntentListener from "@/components/SendIntentListener";
+import NativeAuthListener from "@/components/NativeAuthListener";
 import ReminderBootstrap from "@/components/ReminderBootstrap";
 import DriveOutcome from "@/components/DriveOutcome";
 import BackButtonListener from "@/components/BackButtonListener";
@@ -76,6 +77,7 @@ export default async function RootLayout({
             <PreviewProvider>
               <ViewProvider initialColumns={columns}>
                 <SendIntentListener />
+                <NativeAuthListener />
                 <ReminderBootstrap />
                 <Suspense fallback={null}><DriveOutcome /></Suspense>
                 <BackButtonListener />
