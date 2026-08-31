@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
-import { Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles, Languages, BellRing, ChevronRight, ChevronDown } from 'lucide-react';
+import { Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles, Languages, BellRing, ChevronRight, ChevronDown, Smartphone } from 'lucide-react';
 import { getReminderDefault, setReminderDefault } from '@/actions/task';
 import ReminderPicker from '@/components/ReminderPicker';
 import { DEFAULT_CHOICE, type ReminderChoice } from '@/lib/reminderRule';
@@ -15,6 +15,7 @@ import DriveCard from '@/components/DriveCard';
 import AccountSwitcher from '@/components/AccountSwitcher';
 import Link from 'next/link';
 import { shareUrl } from '@/lib/url';
+import { isNativeApp } from '@/lib/nativeBridge';
 import { amIAdmin } from '@/actions/admin';
 import { getJarvisConfirm, setJarvisConfirm } from '@/actions/jarvis';
 
@@ -36,6 +37,7 @@ export default function ProfilePage() {
   const [askFirst, setAskFirst] = useState(true);   // Jarvis confirms before writing into a group
   const [remind, setRemind] = useState<ReminderChoice>(DEFAULT_CHOICE);   // what every new task starts on
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [native, setNative] = useState(false);      // running inside the Android app already
 
   useEffect(() => {
     if (status !== 'authenticated') return;
@@ -48,6 +50,14 @@ export default function ProfilePage() {
     if (status !== 'authenticated') return;
     amIAdmin().then(r => setAdmin(r.admin)).catch(() => {});
   }, [status]);
+
+  // "Get the Android app" is noise to somebody reading it inside the Android app. Defaulting to
+  // false rather than true on purpose: the web is the case that matters here, and it must not
+  // flicker the row in and out on every profile open. The app briefly shows a row it then hides,
+  // which is the cheaper of the two wrong-for-a-moment states.
+  useEffect(() => {
+    isNativeApp().then(setNative).catch(() => {});
+  }, []);
 
   // Same fallback ladder MomSection uses: native sheet on the phone, Web Share on a browser that
   // has it, clipboard everywhere else — so the button always does something.
@@ -224,6 +234,23 @@ export default function ProfilePage() {
             </span>
             <ChevronRight className="set-row-go" size={18} />
           </Link>
+
+          {/* The only way a signed-in person can reach /download. The two prominent buttons for it
+              live on the landing page, which app/page.tsx shows ONLY when there is no session — so
+              everybody who can see them has no account, and everybody who wants the app cannot.
+              (The getting-started checklist used to carry a step for it; that checklist was
+              replaced by the tour, leaving the step in INTRO_STEPS but rendered nowhere.)
+              Sits above "Share the app" so getting it and passing it on read as one pair. */}
+          {!native && (
+            <Link href="/download" className="set-row">
+              <span className="row-icon"><Smartphone size={18} strokeWidth={2.2} /></span>
+              <span className="set-row-text">
+                <span className="set-row-title">Get the Android app</span>
+                <span className="set-row-sub">Share to save from any app, and reminders that reach your phone</span>
+              </span>
+              <ChevronRight className="set-row-go" size={18} />
+            </Link>
+          )}
 
           <button onClick={shareApp} className="set-row">
             <span className="row-icon"><Share2 size={18} strokeWidth={2.2} /></span>
