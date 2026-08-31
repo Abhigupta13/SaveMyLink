@@ -1,0 +1,120 @@
+name: Android APK
+
+# The APK on the download page is a hand-built file from one laptop. That is how it came to sit
+# there for eight days pointing at an expired tunnel, half of it a copy of the previous APK, with
+# real user recordings zipped inside — all of it invisible, because nothing ever looked at the file
+# again after it was committed.
+#
+# So this workflow does two separate jobs, and the assertions matter more than the build:
+#   verify — reads the APK that is actually committed and fails if it is wrong
+#   build  — proves the project still builds, and leaves a fresh APK to download
+#
+# Nothing here commits or pushes. Replacing the shipped APK stays a deliberate human act.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'android/**'
+      - 'capacitor.config.ts'
+      - 'capacitor-web/**'
+      - 'public/app-debug.apk'
+      - 'package.json'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'capacitor.config.ts'
+      - 'capacitor-web/**'
+      - 'public/app-debug.apk'
+      - 'package.json'
+  workflow_dispatch:
+
+jobs:
+  # Runs in seconds and needs no Android toolchain, so it gates every change even when the
+  # build job is skipped or slow.
+  verify-committed-apk:
+    name: Verify the APK on the download page
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect public/app-debug.apk
+        run: |
+          set -euo pipefail
+          APK=public/app-debug.apk
+          test -f "$APK" || { echo "::error::$APK is missing — the download page links to nothing"; exit 1; }
+
+          echo "size: $(stat -c%s "$APK") bytes"
+          mkdir -p /tmp/apk && unzip -o -q "$APK" -d /tmp/apk
+
+          CFG=/tmp/apk/assets/capacitor.config.json
+          test -f "$CFG" || { echo "::error::no capacitor.config.json inside the APK"; exit 1; }
+          echo "--- baked config ---"; cat "$CFG"; echo
+
+          # The bug that shipped: an ephemeral tunnel baked in as the server URL. Every install
+          # opens a blank screen once it expires, which is within the hour.
+          if grep -Eq 'pinggy|ngrok|trycloudflare|loca\.lt|localtunnel|serveo' "$CFG"; then
+            echo "::error::a temporary tunnel URL is baked into the APK — it will be dead before anyone installs it"
+            exit 1
+          fi
+          grep -q 'https://' "$CFG" || { echo "::error::server URL is not https — getUserMedia needs a secure context"; exit 1; }
+
+          # The leak: webDir pointed at public/, so cap sync zipped user MOM recordings and a copy
+          # of the previous APK into a file anyone can download.
+          if find /tmp/apk/assets/public -type f 2>/dev/null | grep -q 'uploads/'; then
+            echo "::error::user uploads are bundled inside the APK"
+            find /tmp/apk/assets/public -type f | grep 'uploads/'
+            exit 1
+          fi
+          if find /tmp/apk -name '*.apk' | grep -q .; then
+            echo "::error::an APK is nested inside the APK — webDir is pointing at public/ again"
+            exit 1
+          fi
+
+          echo "APK looks correct."
+
+  build:
+    name: Build a fresh APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          cache: npm
+
+      # AGP 8.13 / Gradle 8.14.3 target Java 21; the runner's default is older.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - run: npm ci
+
+      # Also regenerates android/capacitor-cordova-android-plugins/, which is gitignored — without
+      # this the Gradle configuration phase fails on a clean checkout with a missing-project error
+      # that looks nothing like its cause.
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --console=plain
+
+      # Signed with android/keystore/debug.keystore, committed on purpose so every machine and this
+      # runner produce an APK that installs over the last one. See the note in android/app/build.gradle.
+      - name: Verify signature
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --verbose --print-certs android/app/build/outputs/apk/debug/app-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
