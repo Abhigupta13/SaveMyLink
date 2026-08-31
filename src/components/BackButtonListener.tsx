@@ -56,6 +56,12 @@ export default function BackButtonListener() {
           else router.push('/');
           return;
         }
+        /* One last chance to say something, at most a few times a year — see ExitFeedback and
+           lib/feedbackPrompt. It answers true only when it has taken responsibility for the
+           gesture, and then exits on the person's behalf; every other time we leave immediately.
+           The back press is always honoured, never swallowed. */
+        const ask = (window as unknown as { __exitFeedback?: (exit: () => void) => boolean }).__exitFeedback;
+        if (ask?.(() => App.exitApp())) return;
         App.exitApp();
       });
       if (disposed) handle.remove();

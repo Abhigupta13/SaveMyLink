@@ -13,17 +13,32 @@ const KINDS = [
   { id: 'other', label: 'Other' },
 ] as const;
 
-/** The "Help us improve" card and its modal. Lives on /profile. */
-export default function SuggestBox() {
+/**
+ * The "Help us improve" dialog itself, separated from the /profile row that opens it so the exit
+ * prompt shows the SAME dialog rather than a second copy that drifts from this one.
+ *
+ * `laterLabel` swaps the header's × for a named way out. On /profile the × is right — the person
+ * opened this deliberately and closing is obvious. On the way out of the app they did not ask for
+ * it, so the escape has to be a real, labelled button, and "Later" says the honest thing: this
+ * will not be the last time you are asked. `onLater` also carries the caller's own follow-on —
+ * on Android that is actually leaving the app, which the person already asked for.
+ */
+export function SuggestDialog({
+  onClose, onLater, laterLabel, title = 'Help us improve', intro,
+}: {
+  onClose: () => void;
+  onLater?: () => void;
+  laterLabel?: string;
+  title?: string;
+  intro?: string;
+}) {
   const { toast } = useFeedback();
-  const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<string>('bug');
   const [message, setMessage] = useState('');
   const [shot, setShot] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
-
-  const close = () => { setOpen(false); setKind('bug'); setMessage(''); setShot(null); };
-  useDialog(open, close);
+  const dismiss = onLater ?? onClose;
+  useDialog(true, dismiss);
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,13 +54,78 @@ export default function SuggestBox() {
     const res = await submitSuggestion(fd);
     setSending(false);
     if (res.success) {
-      close();
-      // The report always sends; say so plainly when the screenshot could not go with it, rather
-      // than letting someone believe we can see what they photographed.
+      onClose();
       toast(res.shotDropped ? "Thanks — we got it, but the screenshot couldn't be attached" : 'Thanks — we got it', 'success');
     }
     else toast(res.error || 'Could not send that', 'error');
   };
+
+  return (
+    <div className="modal-overlay" onClick={dismiss}>
+      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '440px' }}
+        {...dialogProps} aria-labelledby="suggest-title">
+        <div className="modal-header">
+          <h2 className="modal-title" id="suggest-title">{title}</h2>
+          {!laterLabel && <button className="modal-close" onClick={onClose} aria-label="Close">&times;</button>}
+        </div>
+
+        {intro && <p className="suggest-intro">{intro}</p>}
+
+        <form onSubmit={send} style={{ display: 'grid', gap: '14px' }}>
+          <div className="seg-group">
+            {KINDS.map(k => (
+              <button key={k.id} type="button" className={`seg-btn ${kind === k.id ? 'active' : ''}`}
+                onClick={() => setKind(k.id)}>{k.label}</button>
+            ))}
+          </div>
+
+          <div>
+            <label className="field-label" htmlFor="suggest-what">What happened?</label>
+            <textarea className="field" id="suggest-what" rows={5} autoFocus required value={message}
+              onChange={e => setMessage(e.target.value)}
+              placeholder={kind === 'bug'
+                ? 'What were you doing, and what went wrong?'
+                : 'What would make this better for you?'}
+              style={{ resize: 'vertical', minHeight: '110px' }} />
+          </div>
+
+          <div>
+            <label className="field-label">Screenshot (optional)</label>
+            <input type="file" id="suggest-shot" accept="image/*" style={{ display: 'none' }}
+              onClick={e => { (e.target as HTMLInputElement).value = ''; }}   // re-picking the same file still fires onChange
+              onChange={e => setShot(e.target.files?.[0] || null)} />
+            <label htmlFor="suggest-shot" className={`file-drop ${shot ? 'has-file' : ''}`}>
+              {shot ? shot.name : 'Add a screenshot…'}
+            </label>
+            {shot && (
+              <button type="button" onClick={() => setShot(null)}
+                style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: '6px 2px 0', padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-tertiary)' }}>
+                <X size={12} /> Remove
+              </button>
+            )}
+          </div>
+
+          <div className="suggest-actions">
+            <button type="submit" className="btn-primary" disabled={sending || !message.trim()}>
+              {sending ? 'Sending…' : 'Send'}
+            </button>
+            {/* Where a Cancel would be. Named rather than an ×, because this dialog arrived
+                uninvited and the way out should be as easy to find as the way through. */}
+            {laterLabel && (
+              <button type="button" className="btn-ghost suggest-later" onClick={onLater}>{laterLabel}</button>
+            )}
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/** The "Help us improve" row on /profile, and the dialog it opens. */
+export default function SuggestBox() {
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
+
 
   return (
     <>
@@ -58,57 +138,7 @@ export default function SuggestBox() {
         </span>
       </button>
 
-      {open && (
-        <div className="modal-overlay" onClick={close}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '440px' }}
-            {...dialogProps} aria-labelledby="suggest-title">
-            <div className="modal-header">
-              <h2 className="modal-title" id="suggest-title">Help us improve</h2>
-              <button className="modal-close" onClick={close} aria-label="Close">&times;</button>
-            </div>
-
-            <form onSubmit={send} style={{ display: 'grid', gap: '14px' }}>
-              <div className="seg-group">
-                {KINDS.map(k => (
-                  <button key={k.id} type="button" className={`seg-btn ${kind === k.id ? 'active' : ''}`}
-                    onClick={() => setKind(k.id)}>{k.label}</button>
-                ))}
-              </div>
-
-              <div>
-                <label className="field-label">What happened?</label>
-                <textarea className="field" rows={5} autoFocus required value={message}
-                  onChange={e => setMessage(e.target.value)}
-                  placeholder={kind === 'bug'
-                    ? 'What were you doing, and what went wrong?'
-                    : 'What would make this better for you?'}
-                  style={{ resize: 'vertical', minHeight: '110px' }} />
-              </div>
-
-              <div>
-                <label className="field-label">Screenshot (optional)</label>
-                <input type="file" id="suggest-shot" accept="image/*" style={{ display: 'none' }}
-                  onClick={e => { (e.target as HTMLInputElement).value = ''; }}   // re-picking the same file still fires onChange
-                  onChange={e => setShot(e.target.files?.[0] || null)} />
-                <label htmlFor="suggest-shot" className={`file-drop ${shot ? 'has-file' : ''}`}>
-                  {shot ? shot.name : 'Add a screenshot…'}
-                </label>
-                {shot && (
-                  <button type="button" onClick={() => setShot(null)}
-                    style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: '6px 2px 0', padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-tertiary)' }}>
-                    <X size={12} /> Remove
-                  </button>
-                )}
-              </div>
-
-              <button type="submit" className="btn-primary" disabled={sending || !message.trim()}
-                style={{ height: '46px', borderRadius: '14px', fontWeight: 800, marginTop: '4px' }}>
-                {sending ? 'Sending…' : 'Send'}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
+      {open && <SuggestDialog onClose={close} />}
     </>
   );
 }

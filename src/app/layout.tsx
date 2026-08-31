@@ -11,6 +11,7 @@ import SendIntentListener from "@/components/SendIntentListener";
 import NativeAuthListener from "@/components/NativeAuthListener";
 import ReminderBootstrap from "@/components/ReminderBootstrap";
 import TimeZoneCookie from "@/components/TimeZoneCookie";
+import ExitFeedback from "@/components/ExitFeedback";
 import DriveOutcome from "@/components/DriveOutcome";
 import BackButtonListener from "@/components/BackButtonListener";
 import JarvisWidget from "@/components/JarvisWidget";
@@ -85,6 +86,8 @@ export default async function RootLayout({
                 <TimeZoneCookie />
                 <Suspense fallback={null}><DriveOutcome /></Suspense>
                 <BackButtonListener />
+                {/* Registers the exit-time feedback prompt that BackButtonListener consults. */}
+                <ExitFeedback />
                 <TopNav initialCategories={categories} />
                 <main className="flex-1">
                   {children}
