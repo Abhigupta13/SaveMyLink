@@ -112,6 +112,22 @@ Android SDK ships with, and it is fine for a sideloaded APK. **It must never bec
 release key.** That one gets generated with the Play org account, never enters git, and cannot be
 recovered if it leaks.
 
+### One decision for you, now that it is on GitHub
+
+Committing the key fixed a real bug — reinstalls failed because every machine signed with its own.
+But pushing it changed what it means. **Anyone with access to the repo can now sign a build that
+every phone which installed from `/download` will accept as an update**, because Android trusts an
+update signed by the same key. That is a distribution-trust question, not a build-convenience one,
+and it is yours to answer:
+
+- **Leave it.** Reasonable while the audience is you and a handful of testers, and while the repo
+  is private. It is what makes "download the new build and it just updates" work.
+- **Move it out of the repo.** Generate a key kept outside git (or in CI secrets), and accept that
+  everybody uninstalls and reinstalls once more. Worth doing before the APK goes to people you do
+  not know.
+
+Either way this key must not be the Play release key when that day comes.
+
 ---
 
 ## Test on your phone

@@ -2284,10 +2284,19 @@ body {
 .jarvis-type { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; padding: 3px 6px; border-radius: 6px; background: var(--bg-tertiary); color: var(--text-secondary); flex-shrink: 0; }
 .jarvis-item.urgent .jarvis-type { background: color-mix(in srgb, var(--danger-color) 15%, transparent); color: var(--danger-color); }
 .jarvis-input { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border-color); }
-.jarvis-input input { flex: 1; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary); outline: none; font-weight: 600; font-size: 0.9rem; }
+/* min-width: 0 on both, and it is the whole bug rather than a tidy-up. A flex item defaults to
+   min-width: auto, which refuses to shrink below its own content — and an <input> reports an
+   intrinsic width of about 246px from its default size of 20 characters. On a 320px phone the
+   input therefore held its ground and shoved the Send button 50px past the panel and 23px off the
+   screen, so it rendered sliced in half. Measured at 320px before and after, not reasoned about. */
+.jarvis-input form { min-width: 0; }
+.jarvis-input input { flex: 1; min-width: 0; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary); outline: none; font-weight: 600; font-size: 0.9rem; }
 .jarvis-input input:focus { border-color: var(--accent-color); }
-.jarvis-input button { width: 42px; border-radius: 12px; border: none; background: var(--accent-strong); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-.jarvis-input button:disabled { opacity: 0.4; cursor: default; }
+/* Scoped to `form button` so it matches the Send button only. As `.jarvis-input button` it also
+   claimed the mic — and beat `.jarvis-mic` on specificity (0,1,1 against 0,1,0), which is why the
+   mic quietly rendered 42x48 instead of the 48x48 circle it asks for. */
+.jarvis-input form button { width: 42px; flex-shrink: 0; border-radius: 12px; border: none; background: var(--accent-strong); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.jarvis-input form button:disabled { opacity: 0.4; cursor: default; }
 /* Only drawn on the last two questions of the day — a permanent counter makes it feel metered. */
 .jarvis-left { padding: 0 12px 10px; font-size: 0.72rem; line-height: 1.45; color: var(--text-secondary); }
 /* keep the Links "+" FAB clear of Jarvis */
