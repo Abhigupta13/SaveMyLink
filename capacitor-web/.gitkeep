@@ -1,0 +1,5 @@
+Capacitor's `webDir`. Intentionally empty.
+
+The app runs in remote-URL mode (see capacitor.config.ts), so no web assets are bundled into the
+APK — but `cap sync` still requires this directory to exist and copies whatever is in it. Pointing
+it at `public/` is what shipped user recordings inside a publicly downloadable APK. Keep it empty.
