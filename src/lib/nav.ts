@@ -11,8 +11,13 @@ import {
  * not exist. The session callback drops `user` for a suspended account but the session object
  * itself survives, so the "signed out" test the chrome already had does not catch them.
  */
+const FRAMED = ['/auth', '/suspended'];
 export const ownsItsFrame = (pathname: string) =>
-  pathname.startsWith('/auth') || pathname.startsWith('/suspended');
+  // Matched on a segment boundary, not a bare prefix. `startsWith('/auth')` also claims `/authors`
+  // and `/suspended-accounts`, which would hand a future route the dead-end treatment and strip its
+  // navigation for reasons nobody could find. Same trailing-slash rule `ownsKey` in lib/driveKey.ts
+  // depends on, for the same reason: a prefix test without a boundary matches its own neighbours.
+  FRAMED.some(base => pathname === base || pathname.startsWith(`${base}/`));
 
 /* Single source of truth for destinations: the desktop rail, the phone bottom bar
    and the Home grid all read this, so adding a page updates every surface at once. */

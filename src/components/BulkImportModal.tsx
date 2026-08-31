@@ -1,5 +1,6 @@
 'use client';
 import { useState, useRef } from 'react';
+import { useDialog, dialogProps } from '@/components/ui/useDialog';
 import { bulkCreateLinks } from '@/actions/link';
 import { useUser } from './UserContext';
 
@@ -18,6 +19,20 @@ export default function BulkImportModal({ isOpen, onClose, inline = false }: { i
   const [result, setResult] = useState<{ success: number, failed: number } | null>(null);
   const [progress, setProgress] = useState<{ processed: number; total: number; success: number; failed: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /* Declared up here, above the early return, because useDialog below has to be too — hooks cannot
+     sit after a conditional return, and a hook referencing a `const` declared further down is a
+     temporal-dead-zone hazard the React compiler rules reject even when the call is deferred. */
+  const handleClose = () => {
+    setResult(null);
+    setProgress(null);
+    setUrlList('');
+    onClose();
+  };
+
+  // `inline` renders this same component as a plain card on /import with no overlay, so there is
+  // nothing to dismiss in that mode.
+  useDialog(isOpen && !inline, handleClose);
 
   if (!isOpen) return null;
 
@@ -145,19 +160,13 @@ export default function BulkImportModal({ isOpen, onClose, inline = false }: { i
     reader.readAsText(file);
   };
 
-  const handleClose = () => {
-    setResult(null);
-    setProgress(null);
-    setUrlList('');
-    onClose();
-  };
-
   return (
     <div className={inline ? '' : 'modal-overlay'} onClick={inline ? undefined : handleClose}>
-      <div className={inline ? 'card' : 'modal-content'} onClick={e => e.stopPropagation()} style={inline ? undefined : { maxWidth: '500px' }}>
+      <div className={inline ? 'card' : 'modal-content'} onClick={e => e.stopPropagation()} style={inline ? undefined : { maxWidth: '500px' }}
+        {...(inline ? {} : { ...dialogProps, 'aria-label': 'Import links' })}>
         {!inline && (<div className="modal-header">
           <h2 className="modal-title">Bulk Import Links</h2>
-          <button className="modal-close" onClick={handleClose}>&times;</button>
+          <button className="modal-close" onClick={handleClose} aria-label="Close">&times;</button>
         </div>)}
 
         <div className="modal-tabs" style={{ display: 'flex', gap: '20px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)' }}>

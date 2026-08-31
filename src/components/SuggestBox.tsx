@@ -5,6 +5,7 @@ import { MessageSquarePlus, X } from 'lucide-react';
 import { submitSuggestion } from '@/actions/suggestion';
 import { shrinkImage } from '@/lib/shrinkImage';
 import { useFeedback } from '@/components/ui/Feedback';
+import { useDialog, dialogProps } from '@/components/ui/useDialog';
 
 const KINDS = [
   { id: 'bug', label: 'Something broke' },
@@ -22,6 +23,7 @@ export default function SuggestBox() {
   const [sending, setSending] = useState(false);
 
   const close = () => { setOpen(false); setKind('bug'); setMessage(''); setShot(null); };
+  useDialog(open, close);
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,10 +60,11 @@ export default function SuggestBox() {
 
       {open && (
         <div className="modal-overlay" onClick={close}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '440px' }}
+            {...dialogProps} aria-labelledby="suggest-title">
             <div className="modal-header">
-              <h2 className="modal-title">Help us improve</h2>
-              <button className="modal-close" onClick={close}>&times;</button>
+              <h2 className="modal-title" id="suggest-title">Help us improve</h2>
+              <button className="modal-close" onClick={close} aria-label="Close">&times;</button>
             </div>
 
             <form onSubmit={send} style={{ display: 'grid', gap: '14px' }}>

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { usePreview } from '@/components/PreviewContext';
 import { updateLink, deleteLink, toggleFavorite, refreshMetadata, toggleLinkPrivacy } from '@/actions/link';
 import { useFeedback } from '@/components/ui/Feedback';
+import { useDialog, dialogProps } from '@/components/ui/useDialog';
 
 export default function LinkCard({ link, categories, privateSafe = false }: { link: any, categories: any[], privateSafe?: boolean }) {
   const { toast, confirm } = useFeedback();
@@ -12,6 +13,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
   const categoryColor = link.category?.color || '#3b82f6';
 
   const [isEditing, setIsEditing] = useState(false);
+  useDialog(isEditing, () => setIsEditing(false));
   const [selectedCategory, setSelectedCategory] = useState(link.category?._id || '');
   const [tagsInput, setTagsInput] = useState(link.tags ? link.tags.join(', ') : '');
   const [title, setTitle] = useState(link.title || '');
@@ -193,7 +195,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
       {/* Edit Modal */}
       {isEditing && (
         <div className="modal-overlay" onClick={() => setIsEditing(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} {...dialogProps} aria-label="Edit link">
             <div className="modal-header">
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
                 <input 
@@ -209,7 +211,7 @@ export default function LinkCard({ link, categories, privateSafe = false }: { li
                   </div>
                 )}
               </div>
-              <button className="modal-close" onClick={() => { setIsEditing(false); setStatus(null); }}>&times;</button>
+              <button className="modal-close" onClick={() => { setIsEditing(false); setStatus(null); }} aria-label="Close">&times;</button>
             </div>
 
             <form onSubmit={handleUpdate} className="modal-form">

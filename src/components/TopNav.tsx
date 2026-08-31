@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useDialog, dialogProps } from '@/components/ui/useDialog';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import AddLinkForm from './AddLinkForm';
 import PinModal from './PinModal';
@@ -20,6 +21,7 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
   const [categories, setCategories] = useState(initialCategories);
   useEffect(() => { setCategories(initialCategories); }, [initialCategories]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  useDialog(isModalOpen, () => setIsModalOpen(false));
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [searchValue, setSearchValue] = useState(searchParams.get('search') || '');
 
@@ -98,8 +100,11 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
         {NAV.filter(n => MOBILE_NAV.includes(n.href)).map(({ title, href, Icon }) => (
           <button key={href} className={`bottom-item ${isActive(href) ? 'active' : ''}`} onClick={() => router.push(href)}><Icon size={21} strokeWidth={2.2} /><span>{title}</span></button>
         ))}
-        <button className={`bottom-item ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')}>
-          <span className="bottom-avatar">{initial}</span>
+        {/* Its five siblings pair an icon with a text label; this one is just an initial, so it
+            announced as a single letter — on the only route to settings, the Private Safe and
+            sign out. */}
+        <button className={`bottom-item ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')} aria-label="Your profile and settings">
+          <span className="bottom-avatar" aria-hidden="true">{initial}</span>
         </button>
       </nav>
 
@@ -111,7 +116,7 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
             <input type="text" placeholder="Search your links…" value={searchValue} onChange={(e) => setSearchValue(e.target.value)} className="search-input" style={{ paddingLeft: '44px', fontWeight: 600 }} autoFocus />
           </div>
           <button className="subtle-link" onClick={() => router.push(`/search${searchValue ? `?q=${encodeURIComponent(searchValue)}` : ''}`)} style={{ whiteSpace: 'nowrap' }}>Search everything →</button>
-          <button className="icon-btn" onClick={() => { setShowSearchBar(false); setSearchValue(''); }}><X size={16} /></button>
+          <button className="icon-btn" onClick={() => { setShowSearchBar(false); setSearchValue(''); }} aria-label="Close search" title="Close search"><X size={16} /></button>
         </div>
       )}
 
@@ -132,10 +137,10 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
 
       {isModalOpen && (
         <div className="modal-overlay" onClick={() => setIsModalOpen(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} {...dialogProps} aria-label="Add a link">
             <div className="modal-header">
               <h2 className="modal-title">New Entry</h2>
-              <button className="modal-close" onClick={() => setIsModalOpen(false)}><X size={24} /></button>
+              <button className="modal-close" onClick={() => setIsModalOpen(false)} aria-label="Close"><X size={24} /></button>
             </div>
             <AddLinkForm categories={categories} onSaved={handleSaved} />
           </div>

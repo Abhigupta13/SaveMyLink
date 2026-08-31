@@ -11,12 +11,23 @@ import { useRouter } from 'next/navigation';
  *   1. A modal is open  → close the topmost one and stay put.
  *      Every modal in this app closes on an overlay click, so clicking the
  *      overlay IS the close button; the last one in the DOM is the topmost.
+ *
+ *      OVERLAYS is one list on purpose. It used to name `.modal-overlay` alone, which missed the
+ *      two overlays that are not modals: the shared confirm dialog (.confirm-overlay, ui/Feedback)
+ *      and the account sheet (.sheet-overlay, AccountSwitcher). With "Delete this document?" on
+ *      screen, back fell through to step 3 and navigated away — while the dialog, mounted up in the
+ *      root layout, stayed on top of the new page with its promise never resolved. Nothing could
+ *      settle it after that: the caller awaiting the answer was gone with the old page.
+ *      A new overlay class is now one edit here, not a fourth silent hole.
  *   2. Jarvis panel open → Esc, which is what JarvisWidget already listens for
  *      (it also releases the mic and stops the voice — a raw setOpen would not).
  *   3. Not on Home       → back, or Home if there is no history to go back to
  *      (a share-intent cold start has none, and back() there would strand you).
  *   4. On Home           → let the app close, like every other Android app.
  */
+/** Every dismissable layer, topmost last in the DOM. Each closes on an overlay click. */
+const OVERLAYS = '.modal-overlay, .confirm-overlay, .sheet-overlay';
+
 export default function BackButtonListener() {
   const router = useRouter();
 
@@ -30,7 +41,7 @@ export default function BackButtonListener() {
       const { App } = await import('@capacitor/app');
 
       handle = await App.addListener('backButton', ({ canGoBack }) => {
-        const overlays = document.querySelectorAll<HTMLElement>('.modal-overlay');
+        const overlays = document.querySelectorAll<HTMLElement>(OVERLAYS);
         if (overlays.length) {
           overlays[overlays.length - 1].click();
           return;
