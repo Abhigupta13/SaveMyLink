@@ -2562,7 +2562,14 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
   .home-wordmark { display: inline-flex; position: absolute; top: 2px; right: 0; white-space: nowrap; font-weight: 900; font-size: clamp(0.74rem, 3.2vw, 0.95rem); letter-spacing: 0.05em; color: var(--accent-text); }
   .phone-wordmark { display: inline-flex; margin: 14px auto 0; width: 100%; justify-content: center; text-decoration: none; white-space: nowrap; font-weight: 900; font-size: clamp(0.74rem, 3.2vw, 0.95rem); letter-spacing: 0.05em; color: var(--accent-text); }
   .home-wordmark .logo-light, .phone-wordmark .logo-light { font-size: inherit; color: var(--text-tertiary); font-weight: 800; letter-spacing: 0.05em; margin-left: 0.3em; }
-  main { padding-top: 14px; }
+  /* Breathing room under the status bar. 14px put the bell and the greeting hard against the top
+     of the screen on a real phone — an emulator hides this because its status bar is thinner than
+     a device's, and the header is the first thing the eye lands on.
+     The env() term is additive and currently resolves to 0: `viewport-fit=cover` is not set, so
+     the WebView already insets content below the system bars and reports no inset. It is here so
+     that if edge-to-edge is ever turned on, the header gains the real inset instead of sliding
+     under the clock. (The same term on .bottom-nav is inert today for exactly this reason.) */
+  main { padding-top: calc(24px + env(safe-area-inset-top, 0px)); }
 }
 @media (min-width: 768px) { main { padding-top: 20px; } }
 
@@ -2933,15 +2940,20 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 .bell-wrap { position: relative; display: inline-flex; align-items: center; justify-content: center;
   flex-shrink: 0; text-decoration: none; color: var(--text-secondary); }
 .bell-wrap:hover { color: var(--accent-text); }
-/* Phone: the brand header, with the bell added at the right.
-   The wordmark stays CENTRED, which is how every page but Home already looked — pulling it left to
-   make a flex row for the bell would have changed the header of the whole app to add one button.
-   So the bell is taken out of flow and pinned to the right instead, and the two cannot meet: a
-   123px wordmark centred in 375 ends at 249, the bell starts at 317. */
-.phone-head { position: relative; }
-/* 14px matches .page's own phone gutter, so the bell lines up with the content below it rather
-   than sitting closer to the edge than anything else on the screen. */
-.phone-head .bell-wrap { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); }
+/* Phone: the brand header — a three-column app bar. An empty column the width of the bell, the
+   wordmark, then the bell. The spacer is what keeps the wordmark centred on the SCREEN rather
+   than in whatever space the bell leaves over: pulling it off-centre to add one button would have
+   changed a header every page but Home has always had.
+   This header is a SIBLING of <main>, not inside it, so main padding never reaches it and its top
+   space has to be its own — which is why raising main padding fixed Home and left this one hard
+   against the status bar. Absolute positioning was the first attempt and it fought the layout:
+   centring a 44px touch target against a row only as tall as an 18px wordmark put the bell at
+   -4px, clipped off the top of the screen. Flex alignment does it without the arithmetic. */
+.phone-head { display: flex; align-items: center; min-height: 44px;
+  padding: calc(14px + env(safe-area-inset-top, 0px)) 14px 0; }
+.phone-head::before { content: ""; width: 44px; flex-shrink: 0; }
+.phone-head .phone-wordmark { flex: 1; min-width: 0; margin: 0; width: auto; }
+.phone-head .bell-wrap { flex-shrink: 0; }
 .bell-badge { position: absolute; top: -2px; right: -2px; min-width: 17px; height: 17px; padding: 0 4px;
   border-radius: 999px; background: var(--danger-color); color: white; font-size: 0.6rem; font-weight: 800;
   display: inline-flex; align-items: center; justify-content: center; pointer-events: none; }
