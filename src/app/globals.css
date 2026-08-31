@@ -2899,6 +2899,41 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
 
+/* ---------- Notifications ---------- */
+.notif-list { display: grid; gap: 8px; }
+.notif-row { display: flex; align-items: flex-start; gap: 11px; padding: 13px 14px; border-radius: 16px;
+  background: var(--bg-secondary); border: 1px solid var(--border-color); text-decoration: none;
+  color: var(--text-primary); transition: var(--transition); }
+.notif-row:hover { border-color: var(--accent-color); }
+/* Unread is a left edge plus a dot, never colour alone — see the sr-only "New" in the markup. */
+.notif-row.unread { border-left: 3px solid var(--accent-color); }
+.notif-icon { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 10px; background: var(--bg-tertiary); color: var(--text-secondary); }
+.notif-icon.message { background: var(--accent-soft); color: var(--accent-text); }
+.notif-body { flex: 1; min-width: 0; display: grid; gap: 5px; }
+/* Two lines, then ellipsis: a feed row is a glance, and one long message must not push the next
+   row off the screen. The full text is one tap away in the group. */
+.notif-text { font-size: 0.88rem; font-weight: 600; line-height: 1.4; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.notif-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.notif-ago { font-size: 0.72rem; font-weight: 700; color: var(--text-tertiary); }
+.notif-dot { flex-shrink: 0; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%;
+  background: var(--accent-color); }
+
+/* The bell in the header, and its count. */
+.bell-wrap { position: relative; display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; text-decoration: none; color: var(--text-secondary); }
+.bell-wrap:hover { color: var(--accent-text); }
+/* Phone: the brand header becomes a row so the bell can sit opposite the wordmark. */
+.phone-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.phone-head .phone-wordmark { margin: 0; }
+/* Home draws its own header; the bell is absolutely placed so it cannot reflow the greeting. */
+.home-greeting { position: relative; }
+.home-bell { position: absolute; top: 0; right: 0; }
+.bell-badge { position: absolute; top: -2px; right: -2px; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 999px; background: var(--danger-color); color: white; font-size: 0.6rem; font-weight: 800;
+  display: inline-flex; align-items: center; justify-content: center; pointer-events: none; }
+
 /* "A newer APK exists, here is what is in it." Native app only — see components/UpdateBanner.
    A card in the flow rather than a modal: it is news, not an interruption, and the person opening
    the app came to do something else. Accent-bordered so it reads as an offer, not a problem. */

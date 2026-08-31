@@ -140,7 +140,8 @@ export async function eraseAccount(userId: string, email: string, role: string) 
     $unset: {
       password: 1, resetToken: 1, resetTokenExpiry: 1, resetAttempts: 1,
       emailVerified: 1, verifyToken: 1, verifyTokenExpiry: 1, verifyAttempts: 1,
-      privatePin: 1, pinAttempts: 1, pinLockedUntil: 1, image: 1, contactsSeeded: 1, shareNoticeSeen: 1,
+      privatePin: 1, pinAttempts: 1, pinLockedUntil: 1, notificationsReadAt: 1,
+      image: 1, contactsSeeded: 1, shareNoticeSeen: 1,
       introDone: 1, introDismissed: 1, tourDone: 1,
       sarvamKey: 1, sarvamAccess: 1, sarvamAccessBy: 1, sarvamAccessAt: 1,
       // The retained stub must not keep a live third-party credential: the sealed refresh token is

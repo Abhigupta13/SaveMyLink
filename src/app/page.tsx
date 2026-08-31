@@ -7,6 +7,7 @@ import HomeTiles from '@/components/HomeTiles';
 import Wordmark from '@/components/brand/Wordmark';
 import GettingStarted from '@/components/GettingStarted';
 import UpdateBanner from '@/components/UpdateBanner';
+import NotificationsBell from '@/components/NotificationsBell';
 import { introStatus } from '@/actions/intro';
 import { weeklyDigest } from '@/lib/digest';
 import { NeedsAttention, SavedThisWeek } from '@/components/DigestSections';
@@ -32,6 +33,9 @@ export default async function Home() {
   return (
     <main className="page">
       <header className="home-greeting">
+        {/* Home draws its own header, so the bell TopNav adds elsewhere has to be placed here too
+            — otherwise the one screen people open most is the one with no way to reach it. */}
+        <NotificationsBell className="home-bell" />
         <Wordmark className="home-wordmark" size={20} />
         <h1>Hi, {user.name?.split(' ')[0] || 'there'}</h1>
         <p>What&apos;s on your mind?</p>

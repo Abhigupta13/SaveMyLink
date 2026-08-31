@@ -19,6 +19,10 @@ export interface IUser extends Document {
   // Brute-force guard for the 4-digit safe PIN. The rules live in lib/pinLock.
   pinAttempts?: number;
   pinLockedUntil?: Date | null;
+  /* When this person last opened /notifications. One date instead of a read flag per item: a flag
+     would need a row per person per notification, thousands of writes to record something nobody
+     asked to keep. Absent means "never looked", so the first visit shows the whole window as new. */
+  notificationsReadAt?: Date | null;
   image?: string;
   contactsSeeded?: string[];
   shareNoticeSeen?: string[];
@@ -88,6 +92,7 @@ const UserSchema: Schema<IUser> = new Schema({
   privatePin: { type: String },
   pinAttempts: { type: Number, default: 0 },
   pinLockedUntil: { type: Date, default: null },
+  notificationsReadAt: { type: Date, default: null },
   image: { type: String },
   // Addresses already turned into a Contact from a project's people. Without this the seeding in
   // getContacts would re-create anyone you deleted on the very next page load, and there would be

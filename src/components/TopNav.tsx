@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useDialog, dialogProps } from '@/components/ui/useDialog';
+import NotificationsBell from '@/components/NotificationsBell';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import AddLinkForm from './AddLinkForm';
 import PinModal from './PinModal';
@@ -87,12 +88,20 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
           ))}
         </nav>
         <div className="rail-bottom">
+          <NotificationsBell />
           <button className={`rail-avatar ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')} title="Profile">{initial}</button>
         </div>
       </aside>
 
-      {/* Phone: brand header on every tab except Home (Home has it in the greeting) */}
-      {pathname !== '/' && <Wordmark className="phone-wordmark" size={20} />}
+      {/* Phone: brand header on every tab except Home (Home has it in the greeting, and the bell
+          with it). The bell rides along here rather than becoming an eighth bottom tab or a third
+          FAB — the tab row is already seven wide and the FAB column already overlaps content. */}
+      {pathname !== '/' && (
+        <div className="phone-head">
+          <Wordmark className="phone-wordmark" size={20} />
+          <NotificationsBell className="phone-bell" />
+        </div>
+      )}
 
       {/* Phone: bottom tabs only — no top bar */}
       <nav className="bottom-nav">
