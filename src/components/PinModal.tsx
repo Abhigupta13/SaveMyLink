@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useUser } from './UserContext';
 import { setPrivatePin, resetPrivatePin } from '@/actions/pin';
+import { useDialog, dialogProps } from '@/components/ui/useDialog';
 
 export default function PinModal() {
   const { isPinModalOpen, setPinModalOpen, setPrivateSafe, verifyPin, hasPin, refreshPinStatus } = useUser();
@@ -32,6 +33,10 @@ export default function PinModal() {
       handleSubmit();
     }
   }, [pin]);
+
+  // Above the early return: hooks cannot be conditional. Escape does what the overlay click and
+  // the × already do, and is refused mid-submit for the same reason they are.
+  useDialog(isPinModalOpen, () => { if (!loading) setPinModalOpen(false); });
 
   if (!isPinModalOpen) return null;
 
@@ -88,12 +93,14 @@ export default function PinModal() {
           setError(res.error || 'Reset failed. Check password.');
         }
       } else {
-        const isValid = await verifyPin(pinString);
-        if (isValid) {
+        const res = await verifyPin(pinString);
+        if (res.ok) {
           setPrivateSafe(true);
           setPinModalOpen(false);
         } else {
-          setError('Incorrect PIN. Please try again.');
+          // The server's own wording — it is the only side that knows whether this was a wrong
+          // guess or the lockout, and how long is left on it.
+          setError(res.error);
           setPin(['', '', '', '']);
           inputs.current[0]?.focus();
         }
@@ -111,12 +118,12 @@ export default function PinModal() {
 
   return (
     <div className="modal-overlay" onClick={handleClose}>
-      <div className="modal-content pin-modal" onClick={e => e.stopPropagation()}>
+      <div className="modal-content pin-modal" onClick={e => e.stopPropagation()} {...dialogProps} aria-label="Private Safe PIN">
         <div className="modal-header">
           <h2 className="modal-title">
             {isSettingUp ? 'Set Private Safe PIN' : isResetting ? 'Reset Private PIN' : 'Enter Private Safe PIN'}
           </h2>
-          <button className="modal-close" onClick={handleClose} disabled={loading}>&times;</button>
+          <button className="modal-close" onClick={handleClose} disabled={loading} aria-label="Close">&times;</button>
         </div>
         
         <form onSubmit={handleSubmit} className="pin-form">

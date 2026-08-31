@@ -12,7 +12,7 @@ interface UserContextType {
   setPrivateSafe: (value: boolean) => void;
   setSidebarOpen: (value: boolean) => void;
   setPinModalOpen: (value: boolean) => void;
-  verifyPin: (pin: string) => Promise<boolean>;
+  verifyPin: (pin: string) => Promise<{ ok: boolean; error: string }>;
   refreshPinStatus: () => Promise<void>;
 }
 
@@ -81,9 +81,13 @@ export function UserProvider({ children }: { children: ReactNode }) {
     router.refresh();
   };
 
+  /* Returns the server's reason, not just a boolean. The safe now locks after repeated wrong
+     guesses, and a caller that could only see true/false would keep showing "Incorrect PIN" to
+     someone who is locked out — which reads as the app being broken rather than as the lockout
+     working. */
   const verifyPin = async (pin: string) => {
     const res = await verifyPrivatePin(pin);
-    return res.success === true;
+    return { ok: res.success === true, error: res.success ? '' : (res.error || 'Incorrect PIN. Please try again.') };
   };
 
   return (

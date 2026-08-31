@@ -16,6 +16,9 @@ export interface IUser extends Document {
   createdAt: Date;
   updatedAt: Date;
   privatePin?: string;
+  // Brute-force guard for the 4-digit safe PIN. The rules live in lib/pinLock.
+  pinAttempts?: number;
+  pinLockedUntil?: Date | null;
   image?: string;
   contactsSeeded?: string[];
   shareNoticeSeen?: string[];
@@ -83,6 +86,8 @@ const UserSchema: Schema<IUser> = new Schema({
   verifyTokenExpiry: { type: Date },
   verifyAttempts: { type: Number, default: 0 },
   privatePin: { type: String },
+  pinAttempts: { type: Number, default: 0 },
+  pinLockedUntil: { type: Date, default: null },
   image: { type: String },
   // Addresses already turned into a Contact from a project's people. Without this the seeding in
   // getContacts would re-create anyone you deleted on the very next page load, and there would be
