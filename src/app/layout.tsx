@@ -10,6 +10,7 @@ import { Suspense } from "react";
 import SendIntentListener from "@/components/SendIntentListener";
 import NativeAuthListener from "@/components/NativeAuthListener";
 import ReminderBootstrap from "@/components/ReminderBootstrap";
+import TimeZoneCookie from "@/components/TimeZoneCookie";
 import DriveOutcome from "@/components/DriveOutcome";
 import BackButtonListener from "@/components/BackButtonListener";
 import JarvisWidget from "@/components/JarvisWidget";
@@ -79,6 +80,9 @@ export default async function RootLayout({
                 <SendIntentListener />
                 <NativeAuthListener />
                 <ReminderBootstrap />
+                {/* Publishes the browser's zone so SERVER renders can use the viewer's clock
+                    rather than the runtime's. Without it the digest printed UTC. */}
+                <TimeZoneCookie />
                 <Suspense fallback={null}><DriveOutcome /></Suspense>
                 <BackButtonListener />
                 <TopNav initialCategories={categories} />

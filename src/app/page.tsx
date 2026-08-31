@@ -1,5 +1,7 @@
 import { getServerSession } from 'next-auth/next';
+import { cookies } from 'next/headers';
 import { authOptions } from '@/lib/auth';
+import { safeZone, TZ_COOKIE } from '@/lib/time';
 import LandingPage from '@/components/LandingPage';
 import HomeTiles from '@/components/HomeTiles';
 import Wordmark from '@/components/brand/Wordmark';
@@ -15,6 +17,9 @@ export default async function Home() {
   const session = await getServerSession(authOptions);
   if (!session) return <LandingPage />;
   const user = session.user as { id: string; name?: string | null };
+  // The viewer's own zone, published by components/TimeZoneCookie. safeZone because this arrives
+  // from a cookie a client wrote, and an unknown zone string must not throw the home page.
+  const timeZone = safeZone((await cookies()).get(TZ_COOKIE)?.value);
   const [intro, digest] = await Promise.all([
     introStatus(),
     // Home already renders behind the session; a digest failure must not take the whole page with
@@ -38,7 +43,7 @@ export default async function Home() {
       {/* Below the vault, in the order the day actually runs: what is chasing you, then what you
           put in this week. Capped and linked through to /digest rather than reprinted in full. */}
       <div className="home-digest">
-        <NeedsAttention tasks={digest.tasks} limit={HOME_LIMIT} href="/digest" />
+        <NeedsAttention tasks={digest.tasks} limit={HOME_LIMIT} href="/digest" timeZone={timeZone} />
         <SavedThisWeek links={digest.links} limit={HOME_LIMIT} href="/digest" />
       </div>
     </main>

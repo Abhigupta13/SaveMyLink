@@ -13,6 +13,9 @@
 /** Only reached when the caller has no zone to offer. Everyone using this today is in India. */
 export const DEFAULT_TZ = 'Asia/Kolkata';
 
+/** The cookie components/TimeZoneCookie writes, and any server render reads. */
+export const TZ_COOKIE = 'tz';
+
 const WALL_CLOCK = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/;
 
 /** That instant's wall clock in `timeZone`, expressed as if those digits were UTC. */

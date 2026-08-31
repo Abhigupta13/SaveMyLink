@@ -1,5 +1,5 @@
 import NextLink from 'next/link';
-import { formatInZone } from '@/lib/time';
+import { formatInZone, DEFAULT_TZ } from '@/lib/time';
 import type { DigestTask, DigestLink } from '@/lib/digest';
 
 /**
@@ -18,7 +18,7 @@ const Head = ({ label, count, href }: { label: string; count: number; href?: str
 );
 
 /** Open work with a date on it. Overdue is called out in the warning colour, as everywhere else. */
-export function NeedsAttention({ tasks, limit, href }: { tasks: DigestTask[]; limit?: number; href?: string }) {
+export function NeedsAttention({ tasks, limit, href, timeZone }: { tasks: DigestTask[]; limit?: number; href?: string; timeZone?: string }) {
   const shown = limit ? tasks.slice(0, limit) : tasks;
   return (
     <section className="dg-block">
@@ -33,8 +33,12 @@ export function NeedsAttention({ tasks, limit, href }: { tasks: DigestTask[]; li
                   <span className="dg-row-title">{t.title}</span>
                   {t.projectName && <span className="chip">{t.projectName}</span>}
                 </span>
+                {/* The zone is REQUIRED here, unlike on a client component. This renders on the
+                    server, where omitting it falls back to the runtime's zone — UTC on Vercel —
+                    and printed a task due 11:30 am in India as "6:00 am", beside a Jarvis chat
+                    that said 11:30 because it runs in the browser. See components/TimeZoneCookie. */}
                 <span className={`dg-due${t.overdue ? ' late' : ''}`}>
-                  {t.overdue ? 'Overdue — was due ' : 'Due '}{formatInZone(t.dueAt)}
+                  {t.overdue ? 'Overdue — was due ' : 'Due '}{formatInZone(t.dueAt, timeZone || DEFAULT_TZ)}
                 </span>
               </NextLink>
             ))}
