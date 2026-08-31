@@ -1,0 +1,72 @@
+name: ci
+
+# Every push and every PR. This is the fast gate — it must stay under a couple of minutes, because
+# a gate people wait on is a gate people learn to skip.
+on:
+  push:
+  pull_request:
+
+concurrency:
+  # A second push to the same branch cancels the first. Nobody needs the results of a commit that
+  # has already been replaced.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck · tests · lint budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned exactly, not '22.x'. scripts/self-check.mjs runs under --experimental-strip-types,
+      # and that flag's behaviour moves within the 22 line (it becomes default-on later in the
+      # series). The dev machine is on 22.14.0; CI should be told the same thing rather than
+      # discovering a difference at the worst moment.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          cache: npm
+
+      - run: npm ci
+
+      # HARD GATE. Seconds to run, and it catches the largest class of real breakage — including
+      # ordinary type errors inside page components, which was verified directly rather than
+      # assumed (an undefined identifier in an `src/app/**/page.tsx` is reported as TS2304).
+      #
+      # Two things it does NOT prove, so nobody reads more into a green tick than it gives:
+      #
+      #  1. Route SHAPES. Next generates validators under `.next/types/**`, and tsconfig only
+      #     includes them if they exist. A fresh CI checkout has no `.next`, so a bad page/route
+      #     export signature is not caught here. `next build` is what catches those — see below.
+      #  2. Session correctness. `getServerSession(authOptions)` is typed `any` at ~100 call sites
+      #     because the NextAuth callbacks in src/lib/auth.ts are `any`, so the entire actions
+      #     layer is weaker here than the tick suggests.
+      - name: Typecheck
+        run: npm run typecheck
+
+      # HARD GATE. Vitest, plus scripts/self-check.mjs's ~611 assertions wrapped as one case.
+      - name: Tests
+        run: npm test
+
+      # HARD GATE, but a ratchet rather than a wall: fails only if the problem count goes UP.
+      # A plain `eslint` gate would be red on its first run and every run after — there are ~330
+      # outstanding problems, 221 of them no-explicit-any — and a permanently red gate teaches
+      # people to ignore CI. Baseline lives in .lintbudget.json; lower it with
+      #   npm run lint:budget -- --update
+      - name: Lint budget
+        run: npm run lint:budget
+
+  # Deliberately NOT here: `next build`. It needs the real env (Mongo, NextAuth secret, Google
+  # OAuth) and takes minutes, so it belongs on the deploy path — Vercel already runs it on every
+  # push — not in front of every one. The cost of leaving it out is named under Typecheck above:
+  # route-shape validation only happens during a build. That is a known, bounded hole, not an
+  # oversight, and Vercel closes it before anything reaches users.
+  #
+  # Revisit if a broken route signature ever reaches production — that is the signal that this
+  # trade stopped paying.
+  #
+  # Also not here: E2E and integration tests, which do not exist yet. The gap they would close is
+  # recorded in DECISION.md — proving a viewer is refused server-side needs a second account.

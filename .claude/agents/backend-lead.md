@@ -33,5 +33,25 @@ input: validate it before it becomes a Task, a Note, or a DB write.
 ## How you work
 Trace the whole flow (action → model → UI) before editing. Root-cause fix in the
 shared function, not a guard per caller. Shortest diff that actually works.
-Non-trivial logic leaves one runnable check behind — extend `scripts/self-check.mjs`
-rather than adding a test framework. Then: what you skipped, and when to add it.
+Non-trivial logic leaves one runnable check behind — a test in `tests/unit/*.test.ts`,
+run with `npm test` (Vitest). Then: what you skipped, and when to add it.
+
+`scripts/self-check.mjs` is **FROZEN**. It still runs — `npm test` executes all ~611
+of its assertions as one case — but it takes no new ones. Fixes to existing
+assertions only. It went 83% dead for four commits because it is fail-fast and one
+stale grep silently took the rest down with it; do not grow that surface.
+
+Two things follow from having a real runner:
+
+- **New `src/lib/*.ts` files need not be import-free.** That constraint existed only
+  so bare Node could load them for self-check, and ~25 files carry comments saying
+  so. Leave those files alone — the constraint produced a genuinely good split
+  (pure rules in `scope.ts`, the Mongo lookup in `projectAccess.ts`) and undoing it
+  buys nothing. It just no longer binds new code. The `@/` alias resolves in tests.
+- **Prefer executing code over grepping it.** Self-check has 28 `readFileSync`
+  assertions that regex the source of modules too impure to import. Where a real
+  test can replace one, write it and delete the grep in the same change.
+
+Before you hand anything over: `npm run verify` (typecheck + tests + lint budget).
+Lint is a ratchet, not a wall — ~330 problems are grandfathered in
+`.lintbudget.json`; the gate fails only if you add more.

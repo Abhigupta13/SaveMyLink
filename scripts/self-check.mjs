@@ -1,4 +1,13 @@
-// Minimal self-check for the pure helpers. Run: node scripts/self-check.mjs
+// Minimal self-check for the pure helpers.
+//
+// Run: npm test   (or directly: node --experimental-strip-types scripts/self-check.mjs)
+//
+// The flag is not optional — this file imports .ts sources directly under bare Node, so without it
+// you get ERR_UNKNOWN_FILE_EXTENSION before a single assertion runs. This comment used to say
+// `node scripts/self-check.mjs`, which sent everyone who tried it straight into that error.
+//
+// FROZEN. Fixes to existing assertions only; new assertions go in tests/ under Vitest. See
+// .claude/agents/backend-lead.md.
 import assert from 'node:assert';
 import { readFileSync, readdirSync } from 'node:fs';
 import { extractUrl, hostnameOf, normalizeUrl, youtubeId, appUrl } from '../src/lib/url.ts';
@@ -24,11 +33,63 @@ import { retrieve, terms } from '../src/lib/retrieval.ts';
 import { spendQuestion, dayKey, capMessage, SHARED_OUT_MESSAGE } from '../src/lib/jarvisLimit.ts';
 import { isHowTo, EXTRA_PAGES, HOW_IT_WORKS } from '../src/lib/manual.ts';
 import { pickVoice } from '../src/lib/voice.ts';
-import { keyFor, ownsKey, ownerOfKey, driveIdOfKey, isDriveKey } from '../src/lib/driveKey.ts';
+// keyFor / ownsKey / ownerOfKey / driveIdOfKey / isDriveKey were imported here and asserted on
+// NOWHERE — five dead names that made /api/files' whole string-level auth boundary look covered
+// when it had nothing behind it. An unused import is the strongest false signal of coverage there
+// is, so it is gone rather than left as decoration. They are properly tested now, adversarial
+// inputs and all, in tests/unit/driveKey.test.ts. (grantableFileIds IS asserted, further down,
+// via its own dynamic import.)
 import {
   reminderTimes, reminderChoice, countdownLabel, REMINDER_OPTIONS, REMINDER_VALUES,
   DEFAULT_CHOICE, SMART_FRACTION, SLOTS, NAG_DAYS, NAG_HOUR, PRE_SLOT, DUE_SLOT, NAG_SLOT_START,
 } from '../src/lib/reminderRule.ts';
+
+/**
+ * The source window for ONE declaration: from where it starts to the next top-level one.
+ *
+ * The END BOUND is the entire point. `src.slice(src.indexOf(start))` with no end runs to the end of
+ * the file, so every function added BELOW the one under test silently joins the window. That is not
+ * hypothetical: the resolveSuggestion block below asserted "no path un-resolves the report", the
+ * window grew to swallow reopenSuggestion — whose whole job is to write `resolvedAt: null` — and
+ * the assertion started failing on correct code.
+ *
+ * Because this file is fail-fast, that one stale grep took the other 509 assertions down with it
+ * and they did not run for four commits. A source-text assertion that cannot say where it stops is
+ * a time bomb; every grep window in this file goes through here.
+ */
+const windowFor = (src, start, next = /\nexport /g) => {
+  const from = src.indexOf(start);
+  assert.ok(from > -1, `source window: found ${JSON.stringify(start)}`);
+  next.lastIndex = from + start.length;
+  const hit = next.exec(src);
+  return src.slice(from, hit ? hit.index : undefined);
+};
+
+/**
+ * Every file under src/<dirs> whose source contains `needle` — the callers of something, found by
+ * looking rather than by being told where they live.
+ *
+ * A source assertion that names a path tests the FILE LAYOUT as much as it tests the rule. That is
+ * not theoretical: the account-deletion block below read `src/actions/account.ts` by name and went
+ * red the night eraseAccount moved to `src/lib/accountErase.ts` — the invariant was completely
+ * intact, only the filename had changed. Scanning has two advantages over a path: a refactor cannot
+ * make it stale, and a NEW caller cannot appear without being held to the same rule, which a
+ * hardcoded list of two files silently permits.
+ */
+const filesContaining = (needle, dirs = ['actions', 'lib']) => {
+  const out = [];
+  const walk = (rel) => {
+    const dir = new URL(`../src/${rel}/`, import.meta.url);
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) { walk(`${rel}/${entry.name}`); continue; }
+      if (!entry.name.endsWith('.ts')) continue;
+      const src = readFileSync(new URL(entry.name, dir), 'utf8');
+      if (src.includes(needle)) out.push({ name: entry.name, src });
+    }
+  };
+  for (const d of dirs) walk(d);
+  return out;
+};
 
 // extractUrl
 assert.equal(extractUrl('check this https://youtu.be/abc123 out'), 'https://youtu.be/abc123');
@@ -279,7 +340,7 @@ assert.ok(suggestionEmail({ kind: 'idea', message: 'x', from: 'a@b.com', shotUrl
 // function, so it is asserted where it lives — the same way the Sarvam fallback chain is.
 {
   const src = readFileSync(new URL('../src/actions/suggestion.ts', import.meta.url), 'utf8');
-  const resolve = src.slice(src.indexOf('export async function resolveSuggestion'));
+  const resolve = windowFor(src, 'export async function resolveSuggestion');
   assert.ok(resolve.length > 500, 'found the resolve action');
 
   const claim = resolve.indexOf('findOneAndUpdate');
@@ -308,7 +369,13 @@ assert.ok(suggestionEmail({ kind: 'idea', message: 'x', from: 'a@b.com', shotUrl
     'the outcome starts at failed, so a throw anywhere before the answer cannot read as success');
   assert.ok(/outcome = posted\.delivered \? 'sent' : 'failed'/.test(afterSend),
     'and only a message that actually left upgrades it');
-  assert.ok(/resolveMail: outcome/.test(afterSend), 'and the outcome reaches the row the inbox reads');
+  // Both branches, named. This asserted `resolveMail: outcome` — the literal variable — until the
+  // write split in two to stamp thankedAt alongside a successful send. The intent never changed, so
+  // the assertion tracks the intent now: whatever the send answered ends up on the row the Resolved
+  // tab reads. (That thankedAt is stamped ONLY on 'sent' is the reopen guard, and is new coverage —
+  // it belongs in tests/, not here.)
+  assert.ok(/resolveMail: 'sent'/.test(afterSend) && /resolveMail: 'failed'/.test(afterSend),
+    'and both outcomes reach the row the inbox reads');
 
   // Admin-gated on the session, like every other admin action here. An id from the client decides
   // which report, never whether the caller may close one.
@@ -316,7 +383,13 @@ assert.ok(suggestionEmail({ kind: 'idea', message: 'x', from: 'a@b.com', shotUrl
   assert.ok(!/isAdmin\((?!session)/.test(resolve), 'never on anything the client sent');
 
   // A report with no address closes silently rather than pretending somebody was written to.
-  assert.ok(/if \(claimed\.email\)/.test(resolve), 'the send is skipped when there is no address');
+  // This asserted `if (claimed.email)` when that was the whole gate. It is not any more: reopening
+  // a report that was already thanked gives a SECOND reason to skip the send, so the address test
+  // now decides an outcome and the outcome decides the send. Two lines, same rule — and the second
+  // one is stronger than what it replaced, because it also refuses the already-thanked case.
+  assert.ok(/!claimed\.email \? 'none'/.test(resolve), 'no address resolves to none, never to a send');
+  assert.ok(/if \(mailed === 'pending'\)/.test(resolve),
+    'and the send runs only for the one outcome that means a mail is actually owed');
 
   // New filter shape, new index — the open list and the resolved list are both queries this
   // collection did not serve yesterday.
@@ -1519,20 +1592,27 @@ for (const [file, fn] of [['../src/components/MomSection.tsx', 'startRecording']
 {
   const content = readFileSync(new URL('../src/lib/projectContent.ts', import.meta.url), 'utf8');
   const project = readFileSync(new URL('../src/actions/project.ts', import.meta.url), 'utf8');
-  const account = readFileSync(new URL('../src/actions/account.ts', import.meta.url), 'utf8');
 
   // ONE list of what a projectId hangs off. The original bug was two delete paths with two
   // different lists, and the shorter one shipped.
   for (const model of ['Note', 'Task', 'Mom', 'Document', 'Event', 'Message']) {
     assert.ok(content.includes(`${model}.deleteMany({ projectId })`), `${model} goes with the group`);
   }
-  for (const [name, src] of [['project.ts', project], ['account.ts', account]]) {
+
+  /* Every caller, found by scanning rather than named by path — see filesContaining. The definition
+     is excluded so the module that declares the function is not mistaken for a caller of it. */
+  const callers = filesContaining('deleteProjectContent(')
+    .filter(f => !/export async function deleteProjectContent/.test(f.src));
+  assert.ok(callers.length >= 2,
+    `found the deletion paths (got: ${callers.map(c => c.name).join(', ') || 'none'})`);
+
+  for (const { name, src } of callers) {
     assert.ok(!/\w+\.deleteMany\(\{ projectId \}\)/.test(src),
       `${name} deletes project content through the shared function, not a list of its own`);
-    // Both callers name the actor. deleteUpload only destroys bytes from the Drive of the person
+    // Every caller names the actor. deleteUpload only destroys bytes from the Drive of the person
     // who clicked, and an argument nobody passes is a rule nobody enforces.
     const calls = src.match(/deleteProjectContent\([^)]*\)/g) || [];
-    assert.ok(calls.length === 1, `${name} calls it exactly once`);
+    assert.equal(calls.length, 1, `${name} calls it exactly once`);
     assert.ok(calls[0].includes(','), `${name} passes the actor: ${calls[0]}`);
   }
   assert.ok(/actorUserId: string\)/.test(content), 'the actor is required, so it cannot be forgotten');
@@ -1550,7 +1630,11 @@ for (const [file, fn] of [['../src/components/MomSection.tsx', 'startRecording']
     'content is erased before the project row, so a failure is retryable');
 
   // There is no S3 any more; a log line naming one sends the next person to the wrong console.
-  assert.ok(!/\bS3\b/.test(account), 'no stale S3 wording in the deletion path');
+  // Found by content, not by filename, for the same reason as above — this is whichever module
+  // holds the account erase today.
+  const erase = callers.find(f => /eraseAccount/.test(f.src));
+  assert.ok(erase, `found the account-erase path (looked in: ${callers.map(c => c.name).join(', ')})`);
+  assert.ok(!/\bS3\b/.test(erase.src), `no stale S3 wording in the deletion path (${erase.name})`);
 }
 
 
