@@ -115,6 +115,21 @@ export const formatDay = (value: Date | string | null | undefined, timeZone?: st
 export const formatDate = (value: Date | string | null | undefined, timeZone?: string) =>
   render(value, { ...DAY, year: 'numeric' }, timeZone);
 
-/** "26 Aug, 5:00 pm" — the short readable form used in prompts and in the lines Jarvis cites back. */
+/** "26 Aug, 5:00 pm" — the short readable form a PERSON reads, where the year is obvious. */
 export const formatInZone = (value: Date | string | null | undefined, timeZone?: string) =>
   render(value, { ...DAY, ...CLOCK }, timeZone);
+
+/**
+ * "26 Aug 2026, 5:00 pm" — the same instant with the year, for anything a MODEL reads.
+ *
+ * A person looking at their own task list knows what year it is. A model does not, and Jarvis is
+ * asked to emit `dueAt` as "YYYY-MM-DDTHH:mm" — a format that cannot be written without one. Given
+ * "NOW: 31 Aug, 8:05 am" and no year anywhere in the prompt, it had to guess, and guessed the year
+ * its training data is thickest in: a task created in 2026 was filed as due in 2024, which then
+ * rendered as "31 Aug, 11:30 am" — indistinguishable from today, and permanently overdue.
+ *
+ * So: years for the model, none for the user. The MOM extractor already passes year: 'numeric' for
+ * exactly this reason; this is the same decision made once, where both callers can share it.
+ */
+export const formatStamp = (value: Date | string | null | undefined, timeZone?: string) =>
+  render(value, { ...DAY, year: 'numeric', ...CLOCK }, timeZone);

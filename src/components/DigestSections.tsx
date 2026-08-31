@@ -1,5 +1,5 @@
 import NextLink from 'next/link';
-import { formatInZone, DEFAULT_TZ } from '@/lib/time';
+import { formatInZone, formatStamp, DEFAULT_TZ } from '@/lib/time';
 import type { DigestTask, DigestLink } from '@/lib/digest';
 
 /**
@@ -18,8 +18,25 @@ const Head = ({ label, count, href }: { label: string; count: number; href?: str
 );
 
 /** Open work with a date on it. Overdue is called out in the warning colour, as everywhere else. */
+/**
+ * The due date, with its year only when that year is not the current one.
+ *
+ * Dropping the year is right almost always — "31 Aug, 11:30 am" is how a person says it, and the
+ * year is noise on a task due this week. It is wrong in exactly one case, which is the case that
+ * brought this here: a task Jarvis filed with the wrong year rendered identically to one due
+ * today, so an item two years overdue looked like the overdue badge was lying.
+ */
+function stampOf(dueAt: DigestTask['dueAt'], zone: string) {
+  if (!dueAt) return '';
+  const yearIn = (v: Date | string) => new Date(v).toLocaleDateString('en-GB', { year: 'numeric', timeZone: zone });
+  return yearIn(dueAt) === yearIn(new Date())
+    ? formatInZone(dueAt, zone)
+    : formatStamp(dueAt, zone);
+}
+
 export function NeedsAttention({ tasks, limit, href, timeZone }: { tasks: DigestTask[]; limit?: number; href?: string; timeZone?: string }) {
   const shown = limit ? tasks.slice(0, limit) : tasks;
+  const zone = timeZone || DEFAULT_TZ;
   return (
     <section className="dg-block">
       <Head label="Urgent — needs attention" count={tasks.length} href={tasks.length > shown.length ? href : undefined} />
@@ -36,9 +53,13 @@ export function NeedsAttention({ tasks, limit, href, timeZone }: { tasks: Digest
                 {/* The zone is REQUIRED here, unlike on a client component. This renders on the
                     server, where omitting it falls back to the runtime's zone — UTC on Vercel —
                     and printed a task due 11:30 am in India as "6:00 am", beside a Jarvis chat
-                    that said 11:30 because it runs in the browser. See components/TimeZoneCookie. */}
+                    that said 11:30 because it runs in the browser. See components/TimeZoneCookie.
+
+                    The year appears only when it is NOT the current one. "31 Aug, 11:30 am" on a
+                    task actually due in 2024 read as today and looked like the overdue flag was
+                    simply broken — the one case where the year is the whole explanation. */}
                 <span className={`dg-due${t.overdue ? ' late' : ''}`}>
-                  {t.overdue ? 'Overdue — was due ' : 'Due '}{formatInZone(t.dueAt, timeZone || DEFAULT_TZ)}
+                  {t.overdue ? 'Overdue — was due ' : 'Due '}{stampOf(t.dueAt, zone)}
                 </span>
               </NextLink>
             ))}

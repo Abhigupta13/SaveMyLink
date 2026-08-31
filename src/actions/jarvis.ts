@@ -11,7 +11,7 @@ import { Note } from "@/lib/models/Note";
 import { Document as Doc } from "@/lib/models/Document";
 import { JarvisSession } from "@/lib/models/JarvisSession";
 import { chatJSON } from "@/lib/llm";
-import { formatInZone, safeZone, zonedToUtc } from "@/lib/time";
+import { formatInZone, formatStamp, safeZone, zonedToUtc } from "@/lib/time";
 import { myProjectFilter } from "@/lib/projectAccess";
 import { retrieve, type Candidate } from "@/lib/retrieval";
 import { isProjectOwner, isProjectCreator, canWrite, type OwnableProject } from "@/lib/scope";
@@ -65,6 +65,10 @@ const DESTINATIONS = new Set<string>([...NAV.map(n => n.href), ...EXTRA_PAGES.ma
    user, certain with a team. Each call builds its own formatter instead. */
 type Fmt = (v?: Date | string | null) => string;
 const fmtIn = (tz: string): Fmt => v => formatInZone(v, tz);
+/* The same instant WITH the year, for every string the model reads. A person reading their own
+   task list knows the year; the model is asked to emit dueAt as "YYYY-MM-DDTHH:mm" and cannot
+   write one without it. See formatStamp in lib/time for what that cost. */
+const stampIn = (tz: string): Fmt => v => formatStamp(v, tz);
 
 // Every item the user may read, each as one line the model can cite by id — and as the fields
 // lib/retrieval scores against, so only the few dozen that answer the question are actually sent.
@@ -482,7 +486,8 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
 
     await connectToDatabase();
     const tz = safeZone(timeZone);
-    const d = fmtIn(tz);
+    const d = fmtIn(tz);           // what the USER reads back in the chat
+    const stamp = stampIn(tz);     // what the MODEL reads, year included
     const userId = session.user.id;
     const email = (session.user.email || '').toLowerCase();
 
@@ -508,7 +513,9 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     // Read once and used twice: the context Jarvis is built from and the writes it is allowed to
     // make have to be looking at the same safe, or it could edit what it cannot see.
     const unlocked = await hasSafe(userId);
-    const ctx = await gatherContext(userId, email, unlocked, d);
+    // `stamp`, not `d`: every date in DATA carries its year, so the model can both reason about
+    // relative dates and copy the right year into a dueAt it writes back.
+    const ctx = await gatherContext(userId, email, unlocked, stamp);
 
     // Retrieval, not a dump: score the vault against the question here and send only what answers
     // it. ctx.items already holds nothing but rows myProjectFilter let through, and retrieve()
@@ -583,7 +590,8 @@ Put at most 12 items, most relevant first; mark urgent=true only for open tasks 
 DATA (${picked.length} of ${ctx.items.length} saved items, the closest matches to this question):
 ${dataText || '(nothing matched — the vault may be empty, or the words used may not appear in it)'}
 
-NOW: ${d(new Date())} (${tz}). Dates in DATA use this same timezone.`;
+NOW: ${stamp(new Date())} (${tz}), which is ${new Date().toLocaleDateString('en-CA', { timeZone: tz })} in YYYY-MM-DD form. Dates in DATA use this same timezone and carry their year.
+Any dueAt you write MUST use the year from NOW unless the user names a different one — never assume a year.`;
 
     const res = await chatJSON([
       { role: 'system', content: system },
