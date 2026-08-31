@@ -10,7 +10,9 @@ import UpdateBanner from '@/components/UpdateBanner';
 import NotificationsBell from '@/components/NotificationsBell';
 import { introStatus } from '@/actions/intro';
 import { weeklyDigest } from '@/lib/digest';
+import { punctualityStats, NO_PUNCTUALITY } from '@/lib/punctuality';
 import { NeedsAttention, SavedThisWeek } from '@/components/DigestSections';
+import Punctuality from '@/components/Punctuality';
 
 /** Enough to be worth the scroll, few enough that Home is still a glance. */
 const HOME_LIMIT = 4;
@@ -22,12 +24,17 @@ export default async function Home() {
   // The viewer's own zone, published by components/TimeZoneCookie. safeZone because this arrives
   // from a cookie a client wrote, and an unknown zone string must not throw the home page.
   const timeZone = safeZone((await cookies()).get(TZ_COOKIE)?.value);
-  const [intro, digest] = await Promise.all([
+  const email = (session.user.email || '').toLowerCase();
+  const [intro, digest, punctual] = await Promise.all([
     introStatus(),
     // Home already renders behind the session; a digest failure must not take the whole page with
     // it, because Home is the one screen that has to open.
-    weeklyDigest(user.id, (session.user.email || '').toLowerCase())
+    weeklyDigest(user.id, email)
       .catch(err => { console.error('Home digest failed:', err); return { tasks: [], links: [] }; }),
+    // Same bargain for the same reason. A zeroed score renders the "no deadlines yet" copy, which is
+    // the right thing for a stat panel to say when it could not count — it claims nothing.
+    punctualityStats(user.id, email)
+      .catch(err => { console.error('Home punctuality failed:', err); return NO_PUNCTUALITY; }),
   ]);
 
   return (
@@ -53,9 +60,12 @@ export default async function Home() {
 
       <HomeTiles />
 
-      {/* Below the vault, in the order the day actually runs: what is chasing you, then what you
-          put in this week. Capped and linked through to /digest rather than reprinted in full. */}
+      {/* Below the vault, in the order the day actually runs: how you have been doing, then what is
+          chasing you, then what you put in this week. The score comes first because it is the only
+          one of the three that looks backwards — it frames the list underneath rather than adding a
+          fourth thing to work through. Capped and linked to /digest rather than reprinted in full. */}
       <div className="home-digest">
+        <Punctuality stats={punctual} />
         <NeedsAttention tasks={digest.tasks} limit={HOME_LIMIT} href="/digest" timeZone={timeZone} />
         <SavedThisWeek links={digest.links} limit={HOME_LIMIT} href="/digest" />
       </div>

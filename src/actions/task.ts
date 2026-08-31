@@ -345,8 +345,13 @@ export async function toggleTask(id: string) {
 
     task.completed = !task.completed;
     // Re-opening drops the sign-off. A stale approval on work that is no longer done would be
-    // counted by the admin funnel as signed-off work that does not exist.
-    if (!task.completed) task.set({ signedOffBy: undefined, signedOffAt: undefined });
+    // counted by the admin funnel as signed-off work that does not exist. completedAt goes with it,
+    // and for the same reason: it is the date the work finished, and the work has not finished.
+    // Stamped here rather than derived from updatedAt because updatedAt answers a different
+    // question — see the field's note in models/Task. This is the only server path that writes
+    // `completed`, so it is the only place the stamp has to be kept true.
+    if (task.completed) task.completedAt = new Date();
+    else task.set({ signedOffBy: undefined, signedOffAt: undefined, completedAt: undefined });
     await task.save();
     await recordEvent({
       projectId: task.projectId, actorId: session.user.id,

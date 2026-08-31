@@ -1347,8 +1347,18 @@ assert.ok(!AUDIO_MODELS.includes('gemini-3.5-flash'), '3.5 transliterates Englis
 
   // The authority both of those inherit.
   assert.equal((task.match(/canWorkOn\(task,/g) || []).length, 2, 'updateTask and toggleTask each ask canWorkOn');
-  assert.ok(task.includes('if (!task.completed) task.set({ signedOffBy: undefined, signedOffAt: undefined })'),
+  /* Scoped to the reopen branch and matched by intent, not by quoting the line verbatim. The literal
+     version of this went red the moment completedAt was added to the same `set` — a refactor that
+     was correct and that strengthened the very invariant being guarded. An assertion that fails on
+     work it should approve of teaches people to edit the assertion, which is how it stops guarding
+     anything. Same lesson as windowFor. */
+  const reopen = task.slice(task.indexOf('task.completed = !task.completed'));
+  assert.ok(/signedOffBy: undefined/.test(reopen) && /signedOffAt: undefined/.test(reopen),
     'reopening drops the sign-off, on the one path everything now reopens through');
+  // A completion date on work that is open again dates something that did not happen — and the home
+  // page's punctuality score would count it. It goes with the sign-off, for the same reason.
+  assert.ok(/completedAt: undefined/.test(reopen), 'and the completion date goes with it');
+  assert.ok(/task\.completedAt = new Date\(\)/.test(task), 'while completing stamps one');
 }
 
 // ----------------------------------------------------------------------------------------------

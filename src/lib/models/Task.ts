@@ -17,6 +17,7 @@ export interface ITask extends MongooseDocument {
   linkId?: mongoose.Types.ObjectId;
   signedOffBy?: mongoose.Types.ObjectId;
   signedOffAt?: Date;
+  completedAt?: Date;
   reminder?: ReminderChoice;
   /** Behind the Private Safe. Only ever true on a personal record — see lib/privacy. */
   isPrivate?: boolean;
@@ -48,6 +49,17 @@ const TaskSchema = new Schema<ITask>({
   // sparse index on signedOffAt if that ever shows up in profiling.
   signedOffBy: { type: Schema.Types.ObjectId, ref: 'User' },
   signedOffAt: { type: Date },
+  // WHEN the box was ticked, which `completed` alone could never say. The home page scores how
+  // punctual you are by comparing this against dueAt, and until this field existed there was no
+  // honest way to ask it: `updatedAt` moves on every edit, so a task finished on time and renamed a
+  // week later looked a week late. Cleared on re-open for the same reason signedOffAt is — a
+  // completion date on work that is open again is a date for something that did not happen.
+  // Absent on every row written before this. lib/punctuality falls back to updatedAt for those,
+  // which is the closest thing the old data has to an answer; see the note there about it being an
+  // approximation that ages out of the window on its own.
+  // ponytail: no index. The punctuality read is already scoped to one user by the assignee branches
+  // and capped; add { userId: 1, completedAt: -1 } if that ever shows up in profiling.
+  completedAt: { type: Date },
   // When this task's reminder fires — see lib/reminderRule, which owns the maths. Absent on every
   // row written before the setting existed, and that absence is the fallback: the user's profile
   // default, then the 85% schedule. No index: nothing ever filters on it, it is read only on rows
