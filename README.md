@@ -37,7 +37,7 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 ---
 
-# SaveMyLink — Android app (Capacitor)
+# ALL you need — Android app (Capacitor)
 
 The APK is a thin native shell (share-sheet receiver, local notifications, native share) whose webview loads the deployed Next.js app. Server code changes ship by redeploying the server; rebuild the APK only when `android/` or Capacitor plugins change.
 

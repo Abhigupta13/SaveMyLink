@@ -122,11 +122,36 @@ and it is yours to answer:
 
 - **Leave it.** Reasonable while the audience is you and a handful of testers, and while the repo
   is private. It is what makes "download the new build and it just updates" work.
-- **Move it out of the repo.** Generate a key kept outside git (or in CI secrets), and accept that
-  everybody uninstalls and reinstalls once more. Worth doing before the APK goes to people you do
-  not know.
+- **Rotate it.** Generate a key kept outside git (or in CI secrets), re-sign, and accept that
+  everybody uninstalls and reinstalls once more.
+
+**If you rotate, the password matters as much as the location.** This keystore's password is
+`android`, which was fine for something local and is not fine for a key that signs what people
+install. "Generate a new keystore" reads as done the moment a file exists — it isn't, unless the
+new one has a real secret stored somewhere that is not the repository.
+
+Worth being clear about why this is not the usual "a debug key is harmless" case: the well-known
+key that ships with every Android SDK is `CN=Android Debug, O=Android, C=US`. This one is
+`CN=SaveMyLink Sideload`, made on 31 Aug 2026 and valid until 2054. It is a release key in
+everything but its filename.
 
 Either way this key must not be the Play release key when that day comes.
+
+### And the recordings
+
+Separately from the key, and involving somebody else's data rather than yours:
+
+```bash
+git show ba37a7c:public/app-debug.apk
+```
+
+still hands anyone the APK from 23 August with `uploads/mom/*.webm` inside it — two meeting
+recordings. The `webDir` fix stopped new builds from bundling them; it cannot remove what is
+already in the history of a public repository. Deleting the file in a new commit does not help
+either: the blob stays reachable, and forks and clones keep copies.
+
+Removing it needs history rewriting (`git-filter-repo` or BFG) and a force-push, or a fresh
+repository. Both are your call.
 
 ---
 
