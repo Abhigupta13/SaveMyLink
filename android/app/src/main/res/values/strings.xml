@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">SaveMyLink</string>
-    <string name="title_activity_main">SaveMyLink</string>
+    <string name="app_name">ALL you need</string>
+    <string name="title_activity_main">ALL you need</string>
     <string name="package_name">com.swaraj.savemylink</string>
     <string name="custom_url_scheme">com.swaraj.savemylink</string>
 </resources>

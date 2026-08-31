@@ -39,8 +39,12 @@ if (!SERVER_URL.startsWith('https://')) {
 }
 
 const config: CapacitorConfig = {
+  // appId is the package identity Android installs under, and it is NOT the display name. Changing
+  // it would make this a different app: every existing install would be orphaned rather than
+  // updated, and the com.swaraj.savemylink:// deep link that carries a finished Google sign-in
+  // back into the WebView would stop resolving. It stays as it is; only the label changes.
   appId: 'com.swaraj.savemylink',
-  appName: 'SaveMyLink',
+  appName: 'ALL you need',
   // Unused in remote mode, but `cap sync` copies this directory into the APK, so it must not be
   // `public`. It was, and the shipped APK carried real user MOM recordings out of public/uploads
   // plus a 4.8 MB copy of the previous APK — half the download, and a privacy leak in a file

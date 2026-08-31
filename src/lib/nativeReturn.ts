@@ -28,7 +28,7 @@ export function nativeReturnPage(deepLink: string, message: string, status = 200
 </style>
 </head><body>
 <p>${message}</p>
-<a class="btn" href="${deepLink}">Open SaveMyLink</a>
+<a class="btn" href="${deepLink}">Open ALL you need</a>
 <script>location.replace(${JSON.stringify(deepLink)});</script>
 </body></html>`;
 

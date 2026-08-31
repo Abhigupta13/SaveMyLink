@@ -54,7 +54,7 @@ export const authOptions = {
      */
     CredentialsProvider({
       id: "native-handoff",
-      name: "SaveMyLink app",
+      name: "ALL you need app",
       credentials: {
         code: { label: "Code", type: "text" },
         verifier: { label: "Verifier", type: "text" },

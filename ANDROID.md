@@ -34,7 +34,7 @@ sign-in and Drive connect will fail with `redirect_uri_mismatch` on the app and 
 
 1. Open **https://console.cloud.google.com** and sign in with the account that owns the app.
 2. Top-left, click the **project dropdown** (next to "Google Cloud") and pick the project holding
-   the SaveMyLink OAuth client.
+   the ALL you need OAuth client.
 3. In the left sidebar click **APIs & Services**, then **Credentials**.
 4. Under **OAuth 2.0 Client IDs**, click the name of the **Web application** client. (If there is
    more than one, it is the one whose Client ID matches `GOOGLE_CLIENT_ID` in your env.)
@@ -118,8 +118,9 @@ recovered if it leaks.
 
 These are the things no amount of desktop testing can prove. Everything else has been verified.
 
-1. **Uninstall the old SaveMyLink first.** The new build is signed with a different key, so Android
-   will refuse to install over it. Nothing is lost — your account lives on the server.
+1. **If you still have a build from before 31 Aug, uninstall it first.** Those were signed with a
+   per-machine key, so Android refuses to install over them and says "App not installed". Nothing is
+   lost — your account lives on the server. Builds from here on share one key and update in place.
 2. Install the new APK from the download page.
 3. Open it. **It should show the app, not a blank screen.** This is the main fix.
 4. Sign in with **email and password** first. Confirm the vault loads.
@@ -132,7 +133,7 @@ These are the things no amount of desktop testing can prove. Everything else has
    with Drive connected. *(Needs the console step above.)*
 9. Create a **task with a due time** a few minutes out. Allow notifications, and allow "Alarms &
    reminders" when it asks. Confirm the reminder arrives.
-10. From any other app, **share a link** to SaveMyLink and confirm it lands in the vault.
+10. From any other app, **share a link** to ALL you need and confirm it lands in the vault.
 
 If any step fails, the useful detail is which step and what appeared on screen.
 
@@ -140,9 +141,9 @@ If any step fails, the useful detail is which step and what appeared on screen.
 
 ## Known, not fixed
 
-- **Exact alarms are a one-shot prompt.** `lib/taskNotifications.ts` only ever asks once
-  (`localStorage.exactAlarmPrompted`). On Android 14+ exact alarms are not granted automatically, so
-  dismissing that prompt once degrades reminders to inexact with no second chance.
+- **Exact alarms still need granting once.** The prompt now reappears weekly until it is granted
+  rather than firing once ever, but Android 14+ will not grant exact alarms on its own — until you
+  allow it, reminders arrive late rather than on time.
 - **`GEMINI_API_KEY` is unset** in every env file, so Hinglish transcription silently falls back to
   Groq Whisper, which the code itself notes mis-detects Hindi as Urdu. `SARVAM_API_KEY` is unset too,
   so the paid path is unreachable.

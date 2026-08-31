@@ -10,8 +10,8 @@ android {
         // Bump both on every APK that reaches a phone. Android refuses to install a build whose
         // versionCode is not greater than the installed one, so leaving this at 1 across rebuilds
         // is why a re-download reported "App not installed" and looked like a broken file.
-        versionCode 2
-        versionName "1.1"
+        versionCode 3
+        versionName "1.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
