@@ -26,6 +26,16 @@ export interface DriveState {
   uid: string;
   nonce: string;
   to: string;
+  /**
+   * Consent was started from the Android app, in a Chrome Custom Tab.
+   *
+   * It changes two things in the callback. The Custom Tab has its own cookie jar, so there is no
+   * app session to compare `uid` against — the signature over `uid` becomes the proof on its own,
+   * which is sound because the only way to mint one is a POST to /api/auth/native/handoff carrying
+   * the WebView's own session. And the landing has to be a deep link back into the app rather than
+   * a path, or the person is left finished-but-stranded in a browser tab.
+   */
+  native?: boolean;
 }
 
 const key = () => {
@@ -65,7 +75,10 @@ export function readState(state: string | null | undefined, now: number = Date.n
     const parsed = JSON.parse(unb64(payload)) as DriveState & { exp?: number };
     if (!parsed?.uid || !parsed?.nonce) return null;
     if (typeof parsed.exp !== 'number' || now > parsed.exp + SKEW_MS) return null;
-    return { uid: parsed.uid, nonce: parsed.nonce, to: safeReturnTo(parsed.to) };
+    // `native` is rebuilt as a strict boolean rather than passed through: it decides whether the
+    // callback may proceed without a session, so a truthy string arriving in its place should not
+    // be able to answer that question.
+    return { uid: parsed.uid, nonce: parsed.nonce, to: safeReturnTo(parsed.to), native: parsed.native === true };
   } catch {
     return null;
   }

@@ -12,11 +12,23 @@
  *
  * A full document load on purpose: this leaves the app for Google's consent screen, and a client-side
  * navigation cannot.
+ *
+ * Inside the Android app a document load is not enough. Navigating the WebView to Google means
+ * Google sees an embedded user agent and refuses with `disallowed_useragent` — and because Drive is
+ * the only file storage there is, that one refusal takes every upload in the app down with it. So
+ * the app opens consent in a Chrome Custom Tab instead; see lib/nativeBridge.ts.
  */
 export function goConnectDrive(returnTo?: string): void {
   if (typeof window === 'undefined') return;
   const to = returnTo || `${window.location.pathname}${window.location.search}`;
-  window.location.assign(`/api/drive/connect?to=${encodeURIComponent(to)}`);
+
+  void (async () => {
+    const { startNativeDriveConnect } = await import('@/lib/nativeBridge');
+    // Falls back to the in-page redirect on the web, and also if the Custom Tab could not be
+    // opened — that shows Google's own refusal, which is at least a visible failure.
+    if (await startNativeDriveConnect(to)) return;
+    window.location.assign(`/api/drive/connect?to=${encodeURIComponent(to)}`);
+  })();
 }
 
 /** What the callback appends when it sends someone back, so a page can say how it went. */

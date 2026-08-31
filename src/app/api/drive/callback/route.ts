@@ -6,6 +6,8 @@ import connectToDatabase from '@/lib/mongodb';
 import { User } from '@/lib/models/User';
 import { seal } from '@/lib/secretBox';
 import { readState } from '@/lib/driveState';
+import { nativeDriveDeepLink } from '@/lib/nativeAuth';
+import { nativeReturnPage } from '@/lib/nativeReturn';
 import { rememberDriveToken } from '@/lib/driveAuth';
 import { OAUTH_NONCE_COOKIE, driveRedirectUri, driveRootName, hasDriveScope, about, ensureFolder, originOf} from '@/lib/drive';
 
@@ -30,13 +32,24 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 type Marker = 'connected' | 'denied' | 'noPermission' | 'noRefresh';
 
 /** Always back to a same-site path (safeReturnTo already guaranteed that), with the outcome on it. */
-function land(req: NextRequest, to: string, marker: Marker) {
+function land(req: NextRequest, to: string, marker: Marker, native = false) {
   // originOf, not req.nextUrl.origin: dev binds to 0.0.0.0, and sending somebody back to
   // http://0.0.0.0:3000/profile is a page the browser cannot open — so a completed consent looked
   // exactly like a failed one. Same reason the redirect_uri itself uses it.
   const url = new URL(to, originOf(req));
   url.searchParams.set('drive', marker);
-  const res = NextResponse.redirect(url);
+
+  // A redirect from the Custom Tab would land in Chrome, leaving the app none the wiser and the
+  // person staring at a second copy of their vault in a browser. Hop back over the deep link and
+  // let the app navigate to the same path, so the profile card reads the outcome exactly as it
+  // does on the web.
+  const res = native
+    ? nativeReturnPage(
+        nativeDriveDeepLink(`${url.pathname}${url.search}`),
+        marker === 'connected' ? 'Google Drive connected. Returning to the app…' : 'Returning to the app…',
+      )
+    : NextResponse.redirect(url);
+
   res.cookies.delete(OAUTH_NONCE_COOKIE);   // single use, whatever the outcome
   return res;
 }
@@ -67,35 +80,46 @@ function idTokenEmail(idToken?: string | null): string {
 }
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) return NextResponse.redirect(new URL('/login', req.nextUrl));
-
   const q = req.nextUrl.searchParams;
   const state = readState(q.get('state'));
   // No usable state means no idea who asked or where to send them — /profile is the honest guess,
-  // and nothing has been written.
+  // and nothing has been written. Read before the session, because the state is what says whether
+  // a session is expected at all.
   if (!state) return land(req, '/profile', 'denied');
 
-  // The whole point of signing the state. See the note at the top of the file.
-  if (state.uid !== session.user.id) {
-    console.error('Drive callback: state uid does not match the session');
-    return land(req, '/profile', 'denied');
+  const session = await getServerSession(authOptions);
+  const native = state.native === true;
+
+  if (!native) {
+    // /auth/signin, not /login: this app has no /login route. See the same note in connect/route.ts.
+    if (!session?.user?.id) return NextResponse.redirect(new URL('/auth/signin', req.nextUrl));
+    // The whole point of signing the state. See the note at the top of the file.
+    if (state.uid !== session.user.id) {
+      console.error('Drive callback: state uid does not match the session');
+      return land(req, '/profile', 'denied');
+    }
   }
+  // In the native flow there is deliberately no session to compare against — this runs in a Chrome
+  // Custom Tab. What replaces it: the uid is HMAC-signed, and the only way to obtain a state
+  // carrying somebody else's uid is a handoff token minted by a POST from THEIR signed-in WebView.
+  // The nonce cookie below is unaffected — it was set on this same tab minutes ago, so the
+  // "same browser that started consent" guarantee survives intact.
+  const uid = state.uid;
 
   const nonce = req.cookies.get(OAUTH_NONCE_COOKIE)?.value || '';
-  if (!nonce || !sameNonce(nonce, state.nonce)) return land(req, state.to, 'denied');
+  if (!nonce || !sameNonce(nonce, state.nonce)) return land(req, state.to, 'denied', native);
 
   // The user pressed Cancel, or Google refused. Not an error worth a stack trace.
-  if (q.get('error')) return land(req, state.to, 'denied');
+  if (q.get('error')) return land(req, state.to, 'denied', native);
 
   const code = q.get('code');
-  if (!code) return land(req, state.to, 'denied');
+  if (!code) return land(req, state.to, 'denied', native);
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
     console.error('Drive callback: GOOGLE_CLIENT_ID/SECRET are not set');
-    return land(req, state.to, 'denied');
+    return land(req, state.to, 'denied', native);
   }
 
   let token: {
@@ -118,16 +142,16 @@ export async function GET(req: NextRequest) {
     token = await res.json().catch(() => null);
     if (!res.ok || !token?.access_token) {
       console.error('Drive code exchange failed:', res.status, token?.error);
-      return land(req, state.to, 'denied');
+      return land(req, state.to, 'denied', native);
     }
   } catch (error) {
     console.error('Drive code exchange could not reach Google:', error);
-    return land(req, state.to, 'denied');
+    return land(req, state.to, 'denied', native);
   }
 
   // Consent is a set of tick boxes and the file one can be cleared. A token without drive.file
   // authenticates fine and cannot store a single byte, so say so now rather than at the first upload.
-  if (!hasDriveScope(token.scope)) return land(req, state.to, 'noPermission');
+  if (!hasDriveScope(token.scope)) return land(req, state.to, 'noPermission', native);
 
   const accessToken = token.access_token;
   await connectToDatabase();
@@ -153,20 +177,20 @@ export async function GET(req: NextRequest) {
   };
 
   if (token.refresh_token) {
-    await User.updateOne({ _id: session.user.id }, { $set: { drive: { box: seal(token.refresh_token), ...shared } } });
+    await User.updateOne({ _id: uid }, { $set: { drive: { box: seal(token.refresh_token), ...shared } } });
   } else {
     // Google returns a refresh token only on a consent that actually happened. `prompt=consent` is
     // supposed to force one, but a Workspace policy or an already-approved grant can still skip it.
     // Overwriting a working sealed box with nothing would turn a healthy connection into a dead one
     // an hour later, so an existing box survives and only the display fields are refreshed.
-    const existing = await User.findById(session.user.id).select('drive.box').lean<{ drive?: { box?: string } } | null>();
-    if (!existing?.drive?.box) return land(req, state.to, 'noRefresh');
-    await User.updateOne({ _id: session.user.id }, { $set: Object.fromEntries(
+    const existing = await User.findById(uid).select('drive.box').lean<{ drive?: { box?: string } } | null>();
+    if (!existing?.drive?.box) return land(req, state.to, 'noRefresh', native);
+    await User.updateOne({ _id: uid }, { $set: Object.fromEntries(
       Object.entries(shared).map(([k, v]) => [`drive.${k}`, v]),
     ) });
   }
 
   // The token just bought is good for the hour; no reason to make the next request buy another.
-  rememberDriveToken(session.user.id, accessToken, Number(token.expires_in));
-  return land(req, state.to, 'connected');
+  rememberDriveToken(uid, accessToken, Number(token.expires_in));
+  return land(req, state.to, 'connected', native);
 }

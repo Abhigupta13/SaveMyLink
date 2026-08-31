@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto';
 import { authOptions } from '@/lib/auth';
 import { DRIVE_SCOPE, OAUTH_NONCE_COOKIE, driveRedirectUri, originOf} from '@/lib/drive';
 import { signState, safeReturnTo, STATE_TTL_MS } from '@/lib/driveState';
+import { readHandoff } from '@/lib/nativeAuth';
 
 /**
  * The start of "connect my Drive": mint the CSRF pair, then hand the browser to Google.
@@ -20,7 +21,19 @@ const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) return NextResponse.redirect(new URL('/login', req.nextUrl));
+
+  // The Android app arrives here inside a Chrome Custom Tab, which has its own cookie jar and so no
+  // session at all — the WebView holds that. It proves who it is with a two-minute HMAC signed by
+  // NEXTAUTH_SECRET, mintable only by a POST from an already-signed-in WebView. See lib/nativeAuth.ts.
+  const native = req.nextUrl.searchParams.get('native') === '1';
+  const handoffUid = native ? readHandoff(req.nextUrl.searchParams.get('handoff')) : null;
+
+  // /auth/signin, not /login — there is no /login route in this app. It used to be unreachable:
+  // the auth proxy refused this path first and sent people to the real sign-in page. Now that
+  // api/drive is exempt from that gate (it has to be, for the Custom Tab), this line is reached,
+  // and it would have bounced through sign-in only to land on a 404.
+  const uid = session?.user?.id || handoffUid;
+  if (!uid) return NextResponse.redirect(new URL('/auth/signin', req.nextUrl));
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   if (!clientId) {
@@ -33,7 +46,7 @@ export async function GET(req: NextRequest) {
   const to = safeReturnTo(req.nextUrl.searchParams.get('to'));
 
   const nonce = randomBytes(18).toString('base64url');
-  const state = signState({ uid: session.user.id, nonce, to, exp: Date.now() + STATE_TTL_MS });
+  const state = signState({ uid, nonce, to, native, exp: Date.now() + STATE_TTL_MS });
 
   const params = new URLSearchParams({
     client_id: clientId,
