@@ -9,6 +9,7 @@ import {
   deleteJarvisSession, runJarvisActions, JarvisItem, JarvisTurn, Msg, JarvisSessionMeta, JarvisPending,
 } from '@/actions/jarvis';
 import { pickVoice } from '@/lib/voice';
+import { mergeFinals } from '@/lib/transcript';
 import { syncTask } from '@/lib/taskNotifications';
 import { getProjects } from '@/actions/project';
 import { markIntro } from '@/actions/intro';
@@ -220,7 +221,7 @@ export default function JarvisWidget() {
   // ---------- listening ----------
   const submitNow = useCallback(() => {
     clearSilence();
-    const text = (committedRef.current + finalRef.current).trim();
+    const text = mergeFinals(committedRef.current, finalRef.current).trim();
     committedRef.current = '';
     finalRef.current = '';
     stoppingRef.current = true;
@@ -292,7 +293,10 @@ export default function JarvisWidget() {
         else interim += r[0].transcript;
       }
       finalRef.current = finals;
-      const shown = (committedRef.current + finals + interim).trim();
+      // Merged, not concatenated. Android's WebView keeps e.results across a restarted session, so
+      // `finals` can already contain what onend banked — adding the bank on top is what turned one
+      // sentence into a ladder of its own prefixes. See lib/transcript.
+      const shown = (mergeFinals(committedRef.current, finals) + interim).trim();
       setQ(shown);
       if (shown) { setHeardBoth(true); armSubmit(); }   // pause timer starts only once you speak
     };
@@ -311,9 +315,10 @@ export default function JarvisWidget() {
         setTimeout(() => { try { rec.start(); } catch { setModeBoth('idle'); setVoiceBlocked(true); } }, 250);
         return;
       }
-      // Sessions are short-lived; keep it alive. The new one starts with an empty results list,
-      // so bank what this one finalised or rebuilding from e.results would drop it.
-      committedRef.current += finalRef.current;
+      // Sessions are short-lived; keep it alive. Bank what this one finalised, because on an engine
+      // that DOES clear the results list, rebuilding from e.results would otherwise drop it — and
+      // merge rather than append, because on an engine that does not clear it, appending duplicates.
+      committedRef.current = mergeFinals(committedRef.current, finalRef.current);
       finalRef.current = '';
       try { rec.start(); } catch { setModeBoth('idle'); }
     };

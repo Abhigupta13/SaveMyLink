@@ -9,6 +9,20 @@ export const metadata: Metadata = {
   description: 'Install the Android app — save from any app, get reminders, record meetings.',
 };
 
+/**
+ * Rendered once at build time, not per request.
+ *
+ * Nothing here varies by visitor: the QR encodes a constant, and the size and version are read off
+ * disk from files that only change when the APK is rebuilt — which is a deploy. Prerendering also
+ * means the two filesystem reads below happen once, in the build, where the repository is
+ * definitely present, rather than once per visitor inside a function bundle whose contents are a
+ * build detail nobody here controls.
+ *
+ * The page is reachable signed-out, so this is also the version a stranger following a shared link
+ * gets: a static file, no function invocation.
+ */
+export const dynamic = 'force-static';
+
 // public/app-debug.apk. Served straight by Next, and already excluded from the auth proxy so the
 // link works for someone who has never signed in — which is the entire point of sending it.
 const APK = '/app-debug.apk';
@@ -30,6 +44,31 @@ async function apkSize(): Promise<string | null> {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   } catch {
     return null;
+  }
+}
+
+/**
+ * What the file is called once it lands in someone's Downloads folder.
+ *
+ * Gradle names its output app-debug.apk and there is no reason to fight that — `cap sync` and
+ * assembleDebug regenerate it every build, so renaming the file on disk would be a manual step
+ * somebody forgets. The `download` attribute renames the copy the browser saves instead.
+ *
+ * It matters more than it looks. "debug" arrives at the exact moment Android is already warning
+ * that this kind of file can harm your device, and this page is busy telling the person to
+ * continue anyway — a filename that says "debug" argues the other side. The version is there so
+ * "which build are you on?" has an answer, and so a stale APK sitting in Downloads cannot be
+ * reinstalled over a newer one by mistake.
+ */
+async function apkFileName(): Promise<string> {
+  try {
+    const { readFileSync } = await import('fs');
+    const { join } = await import('path');
+    const gradle = readFileSync(join(process.cwd(), 'android', 'app', 'build.gradle'), 'utf8');
+    const version = gradle.match(/versionName\s+"([^"]+)"/)?.[1];
+    return version ? `ALLyouneed-${version}.apk` : 'ALLyouneed.apk';
+  } catch {
+    return 'ALLyouneed.apk';
   }
 }
 
@@ -78,6 +117,7 @@ export default async function DownloadPage() {
   const base = shareUrl();
   const qr = base ? await qrSvg(`${base}/download`) : null;
   const size = await apkSize();
+  const fileName = await apkFileName();
 
   return (
     <div className="page narrow">
@@ -89,7 +129,7 @@ export default async function DownloadPage() {
         reach you. On iPhone, add the website to your home screen — same account.
       </p>
 
-      <a href={APK} download className="btn-primary" style={{
+      <a href={APK} download={fileName} className="btn-primary" style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
         height: '52px', borderRadius: '14px', fontWeight: 800, fontSize: '1rem',
         textDecoration: 'none', marginBottom: '10px',
