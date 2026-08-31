@@ -67,8 +67,12 @@ export async function startNativeGoogleSignIn(): Promise<boolean> {
     localStorage.setItem(VERIFIER_KEY, JSON.stringify({ verifier, at: Date.now() }));
 
     const { Browser } = await import('@capacitor/browser');
+    // A page that calls next-auth's own signIn(), not a route that reimplements the form POST it
+    // does. The reimplementation reached Google but failed at the callback with OAuthCallback,
+    // while the same journey from the website worked — so the app now runs the identical client
+    // code, differing only in where it is told to come back to.
     await Browser.open({
-      url: `${window.location.origin}/api/auth/native/start?challenge=${encodeURIComponent(challenge)}`,
+      url: `${window.location.origin}/auth/native?challenge=${encodeURIComponent(challenge)}`,
       presentationStyle: 'popover',
     });
     return true;
