@@ -217,6 +217,7 @@ const CAPTIONS: Record<(typeof PH_TILES)[number]['href'] | 'jarvis', { title: st
   '/links': { title: 'Save from anywhere', text: 'Share from any app. Filed for you.' },
   '/notes': { title: 'Notes and files together', text: 'Write the note, attach the file.' },
   '/tasks': { title: 'Reminders that reach you', text: 'A real notification, until you tick it.' },
+  '/expenses': { title: 'Track spending clearly', text: 'Log daily costs. See trends and investment vs waste.' },
   '/projects': { title: 'Project groups', text: 'Add people like a WhatsApp group.' },
   // Longest line of the set: kept to two rendered lines at 320px so the caption block never jumps.
   '/mom': { title: 'Meetings write themselves', text: 'Record it. Tasks come out with names and dates.' },
