@@ -22,9 +22,10 @@ type Tab = 'chat' | 'sessions';
 const GREETING = "What's on your mind?";
 const BASE_SUGGESTIONS = ['What is urgent today?', 'What did I save this week?'];
 
-const SILENCE_MS = 2600;      // quiet time AFTER you've spoken before we send
-const WAIT_FOR_SPEECH_MS = 20000;  // how long the mic waits for you to begin
+/** After you've spoken, this much quiet auto-sends. No speech yet → keep listening. */
+const SILENCE_MS = 5000;
 const MIN_SPEECH_MS = 800;
+const MAX_RECORD_MS = 120_000;
 
 function itemHref(i: JarvisItem) {
   if (i.type === 'link' && i.url) return i.url;
@@ -34,6 +35,7 @@ function itemHref(i: JarvisItem) {
   if (i.type === 'contact') return '/contacts';
   if (i.type === 'note') return '/notes';
   if (i.type === 'document') return '/d-locker';
+  if (i.type === 'expense') return '/expenses';
   return '/links';
 }
 const speakable = (s: string) => s.replace(/^[-*•]\s*/gm, '').replace(/\s+/g, ' ').trim();
@@ -48,6 +50,19 @@ const when = (iso: string) => {
   const t = new Date(iso);
   return `${formatDay(t)} · ${formatTime(t)}`;
 };
+
+function WisprWaveform({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="wispr-waveform" title="Wispr Flow Streaming Dictation">
+      <span className="bar bar1" />
+      <span className="bar bar2" />
+      <span className="bar bar3" />
+      <span className="bar bar4" />
+      <span className="bar bar5" />
+    </div>
+  );
+}
 
 export default function JarvisWidget() {
   const { status } = useSession();
@@ -237,19 +252,6 @@ export default function JarvisWidget() {
     silenceRef.current = setTimeout(submitNow, SILENCE_MS);
   }, [submitNow]);
 
-  /** Give you plenty of time to begin — nothing is sent until you speak. */
-  const armWaitForSpeech = useCallback(() => {
-    clearSilence();
-    silenceRef.current = setTimeout(() => {
-      if (heardRef.current) return;      // speech arrived; the pause timer owns it now
-      stoppingRef.current = true;
-      try { recRef.current?.stop(); } catch {}
-      setModeBoth('idle');
-      setQ('');
-      loopRef.current = false;           // you went quiet — stop reopening the mic
-    }, WAIT_FOR_SPEECH_MS);
-  }, []);
-
   /** Listens continuously and only sends after a real pause, so you can think mid-sentence. */
   const startRecognition = useCallback(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -304,25 +306,24 @@ export default function JarvisWidget() {
     };
 
     rec.onerror = (e: any) => {
+      console.warn('Jarvis WebSpeech error:', e?.error);
       if (e?.error === 'no-speech' || e?.error === 'aborted') return;
       stoppingRef.current = true;
       setModeBoth('idle');
+      setTimeout(() => { recordOnce(); }, 100);
     };
     rec.onend = () => {
       if (stoppingRef.current) { setModeBoth('idle'); return; }
-      // Chrome ends instantly (no onstart) when the call had no user gesture — retry once, then ask for a tap
       if (!startedRef.current) {
-        if (retriedRef.current) { setModeBoth('idle'); setVoiceBlocked(true); return; }
-        retriedRef.current = true;
-        setTimeout(() => { try { rec.start(); } catch { setModeBoth('idle'); setVoiceBlocked(true); } }, 250);
+        console.warn('Jarvis WebSpeech failed to start. Automatically switching to MediaRecorder + Whisper...');
+        stoppingRef.current = true;
+        setModeBoth('idle');
+        setTimeout(() => { recordOnce(); }, 100);
         return;
       }
-      // Sessions are short-lived; keep it alive. Bank what this one finalised, because on an engine
-      // that DOES clear the results list, rebuilding from e.results would otherwise drop it — and
-      // merge rather than append, because on an engine that does not clear it, appending duplicates.
       committedRef.current = mergeFinals(committedRef.current, finalRef.current);
       finalRef.current = '';
-      try { rec.start(); } catch { setModeBoth('idle'); }
+      try { rec.start(); } catch { setModeBoth('idle'); recordOnce(); }
     };
 
     recRef.current = rec;
@@ -393,10 +394,9 @@ export default function JarvisWidget() {
         const now = Date.now();
         if (peak > 6) { spoke = true; quietSince = null; } else if (quietSince === null) quietSince = now;
 
-        // Only close the clip once you've actually said something and then gone quiet
+        // Stop only after speech + silence, or a long cap — never for "no speech yet"
         if (spoke && quietSince && now - startedAt > MIN_SPEECH_MS && now - quietSince > SILENCE_MS) { rec.stop(); release(); return; }
-        if (!spoke && now - startedAt > WAIT_FOR_SPEECH_MS) { rec.stop(); release(); return; }
-        if (now - startedAt > 60000) { rec.stop(); release(); return; }
+        if (now - startedAt > MAX_RECORD_MS) { rec.stop(); release(); return; }
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
@@ -416,16 +416,18 @@ export default function JarvisWidget() {
       return;
     }
     stopSpeaking();
-    setVoiceBlocked(false); retriedRef.current = false;
+    setVoiceBlocked(false);
+    retriedRef.current = false;
     loopRef.current = true;
-    listenAgainRef.current();
+    if (hasSR) startRecognition();
+    else recordOnce();
   };
 
   // Reopen the mic after each answer so you can just keep talking.
   listenAgainRef.current = () => {
     if (!openRef.current || !loopRef.current) return;
-    if (hasSR) { startRecognition(); armWaitForSpeech(); }
-    else recordOnce();                                    // Android webview: no Web Speech API
+    if (hasSR) startRecognition();
+    else recordOnce();
   };
 
   // ---------- panel lifecycle ----------
@@ -574,9 +576,12 @@ export default function JarvisWidget() {
         <div className="jarvis-panel" ref={panelRef}>
           <div className="jarvis-head">
             <span className={`jarvis-dot ${mode === 'capturing' ? 'live' : ''}`} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 800 }}>Jarvis</div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{statusLabel}</div>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div>
+                <div style={{ fontWeight: 800 }}>Jarvis</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{statusLabel}</div>
+              </div>
+              <WisprWaveform active={mode === 'capturing'} />
             </div>
             {hasTTS && (
               <button className="icon-btn" onClick={toggleMute} title={muted ? 'Unmute voice' : 'Mute voice'} style={{ width: '32px', height: '32px' }}>
@@ -660,7 +665,14 @@ export default function JarvisWidget() {
                 )}
               </div>
             ))}
-            {busy && <div className="jarvis-msg assistant"><div className="jarvis-bubble" style={{ opacity: 0.6 }}>Looking through your vault…</div></div>}
+            {busy && (
+              <div className="jarvis-msg assistant" aria-busy="true">
+                <div className="jarvis-bubble" style={{ display: 'flex', alignItems: 'center', gap: 10, opacity: 0.85 }}>
+                  <div className="loading-spinner" style={{ width: 18, height: 18, borderWidth: 2, flexShrink: 0 }} />
+                  <span>Looking in your vault…</span>
+                </div>
+              </div>
+            )}
             <div ref={bottomRef} />
           </div>
           )}
@@ -674,7 +686,9 @@ export default function JarvisWidget() {
             <form style={{ display: 'flex', gap: '8px', flex: 1 }} onSubmit={e => { e.preventDefault(); ask(q); }}>
               <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
                 placeholder={mode === 'capturing' ? 'Listening…' : 'Ask anything…'} />
-              <button type="submit" disabled={!q.trim() || busy || mode === 'capturing'} aria-label="Send"><Send size={16} /></button>
+              <button type="submit" disabled={!q.trim() || busy || mode === 'capturing'} aria-label="Send">
+                {busy ? <div className="loading-spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <Send size={16} />}
+              </button>
             </form>
           </div>
           )}

@@ -3519,3 +3519,47 @@ a.set-row:hover, button.set-row:hover, label.set-row:hover { background: var(--b
 .sheet-act:disabled { color: var(--text-tertiary); cursor: not-allowed; background: none; }
 .sheet-act span { min-width: 0; }
 .sheet-act small { display: block; margin-top: 1px; font-size: 0.72rem; font-weight: 600; color: var(--text-tertiary); white-space: normal; }
+
+/* ---------- Wispr Flow Voice Equalizer & Visualizer ---------- */
+.wispr-waveform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 4px;
+}
+
+.wispr-waveform .bar {
+  width: 3px;
+  height: 100%;
+  background-color: var(--accent-strong, #2563eb);
+  border-radius: 3px;
+  animation: wisprWave 1.2s ease-in-out infinite alternate;
+}
+
+.wispr-waveform .bar.bar1 { animation-delay: 0.0s; }
+.wispr-waveform .bar.bar2 { animation-delay: 0.2s; }
+.wispr-waveform .bar.bar3 { animation-delay: 0.4s; }
+.wispr-waveform .bar.bar4 { animation-delay: 0.15s; }
+.wispr-waveform .bar.bar5 { animation-delay: 0.35s; }
+
+@keyframes wisprWave {
+  0% { transform: scaleY(0.2); }
+  50% { transform: scaleY(1.0); }
+  100% { transform: scaleY(0.3); }
+}
+
+.jarvis-mic.on {
+  background: var(--accent-gradient) !important;
+  color: #ffffff !important;
+  animation: wisprPulse 1.5s infinite;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent-color) 60%, transparent);
+}
+
+@keyframes wisprPulse {
+  0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.6); }
+  70% { box-shadow: 0 0 0 12px rgba(37, 99, 235, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+}
+

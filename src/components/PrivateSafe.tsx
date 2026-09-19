@@ -18,7 +18,7 @@ import { useUser } from '@/components/UserContext';
  */
 
 /** How a page names what it is showing. Same word in the banner and the empty state. */
-export type SafeNoun = 'links' | 'notes' | 'tasks' | 'meetings' | 'files' | 'people';
+export type SafeNoun = 'links' | 'notes' | 'tasks' | 'meetings' | 'files' | 'people' | 'expenses';
 
 /**
  * The persistent "you are not looking at your normal list" strip, with the way back on it.

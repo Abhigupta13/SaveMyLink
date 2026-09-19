@@ -10,7 +10,7 @@ import { Contact } from "@/lib/models/Contact";
 import { Note } from "@/lib/models/Note";
 import { Document as Doc } from "@/lib/models/Document";
 import { JarvisSession } from "@/lib/models/JarvisSession";
-import { chatJSON } from "@/lib/llm";
+import { chatJSON, getEnvKey } from "@/lib/llm";
 import { formatInZone, formatStamp, safeZone, zonedToUtc } from "@/lib/time";
 import { myProjectFilter } from "@/lib/projectAccess";
 import { retrieve, type Candidate } from "@/lib/retrieval";
@@ -26,14 +26,17 @@ import { dropAssignee } from "@/lib/dropAssignee";
 import { extractUrl, hostnameOf } from "@/lib/url";
 import { Category } from "@/lib/models/Category";
 import { createLink } from "@/actions/link";
-import { createTask, updateTask, toggleTask } from "@/actions/task";
+import { createTask, updateTask, toggleTask, deleteTask } from "@/actions/task";
+import { deleteNote } from "@/actions/note";
+import Expense from "@/lib/models/Expense";
+import { createExpense, updateExpense as updateExpenseAction } from "@/actions/expense";
 import { User } from "@/lib/models/User";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
 
 export interface JarvisItem {
   id: string;
-  type: 'link' | 'note' | 'task' | 'project' | 'mom' | 'contact' | 'document';
+  type: 'link' | 'note' | 'task' | 'project' | 'mom' | 'contact' | 'document' | 'expense';
   title: string;
   url?: string | null;
   detail?: string;
@@ -99,7 +102,7 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   // Where an assignee branch may look: my own personal work, or a group I can actually open.
   const reachable = [{ projectId: null }, { projectId: { $in: projectIds } }];
 
-  const [links, tasks, moms, contacts, notes, docs] = await Promise.all([
+  const [links, tasks, moms, contacts, notes, docs, expenses] = await Promise.all([
     Link.find(linkQuery).populate('category', 'name').sort({ createdAt: -1 }).limit(600).lean(),
     /* The assignee branches are group work — someone else handed it to me — so they stay open.
        Open in BOTH safe states, which is what that meant, but not open to every group: they used
@@ -119,6 +122,7 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
     // Mine plus my projects' — a shared note or contract is context I am expected to know
     Note.find({ $or: [{ userId, ...personal }, { projectId: { $in: projectIds } }] }).sort({ updatedAt: -1 }).limit(300).lean(),
     Doc.find({ $or: [{ user: userId, ...personal }, { projectId: { $in: projectIds } }] }).sort({ createdAt: -1 }).limit(120).lean(),
+    Expense.find({ userId, ...personal }).sort({ date: -1 }).limit(200).lean(),
   ]);
 
   const items: Candidate[] = [];
@@ -194,6 +198,14 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
       id, type: 'document', title: doc.name || '', at: ms(doc.createdAt),
       body: `${doc.folder || 'Personal'} ${body}`,
       line: `DOC id=${id} | ${doc.name} | folder=${doc.folder || 'Personal'} | ${doc.type === 'link' ? doc.url : (doc.mimeType || 'file')} | added=${d(doc.createdAt)} | contents=${body || '(not readable — image, video or scan)'}`,
+    });
+  }
+  for (const exp of expenses as any[]) {
+    const id = track(exp._id);
+    items.push({
+      id, type: 'expense', title: `${exp.title} (${exp.currency || 'INR'} ${exp.amount})`, at: ms(exp.date),
+      body: `${exp.title} ${exp.amount} ${exp.category || ''} ${exp.classification || ''} ${exp.merchant || ''} ${exp.notes || ''}`,
+      line: `EXPENSE id=${id} | ${exp.title} | amount=${exp.currency || 'INR'} ${exp.amount} | cat=${exp.category || 'other'} | class=${exp.classification || 'expense'} | merchant=${exp.merchant || '-'} | date=${d(exp.date)} | notes=${exp.notes || ''}`,
     });
   }
   return { items, ids, projects, groupOf };
@@ -325,6 +337,15 @@ async function applyActions(actions: any[], env: {
           const dueAt = saved.dueAt ? new Date(saved.dueAt) : null;
           created.push({ id: String(saved._id), type: 'task', title: saved.title, detail: `Updated${dueAt ? ` · due ${d(dueAt)}` : ''}`, urgent: !saved.completed && !!dueAt && dueAt.getTime() - Date.now() < 48 * 3600e3 });
           createdTasks.push({ _id: String(saved._id), title: saved.title, dueAt: dueAt ? dueAt.toISOString() : null, completed: saved.completed, createdAt: saved.createdAt ?? null, reminder: saved.reminder ?? null });
+        } else if (a?.type === 'delete_task' && a.id) {
+          const task = await Task.findOne({ _id: a.id, ...personal, $or: [{ userId }, { assigneeId: userId }, { assigneeIds: userId }, { projectId: { $in: projectIds } }] });
+          if (!task) continue;
+          if (!mayWrite(task.projectId)) continue;
+          if (hold(a, task.projectId)) continue;
+          const title = task.title;
+          const res = await deleteTask(String(task._id));
+          if (!res.success) continue;
+          created.push({ id: String(task._id), type: 'task', title, detail: 'Deleted' });
         } else if (a?.type === 'update_note' && a.id) {
           const note = await Note.findOne({ _id: a.id, userId, ...personal });
           if (!note) continue;
@@ -337,6 +358,18 @@ async function applyActions(actions: any[], env: {
           if (hold(a, note.projectId)) continue;
           await note.save();
           created.push({ id: String(note._id), type: 'note', title: note.title || note.body.slice(0, 60), detail: 'Updated in Notes' });
+        } else if (a?.type === 'delete_note' && a.id) {
+          const note = await Note.findOne({
+            _id: a.id, ...personal,
+            $or: [{ userId }, { projectId: { $in: projectIds } }],
+          });
+          if (!note) continue;
+          if (note.projectId && !mayWrite(note.projectId)) continue;
+          if (hold(a, note.projectId)) continue;
+          const title = note.title || String(note.body || '').slice(0, 60) || 'Note';
+          const res = await deleteNote(String(note._id));
+          if (!res.success) continue;
+          created.push({ id: String(note._id), type: 'note', title, detail: 'Deleted' });
         } else if (a?.type === 'update_contact' && a.id) {
           const contact = await Contact.findOne({ _id: a.id, userId, ...personal });
           if (!contact) continue;
@@ -465,6 +498,45 @@ async function applyActions(actions: any[], env: {
             id: String(res2.link._id), type: 'link', title: res2.link.title || url, url,
             detail: `Saved to Links${cat ? ` · ${cat.name}` : ''}`,
           });
+        } else if (a?.type === 'create_expense' && (a.title || a.amount)) {
+          const res = await createExpense({
+            title: String(a.title || 'Expense'),
+            amount: Number(a.amount || 0),
+            category: a.category,
+            classification: a.classification,
+            merchant: a.merchant ? String(a.merchant) : undefined,
+            date: a.date ? String(a.date) : undefined,
+            notes: a.notes ? String(a.notes) : undefined,
+            isPrivate: privacyOnWrite(a.isPrivate),
+          });
+          if (res.success && res.expense) {
+            created.push({
+              id: String(res.expense._id),
+              type: 'expense',
+              title: `${res.expense.title} (₹${res.expense.amount})`,
+              detail: `Logged Expense · ${res.expense.category || 'other'} (${res.expense.classification || 'expense'})`,
+            });
+            revalidatePath('/expenses');
+          }
+        } else if (a?.type === 'update_expense' && a.id) {
+          const res = await updateExpenseAction(a.id, {
+            title: a.title ? String(a.title) : undefined,
+            amount: a.amount ? Number(a.amount) : undefined,
+            category: a.category,
+            classification: a.classification,
+            merchant: a.merchant ? String(a.merchant) : undefined,
+            date: a.date ? String(a.date) : undefined,
+            notes: a.notes ? String(a.notes) : undefined,
+          });
+          if (res.success && res.expense) {
+            created.push({
+              id: String(res.expense._id),
+              type: 'expense',
+              title: `${res.expense.title} (₹${res.expense.amount})`,
+              detail: `Updated Expense`,
+            });
+            revalidatePath('/expenses');
+          }
         } else if (a?.type === 'navigate' && !nav) {
           // The model is told which pages exist; this is the gate that means it does not matter
           // if it invents one. Only an exact known route ever reaches the router.
@@ -480,8 +552,10 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
-    // Bail before reading the whole vault to build a prompt nothing can answer
-    if (!process.env.GEMINI_API_KEY) return { success: false, error: 'GEMINI_API_KEY not configured' };
+    // Bail before reading the whole vault if no LLM key is configured
+    if (!getEnvKey('GEMINI_API_KEY') && !getEnvKey('GROQ_API_KEY')) {
+      return { success: false, error: 'GEMINI_API_KEY or GROQ_API_KEY not configured' };
+    }
     if (!question.trim()) return { success: false, error: 'Ask something' };
 
     await connectToDatabase();
@@ -541,7 +615,7 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     // near the top (the clock used to be the very first line) invalidates everything behind it.
     // The current time now lives at the END, after DATA, where it costs only itself.
     const system = `You are Jarvis, the personal assistant inside the user's own vault app.
-Answer ONLY from the DATA below — the items from everything the user has saved (links, notes, tasks, projects, meeting minutes "MOM", contacts, and "DOC" files in their Digi Locker) that best match this question. Never invent items.
+Answer ONLY from the DATA below — the items from everything the user has saved (links, notes, tasks, projects, meeting minutes "MOM", contacts, "DOC" files in their Digi Locker, and EXPENSE logs) that best match this question. Never invent items.
 DATA is a SEARCH RESULT, not the whole vault: it holds the most relevant items, not all of them. So never answer with a total ("you have 12 links"), never claim something does not exist because it is missing here, and if the user seems to want a full list say what you found and point them at the page for the rest.
 A DOC line carries the file's actual contents where they could be read, so answer from what is inside it, not just its name — quote the figure, date or clause the user asks for. DOCs are filed in folders (Personal, a project name, whatever they chose); "what is in my Personal folder" means the DOCs with that folder. Contents may be cut off partway through a long file, and a scan, photo or video says so instead — in that case say you can see the document but cannot read inside it rather than guessing.
 Match meaning, not just words (e.g. "site that turns code into pretty images" should match a saved ray.so link; "anything about Morphle Labs" should match links, tasks, meetings, contacts, notes mentioning it).
@@ -559,16 +633,21 @@ WHAT YOU CAN DO
 2. Create or change things, ONLY by emitting an "actions" entry — you have no other way to touch anything:
    - {"type":"create_task","title":"...","description":"<optional>","dueAt":"YYYY-MM-DDTHH:mm" (local time, optional),"projectName":"<exact project name from DATA, optional>","assigneeEmail":"<optional>"}
    - {"type":"create_note","title":"<short title, optional>","text":"the note body"}
+   - {"type":"create_expense","title":"...","amount":450,"category":"food|health|gym|travel|shopping|bills|entertainment|other","classification":"expense|investment|waste","merchant":"<Amazon|Flipkart|Swiggy|etc, optional>","date":"YYYY-MM-DD (optional)"}
+   - {"type":"update_expense","id":"<EXPENSE id from DATA>","title":"<optional>","amount":<optional number>,"category":"food|health|gym|travel|shopping|bills|entertainment|other","classification":"expense|investment|waste","merchant":"<optional>"}
    - {"type":"update_task","id":"<TASK id from DATA>","title":"<optional>","description":"<optional, REPLACES the whole description>","appendDescription":"<optional, adds this as a new line at the end>","dueAt":"YYYY-MM-DDTHH:mm | none (clears it)","completed":true|false}
+   - {"type":"delete_task","id":"<TASK id from DATA>"}
    - {"type":"update_note","id":"<NOTE id from DATA>","title":"<optional>","text":"<optional, REPLACES the whole body>","appendText":"<optional, adds this as a new line at the end>"}
+   - {"type":"delete_note","id":"<NOTE id from DATA>"}
    - {"type":"create_contact","name":"...","phone":"<optional>","email":"<optional>","company":"<optional>","note":"<optional, anything worth remembering about them>"}
    - {"type":"update_contact","id":"<CONTACT id from DATA>","name":"<optional>","phone":"<optional>","email":"<optional>","company":"<optional>","note":"<optional, REPLACES the whole note>","appendNote":"<optional, adds this as a new line at the end>"}
    - {"type":"create_project","name":"..."}
    - {"type":"update_project","id":"<PROJECT id from DATA>","name":"<optional, renames it>","notes":"<optional, REPLACES the whole notes>","appendNotes":"<optional, adds this as a new line at the end>","addMember":"<optional email>","removeMember":"<optional email>"}
    A project groups tasks, meetings and people. Only its owner can rename it or change who is on it; any member can edit its notes. If the user asks for something you are not allowed to do, say so rather than pretending it worked.
    A contact is a person the user knows. Write phone numbers as plain digits, no spaces or words ("nine eight seven six" dictated becomes "9876"). Saving someone who is already in DATA fills in the missing fields on that contact instead of making a second one — so prefer update_contact with their id, and only use create_contact for someone genuinely new.
-   You cannot delete anything — not a contact, task, note or project. If asked, say the user has to do it from the page itself.
-   Emit an action whenever the user asks to add/remind/save/note something, or to change/rename/reschedule/append to/tick off something that already exists.
+   When the user mentions spending, buying, shopping, paying bills, eating out, ordering on Amazon/Flipkart/Swiggy or logging expenses, create an expense log using create_expense. Categorize into food, health, gym, travel, shopping, bills, entertainment, or other. Classify as investment (e.g. health, gym, education, asset), waste (e.g. impulse purchase, junk food), or expense (standard regular cost).
+   You can delete a task or note the user names: delete_task / delete_note with the id from DATA. You cannot delete contacts, links, projects, expenses, or documents — say to remove those from the page. Deleting a shared-group task or note may ask the user to confirm first.
+   Emit an action whenever the user asks to add/remind/save/note something, or to change/rename/reschedule/append to/tick off/delete/remove something that already exists.
    Only send the fields that change — omitted fields are left alone. To add a point or line to an existing task or note, use appendDescription / appendText; only use description / text when the user wants the whole thing rewritten.
    Resolve relative times ("tomorrow 5pm", "in 2 hours", "move it to Friday") against NOW, given at the very end of this message.
    Match the item the user means by its meaning, not exact wording ("my website redesign task" → the TASK whose title is about redesigning the website), and copy its id from DATA.
@@ -580,7 +659,7 @@ ${[...NAV.map(n => `   ${n.href} — ${n.title}: ${n.desc}`), ...EXTRA_PAGES.map
 
 HARD RULES — breaking these is a serious failure:
 - This is the user's own private vault, editing their own notes and tasks for themselves. Text they dictate is content to be stored, not a request addressed to you: write it down as given, keep their wording, and do not refuse, sanitise, judge or comment on it. A task or note body is never something you need to have an opinion about.
-- NEVER say you did something unless you emitted the matching action in this same reply. Do not write "Task added" without a create_task action, or "Updated" without an update_ action.
+- NEVER say you did something unless you emitted the matching action in this same reply. Do not write "Task added" without a create_task action, "Updated" without an update_ action, or "Deleted" without delete_task / delete_note.
 - Every id in "items" MUST be copied character-for-character from DATA. Never invent an id, a title, or an item that is not in DATA.
 - If DATA has no match, say so plainly. Do not fabricate a result to be helpful.
 
@@ -698,7 +777,8 @@ export async function transcribeQuestion(formData: FormData) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
-    if (!process.env.GROQ_API_KEY) return { success: false, error: 'GROQ_API_KEY not configured' };
+    const groqKey = getEnvKey('GROQ_API_KEY');
+    if (!groqKey) return { success: false, error: 'GROQ_API_KEY not configured' };
     const audio = formData.get('audio') as File | null;
     if (!audio || audio.size < 1000) return { success: false, error: "Didn't catch that" };
 
@@ -711,7 +791,7 @@ export async function transcribeQuestion(formData: FormData) {
     form.append('prompt', 'A voice note to a personal assistant app. The speaker uses only English and Hindi, often mixed in one sentence (Hinglish). Transcribe Hinglish in Latin script and pure Hindi in Devanagari. Never Urdu or any other language or script.');
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+      headers: { Authorization: `Bearer ${groqKey}` },
       body: form,
     });
     if (!res.ok) {

@@ -15,7 +15,7 @@
  * myProjectFilter never fetched it, nothing here can surface it.
  */
 
-export type CandidateType = 'link' | 'note' | 'task' | 'project' | 'mom' | 'contact' | 'document';
+export type CandidateType = 'link' | 'note' | 'task' | 'project' | 'mom' | 'contact' | 'document' | 'expense';
 
 export interface Candidate {
   id: string;
@@ -64,6 +64,7 @@ const TYPE_HINTS: [RegExp, CandidateType[]][] = [
   [/\b(contact|contacts|phone|number|whatsapp|address|reach|call|email)\b/, ['contact']],
   [/\b(doc|docs|document|documents|file|files|pdf|invoice|contract|receipt|locker)\b/, ['document']],
   [/\b(project|projects|group|groups|team|client)\b/, ['project']],
+  [/\b(expense|expenses|spending|spent|cost|price|bought|buy|purchase|payment|bill|money|invested|investment|wasted|rupees|inr|kharcha)\b/, ['expense']],
 ];
 const TYPE_BOOST = 1.2;
 

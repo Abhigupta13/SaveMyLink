@@ -41,7 +41,7 @@ import type { SarvamResult } from '@/lib/sarvam';
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 /** Auditioned models, in order. Each one is a separate 20-requests/day allowance. */
-export const AUDIO_MODELS = ['gemini-3.6-flash'];
+export const AUDIO_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash'];
 
 /**
  * The script rule is the whole reason this beats Whisper — without it Gemini romanises Hindi or
@@ -74,9 +74,11 @@ export const audioMime = (type?: string | null) => {
   return base.startsWith('audio/') ? base : 'audio/webm';
 };
 
+import { getEnvKey } from '@/lib/llm';
+
 /** Never throws. On any failure the caller falls back to Whisper, so the error is for the log. */
 export async function transcribeAudio(audio: Blob): Promise<SarvamResult<{ text: string; model: string }>> {
-  const key = process.env.GEMINI_API_KEY;
+  const key = getEnvKey('GEMINI_API_KEY');
   if (!key) return { ok: false, error: 'GEMINI_API_KEY not configured' };
 
   const data = Buffer.from(await audio.arrayBuffer()).toString('base64');
