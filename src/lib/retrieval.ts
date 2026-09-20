@@ -29,6 +29,8 @@ export interface Candidate {
   overdue?: boolean;
   /** The prompt line the caller already built. Retrieval only picks; it never formats. */
   line: string;
+  /** Shorter line for lower-ranked hits — saves tokens when many items match. */
+  shortLine?: string;
 }
 
 /** Words that appear in every question and so tell us nothing about which item is meant. */
@@ -75,22 +77,33 @@ export function typeHints(question: string): Set<CandidateType> {
   return out;
 }
 
-/**
- * A term that occurs in half the vault ("meeting", "project") separates nothing; a name or a part
- * number occurs twice and separates everything. Cheap inverse-frequency instead of a real IDF —
- * two buckets are enough to stop common words drowning a rare one.
- */
-const rarity = (df: number, n: number) => (n > 4 && df / n > 0.4 ? 0.3 : 1);
+/** Smoothed inverse document frequency — common vault words weigh less than rare names. */
+const idfWeight = (df: number, n: number) => {
+  if (!n || !df) return 1;
+  return Math.log(1 + (n - df + 0.5) / (df + 0.5)) + 1;
+};
 
 const TITLE_HIT = 3;
 const BODY_HIT = 1;
 const EXACT_TITLE = 10;   // the user named the thing — it is the answer, not a candidate
 const OVERDUE_BOOST = 2.5;
-const MAX_RECENCY = 0.5;  // strictly below one common-word title hit (0.3 × 3), so it only ever breaks ties
+const DATE_MATCH_BOOST = 12;
+const DATE_MISMATCH_PENALTY = -8;
+const MAX_RECENCY = 0.5;  // strictly below one common-word title hit, so it only ever breaks ties
 const HALF_LIFE_DAYS = 30;
 
 const recency = (at: number | undefined, now: number) =>
   !at ? 0 : MAX_RECENCY / (1 + Math.max(0, now - at) / (HALF_LIFE_DAYS * 86_400_000));
+
+export interface DateWindow {
+  start: number;
+  end: number;
+}
+
+export function inDateWindow(at: number | undefined, w: DateWindow | null | undefined): boolean {
+  if (!w || at == null) return false;
+  return at >= w.start && at < w.end;
+}
 
 export function scoreCandidate(
   c: Candidate,
@@ -101,12 +114,14 @@ export function scoreCandidate(
   urgentAsk: boolean,
   qNorm: string,
   now: number,
+  dateWindow: DateWindow | null | undefined,
+  narrowDateType: boolean,
 ): number {
   const title = (c.title || '').toLowerCase();
   const body = (c.body || '').toLowerCase();
   let score = 0;
   for (const t of ts) {
-    const w = rarity(df.get(t) || 0, n);
+    const w = idfWeight(df.get(t) || 0, n);
     if (title.includes(t)) score += TITLE_HIT * w;
     else if (body.includes(t)) score += BODY_HIT * w;
   }
@@ -117,6 +132,17 @@ export function scoreCandidate(
   // actually ask. A rare word in a title still scores 3, so a real match outranks the nudge.
   if (hints.has(c.type)) score += TYPE_BOOST;
   if (urgentAsk && c.overdue) score += OVERDUE_BOOST;
+
+  if (dateWindow) {
+    const inWin = inDateWindow(c.at, dateWindow);
+    const dateTypes: CandidateType[] = ['expense', 'task', 'mom'];
+    if (dateTypes.includes(c.type)) {
+      if (inWin) score += DATE_MATCH_BOOST;
+      else if (narrowDateType && hints.has(c.type) && hints.size === 1) score += DATE_MISMATCH_PENALTY;
+      else if (!inWin && hints.has(c.type)) score += DATE_MISMATCH_PENALTY * 0.35;
+    }
+  }
+
   return score + recency(c.at, now);
 }
 
@@ -128,10 +154,55 @@ export interface RetrieveOptions {
   now?: number;
   /** Ids the conversation already referred to; they stay in the prompt so "that one" resolves. */
   pinned?: Iterable<string>;
+  dateWindow?: DateWindow | null;
+  /** When true with a single type hint + dateWindow, off-window typed rows are dropped unless pinned. */
+  narrowDateType?: boolean;
+  /** Full `line` for the first N picks; after that `shortLine` when present. */
+  compactAfter?: number;
 }
 
 export const MAX_LINES = 40;
 export const MAX_CONTEXT_CHARS = 24000;
+
+/** Line text for the LLM prompt — may use shortLine for lower-ranked hits. */
+export function promptLineFor(c: Candidate, rankIndex: number, compactAfter = 8): string {
+  if (rankIndex < compactAfter) return c.line;
+  return c.shortLine || c.line;
+}
+
+/** Drop near-duplicate titles so one question does not send fifteen similar expense rows. */
+function mmrPick(
+  ranked: { c: Candidate; i: number; score: number }[],
+  limit: number,
+  maxChars: number,
+  compactAfter: number,
+  pinned: Set<string>,
+): Candidate[] {
+  const kept: { c: Candidate; i: number; score: number }[] = [];
+  const pickedTitles = new Set<string>();
+  let chars = 0;
+
+  for (const r of ranked) {
+    if (kept.length >= limit) break;
+    const titleKey = (r.c.title || '').toLowerCase().slice(0, 48);
+    if (
+      kept.length >= 3
+      && !pinned.has(r.c.id)
+      && titleKey.length > 2
+      && pickedTitles.has(titleKey)
+      && r.score < 1e5
+    ) continue;
+
+    const line = promptLineFor(r.c, kept.length, compactAfter);
+    if (chars + line.length > maxChars) continue;
+    kept.push(r);
+    chars += line.length + 1;
+    if (titleKey) pickedTitles.add(titleKey);
+  }
+
+  kept.sort((a, b) => a.i - b.i);
+  return kept.map(r => r.c);
+}
 
 /**
  * The top `limit` candidates for this question, in the order they were given (so the prompt still
@@ -142,6 +213,9 @@ export function retrieve(candidates: Candidate[], question: string, opts: Retrie
   const maxChars = opts.maxChars ?? MAX_CONTEXT_CHARS;
   const now = opts.now ?? Date.now();
   const pinned = new Set(opts.pinned || []);
+  const dateWindow = opts.dateWindow ?? null;
+  const narrowDateType = opts.narrowDateType ?? false;
+  const compactAfter = opts.compactAfter ?? 8;
   if (!candidates.length) return [];
 
   const ts = terms(question);
@@ -149,29 +223,34 @@ export function retrieve(candidates: Candidate[], question: string, opts: Retrie
   const hints = typeHints(question);
   const urgentAsk = URGENT_ASK.test(qNorm);
 
+  let pool = candidates;
+  if (dateWindow && narrowDateType && hints.size === 1) {
+    const only = [...hints][0];
+    pool = candidates.filter(c =>
+      pinned.has(c.id)
+      || c.type !== only
+      || inDateWindow(c.at, dateWindow)
+      || (c.title && qNorm.includes(c.title.toLowerCase())),
+    );
+    if (!pool.length) pool = candidates;
+  }
+
   const df = new Map<string, number>();
-  for (const c of candidates) {
+  for (const c of pool) {
     const hay = `${c.title || ''} ${c.body || ''}`.toLowerCase();
     for (const t of ts) if (hay.includes(t)) df.set(t, (df.get(t) || 0) + 1);
   }
 
-  const ranked = candidates
+  const ranked = pool
     .map((c, i) => ({
       c, i,
       // A pinned item was cited in the answer the user is following up on. It goes in whatever it
       // scores, or "add that one to my tasks" has nothing to point at.
-      score: pinned.has(c.id) ? 1e6 : scoreCandidate(c, ts, df, candidates.length, hints, urgentAsk, qNorm, now),
+      score: pinned.has(c.id) ? 1e6 : scoreCandidate(
+        c, ts, df, pool.length, hints, urgentAsk, qNorm, now, dateWindow, narrowDateType,
+      ),
     }))
     .sort((a, b) => b.score - a.score || (b.c.at || 0) - (a.c.at || 0) || a.i - b.i);
 
-  const kept: typeof ranked = [];
-  let chars = 0;
-  for (const r of ranked) {
-    if (kept.length >= limit) break;
-    if (chars + r.c.line.length > maxChars) continue;   // skip the one giant line, keep filling
-    kept.push(r);
-    chars += r.c.line.length + 1;
-  }
-  kept.sort((a, b) => a.i - b.i);
-  return kept.map(r => r.c);
+  return mmrPick(ranked, limit, maxChars, compactAfter, pinned);
 }

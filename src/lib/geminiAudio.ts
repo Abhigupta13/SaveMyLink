@@ -37,11 +37,12 @@
  */
 
 import type { SarvamResult } from '@/lib/sarvam';
+import { getEnvKey } from '@/lib/llm';
+import { AUDIO_MODELS, audioMime } from '@/lib/geminiAudioConfig';
+
+export { AUDIO_MODELS, audioMime } from '@/lib/geminiAudioConfig';
 
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-
-/** Auditioned models, in order. Each one is a separate 20-requests/day allowance. */
-export const AUDIO_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash'];
 
 /**
  * The script rule is the whole reason this beats Whisper — without it Gemini romanises Hindi or
@@ -63,18 +64,6 @@ const NO_SPEECH = '[no speech]';
 
 // A 20-minute recording takes ~20s. Three minutes is the "something is wrong" line, not a target.
 const TIMEOUT_MS = 3 * 60_000;
-
-/**
- * MediaRecorder reports `audio/webm;codecs=opus`; Gemini wants a bare type and rejects the
- * parameterised one. Anything that is not audio at all is treated as webm — the recorder only
- * ever produces webm, so a surprising value means a stripped Content-Type, not a different format.
- */
-export const audioMime = (type?: string | null) => {
-  const base = String(type || '').split(';')[0].trim().toLowerCase();
-  return base.startsWith('audio/') ? base : 'audio/webm';
-};
-
-import { getEnvKey } from '@/lib/llm';
 
 /** Never throws. On any failure the caller falls back to Whisper, so the error is for the log. */
 export async function transcribeAudio(audio: Blob): Promise<SarvamResult<{ text: string; model: string }>> {

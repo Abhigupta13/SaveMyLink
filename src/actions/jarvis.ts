@@ -13,23 +13,32 @@ import { JarvisSession } from "@/lib/models/JarvisSession";
 import { chatJSON, getEnvKey } from "@/lib/llm";
 import { formatInZone, formatStamp, safeZone, zonedToUtc } from "@/lib/time";
 import { myProjectFilter } from "@/lib/projectAccess";
-import { retrieve, type Candidate } from "@/lib/retrieval";
+import { retrieve, promptLineFor, type Candidate } from "@/lib/retrieval";
+import { parseJarvisQuery, type JarvisQueryIntent } from "@/lib/jarvisQuery";
 import { isProjectOwner, isProjectCreator, canWrite, type OwnableProject } from "@/lib/scope";
 import { hasSafe } from "@/lib/safeCookie";
 import { assistantFilter, privacyOnWrite } from "@/lib/privacy";
 import { isAdmin } from "@/lib/isAdmin";
 import { dayKey, spendQuestion, capMessage, SHARED_OUT_MESSAGE, JARVIS_DAILY_LIMIT } from "@/lib/jarvisLimit";
+import {
+  isJarvisWriteAction, jarvisIsConfirm, jarvisIsDecline, jarvisConfirmPrompt, jarvisDoneLine,
+} from "@/lib/jarvisWriteConfirm";
 import { isHowTo, HOW_IT_WORKS, EXTRA_PAGES } from "@/lib/manual";
 import { NAV } from "@/lib/nav";
 import { memberCount } from "@/lib/visibility";
 import { dropAssignee } from "@/lib/dropAssignee";
 import { extractUrl, hostnameOf } from "@/lib/url";
 import { Category } from "@/lib/models/Category";
-import { createLink } from "@/actions/link";
+import { createLink, deleteLink } from "@/actions/link";
 import { createTask, updateTask, toggleTask, deleteTask } from "@/actions/task";
 import { deleteNote } from "@/actions/note";
 import Expense from "@/lib/models/Expense";
-import { createExpense, updateExpense as updateExpenseAction } from "@/actions/expense";
+import { createExpense, updateExpense as updateExpenseAction, deleteExpense } from "@/actions/expense";
+import { deleteContact } from "@/actions/contact";
+import { deleteDocument } from "@/actions/document";
+import { deleteProject } from "@/actions/project";
+import { deleteMom } from "@/actions/mom";
+import { canDelete } from "@/lib/projectAccess";
 import { User } from "@/lib/models/User";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
@@ -50,7 +59,7 @@ export interface JarvisTurn {
    *  Never trusted: an id only survives if it is also in the caller's own scoped context. */
   ids?: string[];
 }
-export type Msg = JarvisTurn & { items?: JarvisItem[] };
+export type Msg = JarvisTurn & { items?: JarvisItem[]; /** Wall-clock seconds for this assistant turn (client-measured). */ responseSec?: number };
 export interface JarvisSessionMeta { id: string; title: string; updatedAt: string }
 
 /**
@@ -59,6 +68,37 @@ export interface JarvisSessionMeta { id: string; title: string; updatedAt: strin
  * revalidates every field of it either way, so nothing here is trusted on the return trip.
  */
 export interface JarvisPending { action: unknown; group: string; people: number }
+
+export type AskJarvisOpts = { /** Writes waiting on the user's yes from the previous turn. */ heldActions?: unknown[] };
+
+async function jarvisRemaining(userId: string, email: string, tz: string) {
+  const exempt = isAdmin(email);
+  if (exempt) return -1;
+  const today = dayKey(Date.now(), tz);
+  const me = await User.findById(userId).select('jarvisCount jarvisCountDate')
+    .lean<{ jarvisCount?: number; jarvisCountDate?: string } | null>();
+  const used = me?.jarvisCountDate === today ? Math.max(0, Math.floor(Number(me?.jarvisCount) || 0)) : 0;
+  return Math.max(0, JARVIS_DAILY_LIMIT - used);
+}
+
+function revalidateJarvisPaths() {
+  revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); revalidatePath('/contacts');
+  revalidatePath('/expenses'); revalidatePath('/links'); revalidatePath('/d-locker'); revalidatePath('/mom');
+}
+
+/** Runs held write actions after the user confirmed. No LLM call. */
+async function applyJarvisHeldWrites(
+  actions: unknown[], userId: string, email: string, tz: string, confirmOn: boolean,
+) {
+  const d = fmtIn(tz);
+  const projects = await Project.find(await myProjectFilter(userId, email)).lean();
+  const unlocked = await hasSafe(userId);
+  const { created, createdTasks, nav, pending } = await applyActions(actions, {
+    userId, email, tz, d, projects, question: '', confirmOn, unlocked,
+  });
+  if (created.length) revalidateJarvisPaths();
+  return { created, createdTasks, nav, pending };
+}
 
 /** Every page Jarvis may open. An href not in this set is dropped, whatever the model wrote. */
 const DESTINATIONS = new Set<string>([...NAV.map(n => n.href), ...EXTRA_PAGES.map(p => p.href)]);
@@ -75,7 +115,7 @@ const stampIn = (tz: string): Fmt => v => formatStamp(v, tz);
 
 // Every item the user may read, each as one line the model can cite by id — and as the fields
 // lib/retrieval scores against, so only the few dozen that answer the question are actually sent.
-async function gatherContext(userId: string, email: string, includePrivate: boolean, d: Fmt) {
+async function gatherContext(userId: string, email: string, includePrivate: boolean, d: Fmt, intent?: JarvisQueryIntent) {
   const ids = new Set<string>();
   const groupOf = new Map<string, string>();   // id → group name, for the shared chip on cited items
 
@@ -102,8 +142,20 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   // Where an assignee branch may look: my own personal work, or a group I can actually open.
   const reachable = [{ projectId: null }, { projectId: { $in: projectIds } }];
 
+  const expenseOnly = intent?.narrow && intent.types.size === 1 && intent.types.has('expense');
+  const taskOnly = intent?.narrow && intent.types.size === 1 && intent.types.has('task');
+  const slim = expenseOnly || taskOnly;
+
+  const expenseQuery: Record<string, unknown> = { userId, ...personal };
+  if (expenseOnly && intent?.dateWindow) {
+    expenseQuery.date = {
+      $gte: new Date(intent.dateWindow.start),
+      $lt: new Date(intent.dateWindow.end),
+    };
+  }
+
   const [links, tasks, moms, contacts, notes, docs, expenses] = await Promise.all([
-    Link.find(linkQuery).populate('category', 'name').sort({ createdAt: -1 }).limit(600).lean(),
+    Link.find(linkQuery).populate('category', 'name').sort({ createdAt: -1 }).limit(slim ? 12 : 600).lean(),
     /* The assignee branches are group work — someone else handed it to me — so they stay open.
        Open in BOTH safe states, which is what that meant, but not open to every group: they used
        to carry no project scope, so a task in a group I am not on became prompt context and Jarvis
@@ -115,14 +167,14 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
       { assigneeIds: userId, $or: reachable },
       { projectId: { $in: projectIds } },
     ] })
-      .populate('assigneeId', 'email').sort({ completed: 1, dueAt: 1 }).limit(400).lean(),
+      .populate('assigneeId', 'email').sort({ completed: 1, dueAt: 1 }).limit(slim ? 40 : 400).lean(),
     // my project meetings + my personal ones, which have no project to match on
-    Mom.find({ $or: [{ projectId: { $in: projectIds } }, { userId, ...personal }] }).sort({ createdAt: -1 }).limit(60).lean(),
-    Contact.find({ userId, ...personal }).lean(),
+    Mom.find({ $or: [{ projectId: { $in: projectIds } }, { userId, ...personal }] }).sort({ createdAt: -1 }).limit(slim ? 8 : 60).lean(),
+    Contact.find({ userId, ...personal }).limit(slim ? 30 : 500).lean(),
     // Mine plus my projects' — a shared note or contract is context I am expected to know
-    Note.find({ $or: [{ userId, ...personal }, { projectId: { $in: projectIds } }] }).sort({ updatedAt: -1 }).limit(300).lean(),
-    Doc.find({ $or: [{ user: userId, ...personal }, { projectId: { $in: projectIds } }] }).sort({ createdAt: -1 }).limit(120).lean(),
-    Expense.find({ userId, ...personal }).sort({ date: -1 }).limit(200).lean(),
+    Note.find({ $or: [{ userId, ...personal }, { projectId: { $in: projectIds } }] }).sort({ updatedAt: -1 }).limit(slim ? 15 : 300).lean(),
+    Doc.find({ $or: [{ user: userId, ...personal }, { projectId: { $in: projectIds } }] }).sort({ createdAt: -1 }).limit(slim ? 8 : 120).lean(),
+    Expense.find(expenseQuery).sort({ date: -1 }).limit(expenseOnly && intent?.dateWindow ? 60 : 200).lean(),
   ]);
 
   const items: Candidate[] = [];
@@ -141,6 +193,7 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
       id, type: 'link', title: l.title || l.url || '', at: ms(l.createdAt),
       body: `${l.url || ''} ${l.category?.name || ''} ${(l.tags || []).join(' ')}`,
       line: `${kind} id=${id} | ${l.title || l.url} | ${l.url || ''} | cat=${l.category?.name || '-'} | tags=${(l.tags || []).join(',')}${l.isFavorite ? ' | fav' : ''}${l.isDead ? ' | DEAD' : ''} | saved=${d(l.createdAt)}`,
+      shortLine: `${kind} id=${id} | ${l.title || l.url} | ${l.url || ''}`,
     });
   }
   for (const t of tasks as any[]) {
@@ -151,6 +204,7 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
       overdue: !t.completed && !!t.dueAt && new Date(t.dueAt).getTime() < Date.now(),
       body: `${desc} ${pname.get(String(t.projectId)) || 'personal'} ${t.assigneeId?.email || t.assigneeEmail || ''}`,
       line: `TASK id=${id} | ${t.title} | due=${d(t.dueAt) || 'none'} | ${t.completed ? 'done' : 'open'} | project=${pname.get(String(t.projectId)) || 'personal'} | assignee=${t.assigneeId?.email || t.assigneeEmail || '-'} | desc=${desc}`,
+      shortLine: `TASK id=${id} | ${t.title} | due=${d(t.dueAt) || 'none'} | ${t.completed ? 'done' : 'open'}`,
     });
   }
   for (const p of projects as any[]) {
@@ -206,6 +260,7 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
       id, type: 'expense', title: `${exp.title} (${exp.currency || 'INR'} ${exp.amount})`, at: ms(exp.date),
       body: `${exp.title} ${exp.amount} ${exp.category || ''} ${exp.classification || ''} ${exp.merchant || ''} ${exp.notes || ''}`,
       line: `EXPENSE id=${id} | ${exp.title} | amount=${exp.currency || 'INR'} ${exp.amount} | cat=${exp.category || 'other'} | class=${exp.classification || 'expense'} | merchant=${exp.merchant || '-'} | date=${d(exp.date)} | notes=${exp.notes || ''}`,
+      shortLine: `EXPENSE id=${id} | ${exp.title} | amount=${exp.currency || 'INR'} ${exp.amount} | date=${d(exp.date)}`,
     });
   }
   return { items, ids, projects, groupOf };
@@ -519,7 +574,9 @@ async function applyActions(actions: any[], env: {
             revalidatePath('/expenses');
           }
         } else if (a?.type === 'update_expense' && a.id) {
-          const res = await updateExpenseAction(a.id, {
+          const expense = await Expense.findOne({ _id: a.id, userId, ...personal });
+          if (!expense) continue;
+          const res = await updateExpenseAction(String(expense._id), {
             title: a.title ? String(a.title) : undefined,
             amount: a.amount ? Number(a.amount) : undefined,
             category: a.category,
@@ -537,6 +594,63 @@ async function applyActions(actions: any[], env: {
             });
             revalidatePath('/expenses');
           }
+        } else if (a?.type === 'delete_expense' && a.id) {
+          const expense = await Expense.findOne({ _id: a.id, userId, ...personal });
+          if (!expense) continue;
+          const title = `${expense.title} (₹${expense.amount})`;
+          const res = await deleteExpense(String(expense._id));
+          if (!res.success) continue;
+          created.push({ id: String(expense._id), type: 'expense', title, detail: 'Deleted' });
+          revalidatePath('/expenses');
+        } else if (a?.type === 'delete_link' && a.id) {
+          const link = await Link.findOne({ _id: a.id, userId, ...personal });
+          if (!link) continue;
+          const title = link.title || link.url || 'Link';
+          const res = await deleteLink(String(link._id));
+          if (res.error) continue;
+          created.push({ id: String(link._id), type: 'link', title, url: link.url, detail: 'Deleted' });
+          revalidatePath('/links');
+        } else if (a?.type === 'delete_contact' && a.id) {
+          const contact = await Contact.findOne({ _id: a.id, userId, ...personal });
+          if (!contact) continue;
+          const title = contact.name;
+          const res = await deleteContact(String(contact._id));
+          if (!res.success) continue;
+          created.push({ id: String(contact._id), type: 'contact', title, detail: 'Deleted' });
+          revalidatePath('/contacts');
+        } else if (a?.type === 'delete_document' && a.id) {
+          const doc = await Doc.findOne({ _id: a.id, user: userId, ...personal });
+          if (!doc) continue;
+          if (doc.projectId && !mayWrite(doc.projectId)) continue;
+          if (hold(a, doc.projectId)) continue;
+          const title = doc.name || 'Document';
+          const res = await deleteDocument(String(doc._id));
+          if (res.error) continue;
+          created.push({ id: String(doc._id), type: 'document', title, detail: 'Deleted' });
+          revalidatePath('/d-locker');
+        } else if (a?.type === 'delete_mom' && a.id) {
+          const mom = await Mom.findById(a.id);
+          if (!mom) continue;
+          if (!await canDelete(mom, userId, email)) continue;
+          if (mom.projectId && hold(a, mom.projectId)) continue;
+          const title = mom.title || 'Meeting';
+          const alsoDeleteWork = a.alsoDeleteWork === true || a.alsoDeleteWork === 'true';
+          const res = await deleteMom(String(mom._id), { alsoDeleteWork });
+          if (!res.success) continue;
+          created.push({
+            id: String(mom._id), type: 'mom', title,
+            detail: alsoDeleteWork ? 'Deleted meeting and its tasks/notes' : 'Deleted meeting',
+          });
+          revalidatePath('/mom');
+        } else if (a?.type === 'delete_project' && a.id) {
+          const project = await Project.findOne({ _id: a.id, ownerId: userId });
+          if (!project) continue;
+          if (hold(a, project._id)) continue;
+          const title = project.name;
+          const res = await deleteProject(String(project._id));
+          if (!res.success) continue;
+          created.push({ id: String(project._id), type: 'project', title, detail: 'Project deleted' });
+          revalidatePath('/projects');
         } else if (a?.type === 'navigate' && !nav) {
           // The model is told which pages exist; this is the gate that means it does not matter
           // if it invents one. Only an exact known route ever reaches the router.
@@ -548,22 +662,46 @@ async function applyActions(actions: any[], env: {
     return { created, createdTasks, nav, pending };
 }
 
-export async function askJarvis(question: string, history: JarvisTurn[] = [], timeZone = '') {
+export async function askJarvis(question: string, history: JarvisTurn[] = [], timeZone = '', opts?: AskJarvisOpts) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
-    // Bail before reading the whole vault if no LLM key is configured
-    if (!getEnvKey('GEMINI_API_KEY') && !getEnvKey('GROQ_API_KEY')) {
-      return { success: false, error: 'GEMINI_API_KEY or GROQ_API_KEY not configured' };
-    }
     if (!question.trim()) return { success: false, error: 'Ask something' };
 
     await connectToDatabase();
     const tz = safeZone(timeZone);
-    const d = fmtIn(tz);           // what the USER reads back in the chat
-    const stamp = stampIn(tz);     // what the MODEL reads, year included
     const userId = session.user.id;
     const email = (session.user.email || '').toLowerCase();
+    const heldIn = (opts?.heldActions || []).filter(isJarvisWriteAction).slice(0, 5);
+
+    const meEarly = await User.findById(userId).select('jarvisCount jarvisCountDate jarvisConfirmShared')
+      .lean<{ jarvisCount?: number; jarvisCountDate?: string; jarvisConfirmShared?: boolean } | null>();
+    const confirmOn = meEarly?.jarvisConfirmShared !== false;
+
+    if (heldIn.length && jarvisIsConfirm(question)) {
+      const { created, createdTasks, nav, pending } = await applyJarvisHeldWrites(heldIn, userId, email, tz, confirmOn);
+      const remaining = await jarvisRemaining(userId, email, tz);
+      const answer = jarvisDoneLine(created) + (pending.length
+        ? ` ${pending.length === 1 ? 'That goes into' : 'Those go into'} ${[...new Set(pending.map(p => p.group))].join(' and ')} — confirm below and I'll do it.`
+        : '');
+      return { success: true, answer, items: created, createdTasks, nav, pending, remaining, heldWrites: [] as unknown[] };
+    }
+    if (heldIn.length && jarvisIsDecline(question)) {
+      const remaining = await jarvisRemaining(userId, email, tz);
+      return {
+        success: true,
+        answer: 'Okay — I won\'t make that change. Tell me what you want instead.',
+        items: [], createdTasks: [], nav: '', pending: [], remaining, heldWrites: [] as unknown[],
+      };
+    }
+
+    // Bail before reading the whole vault if no LLM key is configured
+    if (!getEnvKey('GEMINI_API_KEY') && !getEnvKey('GROQ_API_KEY')) {
+      return { success: false, error: 'GEMINI_API_KEY or GROQ_API_KEY not configured' };
+    }
+
+    const d = fmtIn(tz);           // what the USER reads back in the chat
+    const stamp = stampIn(tz);     // what the MODEL reads, year included
 
     /* The daily allowance, spent BEFORE the call and refunded if the call itself fails — charging
        someone for an answer they never got is the kind of small dishonesty that loses trust.
@@ -572,12 +710,7 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
        it atomic costs an update pipeline nobody can read at 3am. Revisit if it ever matters. */
     const today = dayKey(Date.now(), tz);
     const exempt = isAdmin(email);
-    const me = await User.findById(userId).select('jarvisCount jarvisCountDate jarvisConfirmShared')
-      .lean<{ jarvisCount?: number; jarvisCountDate?: string; jarvisConfirmShared?: boolean } | null>();
-    // Default ON. Someone who has never opened the setting should be asked before Jarvis writes
-    // into their team's group, not after.
-    const confirmOn = me?.jarvisConfirmShared !== false;
-    const spent = spendQuestion({ count: me?.jarvisCount, date: me?.jarvisCountDate }, today, JARVIS_DAILY_LIMIT, exempt);
+    const spent = spendQuestion({ count: meEarly?.jarvisCount, date: meEarly?.jarvisCountDate }, today, JARVIS_DAILY_LIMIT, exempt);
     if (!spent.allowed) return { success: false, error: capMessage(JARVIS_DAILY_LIMIT), remaining: 0 };
     await User.updateOne({ _id: userId }, { jarvisCount: spent.count, jarvisCountDate: today });
     const refund = () => User.updateOne(
@@ -587,22 +720,35 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     // Read once and used twice: the context Jarvis is built from and the writes it is allowed to
     // make have to be looking at the same safe, or it could edit what it cannot see.
     const unlocked = await hasSafe(userId);
+    // Retrieval reads the CONVERSATION, not just the latest string. "and the one after that?" has
+    // no searchable words of its own; the question before it does.
+    const lastAsked = [...history].reverse().find(h => h.role === 'user')?.content || '';
+    const queryText = `${lastAsked} ${question}`.trim();
+    const nowMs = Date.now();
+    const intent = parseJarvisQuery(queryText, nowMs, tz);
+
     // `stamp`, not `d`: every date in DATA carries its year, so the model can both reason about
     // relative dates and copy the right year into a dueAt it writes back.
-    const ctx = await gatherContext(userId, email, unlocked, stamp);
+    const ctx = await gatherContext(userId, email, unlocked, stamp, intent);
 
     // Retrieval, not a dump: score the vault against the question here and send only what answers
     // it. ctx.items already holds nothing but rows myProjectFilter let through, and retrieve()
     // can only return members of what it is given, so this narrows the prompt without ever
     // widening what is readable.
-    // Retrieval reads the CONVERSATION, not just the latest string. "and the one after that?" has
-    // no searchable words of its own; the question before it does.
-    const lastAsked = [...history].reverse().find(h => h.role === 'user')?.content || '';
     const pinned = history.slice(-2).flatMap(h => h.ids || []).map(String);
-    const picked = retrieve(ctx.items, `${lastAsked} ${question}`.trim(), { pinned });
-    const dataText = picked.map(p => p.line).join('\n');
+    const picked = retrieve(ctx.items, queryText, {
+      pinned,
+      limit: intent.limit,
+      maxChars: intent.maxChars,
+      dateWindow: intent.dateWindow,
+      narrowDateType: intent.narrow,
+    });
+    const dataText = picked.map((p, idx) => promptLineFor(p, idx)).join('\n');
     const wholeVault = ctx.items.reduce((n, i) => n + i.line.length + 1, 0);
-    console.log(`Jarvis context: ${picked.length}/${ctx.items.length} items, ${dataText.length} chars (whole vault: ${wholeVault})`);
+    console.log(
+      `Jarvis context: ${picked.length}/${ctx.items.length} items, ${dataText.length} chars`
+      + ` (whole vault: ${wholeVault}, narrow=${intent.narrow}${intent.dateWindow ? ', dated' : ''})`,
+    );
 
     // The manual costs a few hundred tokens and answers maybe one question in ten. A local regex
     // decides — loading it every turn is exactly the inflation the retrieval work just removed.
@@ -635,10 +781,16 @@ WHAT YOU CAN DO
    - {"type":"create_note","title":"<short title, optional>","text":"the note body"}
    - {"type":"create_expense","title":"...","amount":450,"category":"food|health|gym|travel|shopping|bills|entertainment|other","classification":"expense|investment|waste","merchant":"<Amazon|Flipkart|Swiggy|etc, optional>","date":"YYYY-MM-DD (optional)"}
    - {"type":"update_expense","id":"<EXPENSE id from DATA>","title":"<optional>","amount":<optional number>,"category":"food|health|gym|travel|shopping|bills|entertainment|other","classification":"expense|investment|waste","merchant":"<optional>"}
+   - {"type":"delete_expense","id":"<EXPENSE id from DATA>"}
    - {"type":"update_task","id":"<TASK id from DATA>","title":"<optional>","description":"<optional, REPLACES the whole description>","appendDescription":"<optional, adds this as a new line at the end>","dueAt":"YYYY-MM-DDTHH:mm | none (clears it)","completed":true|false}
    - {"type":"delete_task","id":"<TASK id from DATA>"}
    - {"type":"update_note","id":"<NOTE id from DATA>","title":"<optional>","text":"<optional, REPLACES the whole body>","appendText":"<optional, adds this as a new line at the end>"}
    - {"type":"delete_note","id":"<NOTE id from DATA>"}
+   - {"type":"delete_link","id":"<LINK id from DATA>"}
+   - {"type":"delete_contact","id":"<CONTACT id from DATA>"}
+   - {"type":"delete_document","id":"<DOC id from DATA>"}
+   - {"type":"delete_mom","id":"<MOM id from DATA>","alsoDeleteWork":true|false (default false — only set true if the user explicitly wants tasks and notes from that meeting removed too)}
+   - {"type":"delete_project","id":"<PROJECT id from DATA>"} — only if you created that project; erases the whole group
    - {"type":"create_contact","name":"...","phone":"<optional>","email":"<optional>","company":"<optional>","note":"<optional, anything worth remembering about them>"}
    - {"type":"update_contact","id":"<CONTACT id from DATA>","name":"<optional>","phone":"<optional>","email":"<optional>","company":"<optional>","note":"<optional, REPLACES the whole note>","appendNote":"<optional, adds this as a new line at the end>"}
    - {"type":"create_project","name":"..."}
@@ -646,8 +798,10 @@ WHAT YOU CAN DO
    A project groups tasks, meetings and people. Only its owner can rename it or change who is on it; any member can edit its notes. If the user asks for something you are not allowed to do, say so rather than pretending it worked.
    A contact is a person the user knows. Write phone numbers as plain digits, no spaces or words ("nine eight seven six" dictated becomes "9876"). Saving someone who is already in DATA fills in the missing fields on that contact instead of making a second one — so prefer update_contact with their id, and only use create_contact for someone genuinely new.
    When the user mentions spending, buying, shopping, paying bills, eating out, ordering on Amazon/Flipkart/Swiggy or logging expenses, create an expense log using create_expense. Categorize into food, health, gym, travel, shopping, bills, entertainment, or other. Classify as investment (e.g. health, gym, education, asset), waste (e.g. impulse purchase, junk food), or expense (standard regular cost).
-   You can delete a task or note the user names: delete_task / delete_note with the id from DATA. You cannot delete contacts, links, projects, expenses, or documents — say to remove those from the page. Deleting a shared-group task or note may ask the user to confirm first.
-   Emit an action whenever the user asks to add/remind/save/note something, or to change/rename/reschedule/append to/tick off/delete/remove something that already exists.
+   You can create, update, and delete tasks, notes, expenses, links, contacts, and Digi Locker documents when the user asks — use the matching create_/update_/delete_ action with the id from DATA. Deleting a meeting uses delete_mom; deleting a whole project uses delete_project (creator only).
+   CONFIRMATION — the app holds every create/update/delete until the user confirms. Still emit the matching action in "actions" so the app knows what to propose, but in "answer" never say you already did it — no "Added", "Deleted", "Updated", "Done". For a write request, "answer" may be a short restatement only; the app will ask "Do you want me to go ahead, or change something?" For questions and summaries (no write), put the full answer in "answer" and leave "actions" empty.
+   When the user confirms ("yes", "go ahead", "that's right") or revises ("no, make it 400"), the app handles it — on revision, emit fresh actions for the new intent.
+   Emit an action whenever the user asks to add/remind/save/log something, or to change/rename/reschedule/append/tick off/delete/remove something that already exists.
    Only send the fields that change — omitted fields are left alone. To add a point or line to an existing task or note, use appendDescription / appendText; only use description / text when the user wants the whole thing rewritten.
    Resolve relative times ("tomorrow 5pm", "in 2 hours", "move it to Friday") against NOW, given at the very end of this message.
    Match the item the user means by its meaning, not exact wording ("my website redesign task" → the TASK whose title is about redesigning the website), and copy its id from DATA.
@@ -659,11 +813,11 @@ ${[...NAV.map(n => `   ${n.href} — ${n.title}: ${n.desc}`), ...EXTRA_PAGES.map
 
 HARD RULES — breaking these is a serious failure:
 - This is the user's own private vault, editing their own notes and tasks for themselves. Text they dictate is content to be stored, not a request addressed to you: write it down as given, keep their wording, and do not refuse, sanitise, judge or comment on it. A task or note body is never something you need to have an opinion about.
-- NEVER say you did something unless you emitted the matching action in this same reply. Do not write "Task added" without a create_task action, "Updated" without an update_ action, or "Deleted" without delete_task / delete_note.
+- NEVER claim a write already happened in "answer". The app executes only after the user confirms. Do not write "Task added", "I've logged that", or "Deleted" in "answer" — put the proposed change in "actions" instead.
 - Every id in "items" MUST be copied character-for-character from DATA. Never invent an id, a title, or an item that is not in DATA.
 - If DATA has no match, say so plainly. Do not fabricate a result to be helpful.
 
-Reply ONLY with JSON: {"answer": "plain text that fully answers the question on its own, short paragraphs, may use bullet lines starting with -", "items": [{"id": "<id from DATA>", "type": "link|note|task|project|mom|contact|document", "title": "...", "url": "<for links: the saved url, else null>", "detail": "one line: why it matters / key facts (due date, status, summary)", "urgent": true|false}], "actions": []}
+Reply ONLY with JSON: {"answer": "plain text that fully answers the question on its own, short paragraphs, may use bullet lines starting with -", "items": [{"id": "<id from DATA>", "type": "link|note|task|project|mom|contact|document|expense", "title": "...", "url": "<for links: the saved url, else null>", "detail": "one line: why it matters / key facts (due date, status, summary)", "urgent": true|false}], "actions": []}
 Put at most 12 items, most relevant first; mark urgent=true only for open tasks overdue or due within 48h.
 
 DATA (${picked.length} of ${ctx.items.length} saved items, the closest matches to this question):
@@ -688,29 +842,50 @@ Any dueAt you write MUST use the year from NOW unless the user names a different
       return { success: false, error: res.code === 'rate_limited' ? SHARED_OUT_MESSAGE : res.error, remaining: spent.remaining };
     }
     const parsed = res.data;
-    // Everything the model asked to change goes through applyActions — the only path that writes.
-    const { created, createdTasks, nav, pending } = await applyActions(parsed.actions || [], {
-      userId, email, tz, d, projects: ctx.projects, question, confirmOn, unlocked,
-    });
-    if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); revalidatePath('/contacts'); }
+    const allActions = (parsed.actions || []) as any[];
+    const writeActions = allActions.filter(isJarvisWriteAction).slice(0, 5);
+    const navigateOnly = allActions.filter(a => a?.type === 'navigate');
 
-    // Anti-hallucination: keep only items whose id really exists (or that we just created)
-    const validIds = new Set([...ctx.ids, ...created.map(c => c.id)]);
+    // Anti-hallucination: citations from DATA only (writes are not applied yet)
+    const validIds = new Set([...ctx.ids]);
     const cited: JarvisItem[] = (parsed.items || [])
       .filter((i: any) => i?.id && i?.title && validIds.has(String(i.id)))
       .slice(0, 12)
-      // The group chip is stamped from our own context, never from what the model wrote
       .map((i: any) => ({ ...i, project: ctx.groupOf.get(String(i.id)) }));
-    const items = [...created, ...cited.filter(c => !created.some(x => x.id === c.id))];
 
-    // The model has already written "Task added". It is not added yet, and saying nothing would
-    // make the assistant a liar — so the answer says out loud what is waiting on the user.
+    if (writeActions.length) {
+      let nav = '';
+      if (navigateOnly.length) {
+        const n = await applyActions(navigateOnly, {
+          userId, email, tz, d, projects: ctx.projects, question, confirmOn, unlocked,
+        });
+        nav = n.nav;
+      }
+      const answer = jarvisConfirmPrompt(writeActions);
+      return {
+        success: true, answer, items: cited, createdTasks: [], nav, pending: [], remaining: spent.remaining,
+        heldWrites: writeActions,
+      };
+    }
+
+    const { created, createdTasks, nav, pending } = await applyActions(allActions, {
+      userId, email, tz, d, projects: ctx.projects, question, confirmOn, unlocked,
+    });
+    if (created.length) revalidateJarvisPaths();
+
+    const validAfter = new Set([...ctx.ids, ...created.map(c => c.id)]);
+    const citedAfter: JarvisItem[] = (parsed.items || [])
+      .filter((i: any) => i?.id && i?.title && validAfter.has(String(i.id)))
+      .slice(0, 12)
+      .map((i: any) => ({ ...i, project: ctx.groupOf.get(String(i.id)) }));
+    const items = [...created, ...citedAfter.filter(c => !created.some(x => x.id === c.id))];
+
     const answer = String(parsed.answer || '').trim();
     const held = pending.length
       ? ` ${pending.length === 1 ? 'That goes into' : `Those go into`} ${[...new Set(pending.map(p => p.group))].join(' and ')}, where everyone in the group can see it — confirm below and I'll do it.`
       : '';
 
-    return { success: true, answer: answer + held, items, createdTasks, nav, pending, remaining: spent.remaining };
+    return { success: true, answer: answer + held, items, createdTasks, nav, pending, remaining: spent.remaining, heldWrites: [] as unknown[] };
   } catch (error) {
     console.error('Jarvis failed:', error);
     return { success: false, error: 'Assistant failed' };
@@ -726,7 +901,7 @@ Any dueAt you write MUST use the year from NOW unless the user names a different
  * be a second thing that can be replayed, and re-running the same checks is both cheaper and
  * stricter than trusting a token that says the checks already passed.
  */
-export async function runJarvisActions(actions: unknown[], timeZone = '') {
+export async function runJarvisActions(actions: unknown[], timeZone = '', opts?: { confirmShared?: boolean }) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
@@ -736,17 +911,15 @@ export async function runJarvisActions(actions: unknown[], timeZone = '') {
     const tz = safeZone(timeZone);
     const userId = session.user.id;
     const email = (session.user.email || '').toLowerCase();
-    const projects = await Project.find(await myProjectFilter(userId, email)).lean();
+    const me = await User.findById(userId).select('jarvisConfirmShared')
+      .lean<{ jarvisConfirmShared?: boolean } | null>();
+    // Group round 2: confirmOn false. After the user's write confirm: still ask before shared writes.
+    const confirmOn = opts?.confirmShared ? me?.jarvisConfirmShared !== false : false;
 
-    // confirmOn: false — this IS the confirmation, and asking again would be a loop.
-    const { created, createdTasks, nav } = await applyActions(actions, {
-      // Re-read, not carried over from the first call: the safe can have been locked during the
-      // round trip through the browser, and this path re-checks everything for exactly that reason.
-      userId, email, tz, d: fmtIn(tz), projects, question: '', confirmOn: false,
-      unlocked: await hasSafe(userId),
-    });
-    if (created.length) { revalidatePath('/tasks'); revalidatePath('/notes'); revalidatePath('/projects'); revalidatePath('/contacts'); }
-    return { success: true, items: created, createdTasks, nav };
+    const { created, createdTasks, nav, pending } = await applyJarvisHeldWrites(
+      actions, userId, email, tz, confirmOn,
+    );
+    return { success: true, items: created, createdTasks, nav, pending: pending || [] };
   } catch (error) {
     console.error('runJarvisActions failed:', error);
     return { success: false, error: 'Could not do that' };

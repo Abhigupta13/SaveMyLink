@@ -27,7 +27,7 @@ import { VERBS, phrase, sinceDays, DEFAULT_DAYS, fromMeeting } from '../src/lib/
 import { projectNameMap, sharedLabel, needsShareNotice, memberCount } from '../src/lib/visibility.ts';
 import { resolveRange, MAX_SPAN_DAYS } from '../src/lib/adminRange.ts';
 import { INTRO_STEPS, introProgress, isIntroStep } from '../src/lib/intro.ts';
-import { AUDIO_MODELS, audioMime } from '../src/lib/geminiAudio.ts';
+import { AUDIO_MODELS, audioMime } from '../src/lib/geminiAudioConfig.ts';
 import { chooseHandover, isPurgeDue } from '../src/lib/accountDeletion.ts';
 import { retrieve, terms } from '../src/lib/retrieval.ts';
 import { spendQuestion, dayKey, capMessage, SHARED_OUT_MESSAGE } from '../src/lib/jarvisLimit.ts';

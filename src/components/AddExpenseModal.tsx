@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { X, Plus } from 'lucide-react';
-import { createExpense, updateExpense, ExpenseInput } from '@/actions/expense';
+import { X, Plus, Trash2 } from 'lucide-react';
+import { createExpense, updateExpense, deleteExpense, ExpenseInput } from '@/actions/expense';
 import { ExpenseCategory } from '@/lib/models/Expense';
 import { useDialog, dialogProps } from '@/components/ui/useDialog';
+import { useFeedback } from '@/components/ui/Feedback';
 
 interface ExpenseItem {
   _id: string;
@@ -58,6 +59,7 @@ export default function AddExpenseModal({
   const [projectId, setProjectId] = useState(defaultProject);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { confirm, toast } = useFeedback();
 
   useDialog(isOpen, onClose);
 
@@ -134,6 +136,27 @@ export default function AddExpenseModal({
       if (!res.success) {
         setError(res.error || 'Failed to save expense');
       } else {
+        onSuccess();
+        onClose();
+      }
+    } catch (err: any) {
+      setError(err.message || 'Something went wrong');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!initialData) return;
+    if (!(await confirm({ title: 'Delete this expense entry?', danger: true, confirmLabel: 'Delete' }))) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await deleteExpense(initialData._id);
+      if (!res.success) {
+        setError(res.error || 'Failed to delete expense');
+      } else {
+        toast('Expense entry deleted', 'info');
         onSuccess();
         onClose();
       }
@@ -306,7 +329,33 @@ export default function AddExpenseModal({
 
 
           {/* Submit Action */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+            {initialData ? (
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={loading}
+                style={{
+                  padding: '9px 14px',
+                  borderRadius: '12px',
+                  background: 'transparent',
+                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                  color: 'var(--accent-text-danger, #ef4444)',
+                  fontWeight: 700,
+                  fontSize: '0.85rem',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <Trash2 size={15} />
+                Delete
+              </button>
+            ) : (
+              <span />
+            )}
+            <div style={{ display: 'flex', gap: '10px' }}>
             <button
               type="button"
               onClick={onClose}
@@ -339,6 +388,7 @@ export default function AddExpenseModal({
               <Plus size={16} />
               <span>{loading ? 'Saving...' : initialData ? 'Update Entry' : 'Save Expense'}</span>
             </button>
+            </div>
           </div>
         </form>
       </div>

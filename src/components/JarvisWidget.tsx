@@ -8,6 +8,10 @@ import {
   askJarvis, transcribeQuestion, getJarvisSessions, getJarvisSession, saveJarvisSession,
   deleteJarvisSession, runJarvisActions, JarvisItem, JarvisTurn, Msg, JarvisSessionMeta, JarvisPending,
 } from '@/actions/jarvis';
+import {
+  jarvisIsConfirm, jarvisIsDecline, jarvisLooksLikeRevision, HELD_NUDGE,
+} from '@/lib/jarvisWriteConfirm';
+import { capMessage, JARVIS_DAILY_LIMIT, SHARED_OUT_MESSAGE } from '@/lib/jarvisLimit';
 import { pickVoice } from '@/lib/voice';
 import { mergeFinals, joinTranscripts } from '@/lib/transcript';
 import { syncTask } from '@/lib/taskNotifications';
@@ -20,6 +24,8 @@ type Mode = 'idle' | 'capturing';
 type Tab = 'chat' | 'sessions';
 
 const GREETING = "What's on your mind?";
+/** If the user says nothing after a create/update/delete proposal, apply it anyway. */
+const HELD_AUTO_CONFIRM_MS = 5000;
 const BASE_SUGGESTIONS = ['What is urgent today?', 'What did I save this week?'];
 
 /** After you've spoken, this much quiet auto-sends. No speech yet → keep listening. */
@@ -51,6 +57,9 @@ const when = (iso: string) => {
   return `${formatDay(t)} · ${formatTime(t)}`;
 };
 
+/** Round-trip time in seconds, one decimal, for the small label under assistant replies. */
+const responseSec = (t0: number) => Math.max(0.1, Math.round((performance.now() - t0) / 100) / 10);
+
 function WisprWaveform({ active }: { active: boolean }) {
   if (!active) return null;
   return (
@@ -81,6 +90,13 @@ export default function JarvisWidget() {
   const [sessions, setSessions] = useState<JarvisSessionMeta[]>([]);
   const [left, setLeft] = useState<number | null>(null);   // questions left today; null = not counted / unknown
   const [pending, setPending] = useState<JarvisPending[]>([]);   // writes into a group, waiting on a yes
+  const [heldWrites, setHeldWrites] = useState<unknown[]>([]); // create/update/delete, waiting on confirm
+  const heldWritesRef = useRef<unknown[]>([]);
+  const heldAutoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Bumped whenever the 5s auto-confirm is cancelled — stale timeouts must not apply. */
+  const heldAutoEpoch = useRef(0);
+  const applyingHeldRef = useRef(false);
+  const busyRef = useRef(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -111,14 +127,19 @@ export default function JarvisWidget() {
   const speakingRef = useRef(false);     // our own flag: speechSynthesis.speaking gets stuck in Chrome
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
   const msgsRef = useRef<Msg[]>([]);
-  msgsRef.current = msgs;
   const sessionIdRef = useRef<string | null>(null);   // null until this conversation's first save
   const openRef = useRef(false);
-  openRef.current = open;
   const loopRef = useRef(false);              // conversation mode: reopen the mic after each answer
+  const sharedOutRef = useRef(false);         // provider quota empty — do not keep calling the LLM
   const listenAgainRef = useRef<() => void>(() => {});   // set below; breaks the ask ⇄ startRecognition cycle
   const setModeBoth = (m: Mode) => { modeRef.current = m; setMode(m); };
   const setHeardBoth = (v: boolean) => { heardRef.current = v; setHeard(v); };
+
+  useEffect(() => {
+    heldWritesRef.current = heldWrites;
+    msgsRef.current = msgs;
+    openRef.current = open;
+  }, [heldWrites, msgs, open]);
 
   const hasSR = typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
   const hasTTS = typeof window !== 'undefined' && 'speechSynthesis' in window;
@@ -150,6 +171,14 @@ export default function JarvisWidget() {
   }, [open]);
 
   const clearSilence = () => { if (silenceRef.current) { clearTimeout(silenceRef.current); silenceRef.current = null; } };
+
+  const clearHeldAuto = useCallback(() => {
+    if (heldAutoRef.current) {
+      clearTimeout(heldAutoRef.current);
+      heldAutoRef.current = null;
+    }
+    heldAutoEpoch.current += 1;
+  }, []);
 
   const stopListening = useCallback(() => {
     stoppingRef.current = true;
@@ -186,34 +215,150 @@ export default function JarvisWidget() {
 
   // ---------- asking ----------
   const introMarkedRef = useRef(false);   // the checklist's "Ask Jarvis" step, ticked once per mount
+  const finishHeldWrites = useCallback(async (actions: unknown[], userLine?: string) => {
+    clearHeldAuto();
+    if (userLine) setMsgs(m => [...m, { role: 'user', content: userLine }]);
+    setHeldWrites([]);
+    setBusy(true);
+    busyRef.current = true;
+    applyingHeldRef.current = true;
+    const t0 = performance.now();
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    let r: Awaited<ReturnType<typeof runJarvisActions>> = { success: false, error: 'Could not do that.' };
+    try {
+      r = await runJarvisActions(actions, tz, { confirmShared: true });
+    } catch {
+      r = { success: false, error: 'Could not do that.' };
+    } finally {
+      applyingHeldRef.current = false;
+      setBusy(false);
+      busyRef.current = false;
+    }
+    if (r.success) for (const t of r.createdTasks || []) syncTask(t);
+    const reply: Msg = r.success
+      ? { role: 'assistant', content: r.items?.length ? `Yes — ${r.items.map(i => i.detail || i.title).join('; ')}.` : 'Done.', items: r.items, responseSec: responseSec(t0) }
+      : { role: 'assistant', content: r.error || 'Could not do that.', responseSec: responseSec(t0) };
+    setMsgs(m => [...m, reply]);
+    if (r.success && r.pending?.length) { loopRef.current = false; setPending(r.pending); }
+    await speak(reply.content);
+    if (r.success && r.nav) {
+      loopRef.current = false; stopListening(); setOpen(false);
+      router.push(r.nav);
+      return;
+    }
+    // Write applied — stop the voice loop so side talk is not sent as a new AI question.
+    loopRef.current = false;
+    stopListening();
+  }, [router, speak, stopListening, clearHeldAuto]);
+
+  const finishHeldWritesRef = useRef(finishHeldWrites);
+  useEffect(() => {
+    finishHeldWritesRef.current = finishHeldWrites;
+  }, [finishHeldWrites]);
+
+  const scheduleHeldAutoConfirm = useCallback(() => {
+    clearHeldAuto();
+    const epoch = heldAutoEpoch.current;
+    heldAutoRef.current = setTimeout(() => {
+      if (epoch !== heldAutoEpoch.current) return;
+      if (applyingHeldRef.current || busyRef.current) return;
+      const actions = heldWritesRef.current;
+      if (!actions.length || !openRef.current) return;
+      finishHeldWritesRef.current(actions);
+    }, HELD_AUTO_CONFIRM_MS);
+  }, [clearHeldAuto]);
+
+  const refuseAsk = useCallback(async (question: string, error: string) => {
+    const last = msgsRef.current.at(-1);
+    if (last?.role === 'assistant' && last.content === error) {
+      stopListening();
+      return;
+    }
+    const t0 = performance.now();
+    setMsgs(m => [...m, { role: 'user', content: question }, { role: 'assistant', content: error, responseSec: responseSec(t0) }]);
+    loopRef.current = false;
+    stopListening();
+    await speak(error);
+  }, [speak, stopListening]);
+
   const ask = useCallback(async (text: string) => {
     const question = text.trim();
     if (!question) return;
+    clearHeldAuto();
     setQ('');
     finalRef.current = '';
     committedRef.current = '';
     stopSpeaking();
-    // The ids each turn cited ride along, so "add that one to my tasks" still has something to
-    // point at once retrieval stops sending the whole vault. The server only honours an id that
-    // is in the caller's own scope anyway.
+
+    if (sharedOutRef.current) {
+      await refuseAsk(question, SHARED_OUT_MESSAGE);
+      return;
+    }
+    if (left === 0) {
+      await refuseAsk(question, capMessage(JARVIS_DAILY_LIMIT));
+      return;
+    }
+
+    const held = heldWritesRef.current;
+    if (held.length && jarvisIsConfirm(question)) {
+      await finishHeldWrites(held, question);
+      return;
+    }
+    if (held.length && jarvisIsDecline(question)) {
+      const t0 = performance.now();
+      setHeldWrites([]);
+      setMsgs(m => [...m, { role: 'user', content: question }, { role: 'assistant', content: 'Okay — I won\'t make that change. Tell me what you want instead.', responseSec: responseSec(t0) }]);
+      await speak('Okay — tell me what you want instead.');
+      loopRef.current = true;
+      await new Promise(r => setTimeout(r, 900));
+      listenAgainRef.current();
+      return;
+    }
+    if (held.length && !jarvisLooksLikeRevision(question)) {
+      const t0 = performance.now();
+      setMsgs(m => [...m, { role: 'user', content: question }, { role: 'assistant', content: HELD_NUDGE, responseSec: responseSec(t0) }]);
+      await speak(HELD_NUDGE);
+      scheduleHeldAutoConfirm();
+      if (loopRef.current) listenAgainRef.current();
+      return;
+    }
+
+    // Revision — drop the pending write immediately so a stale 5s timer cannot apply the old one.
+    if (held.length) setHeldWrites([]);
+
     const history: JarvisTurn[] = msgsRef.current.map(m => ({ role: m.role, content: m.content, ids: m.items?.map(i => i.id) }));
     setMsgs(m => [...m, { role: 'user', content: question }]);
     setBusy(true);
+    busyRef.current = true;
+    const t0 = performance.now();
     const res = await askJarvis(question, history, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setBusy(false);
+    busyRef.current = false;
     // -1 means this account is not counted (an admin); undefined means the turn never reached the
     // counter at all. Neither is a number to show anyone.
     if (typeof res.remaining === 'number' && res.remaining >= 0) setLeft(res.remaining);
     if (res.success) for (const t of res.createdTasks || []) syncTask(t);
     if (res.success && !introMarkedRef.current) { introMarkedRef.current = true; markIntro('jarvis').catch(() => {}); }
+    if (res.success && res.heldWrites?.length) {
+      setHeldWrites(res.heldWrites);
+      loopRef.current = true;   // waiting on yes/no — reopen mic after Jarvis speaks
+    } else {
+      setHeldWrites([]);
+    }
     // A sheet is waiting on an answer — do not reopen the mic behind it
     if (res.success && res.pending?.length) { loopRef.current = false; setPending(res.pending); }
+    const sec = responseSec(t0);
     const reply: Msg = res.success
-      ? { role: 'assistant', content: res.answer || '…', items: res.items }
-      : { role: 'assistant', content: res.error || 'Something went wrong.' };
+      ? { role: 'assistant', content: res.answer || '…', items: res.items, responseSec: sec }
+      : { role: 'assistant', content: res.error || 'Something went wrong.', responseSec: sec };
     setMsgs(m => [...m, reply]);
     // A failed turn ends the loop — otherwise a rate limit would keep firing more requests at it
-    if (!res.success) loopRef.current = false;
+    if (!res.success) {
+      loopRef.current = false;
+      stopListening();
+      if (res.error === SHARED_OUT_MESSAGE) sharedOutRef.current = true;
+      if (res.remaining === 0 || res.error === capMessage(JARVIS_DAILY_LIMIT)) setLeft(0);
+    }
     // The session row is born here, on the first turn, and updated in place after that
     saveJarvisSession(sessionIdRef.current, [...history, { role: 'user', content: question }, reply])
       .then(r => { if (r.success && r.id) sessionIdRef.current = r.id; })
@@ -230,8 +375,10 @@ export default function JarvisWidget() {
     // which reads as being cut off. Muted means nothing was spoken at all, so leave roughly
     // the time it takes to read the reply instead.
     await new Promise(r => setTimeout(r, mutedRef.current ? Math.min(8000, 1200 + reply.content.length * 28) : 900));
-    listenAgainRef.current();   // keep the conversation going until you stop the mic or close
-  }, [speak, stopSpeaking, stopListening, router]);
+    if (res.success && res.heldWrites?.length) scheduleHeldAutoConfirm();
+    else clearHeldAuto();
+    if (loopRef.current) listenAgainRef.current();   // keep talking until you stop the mic or close
+  }, [speak, stopSpeaking, stopListening, router, finishHeldWrites, clearHeldAuto, scheduleHeldAutoConfirm, refuseAsk, left]);
 
   // ---------- listening ----------
   const submitNow = useCallback(() => {
@@ -302,7 +449,11 @@ export default function JarvisWidget() {
       finalRef.current = finals;
       const shown = mergeFinals(mergeFinals(committedRef.current, finals), joinTranscripts(interimParts));
       setQ(shown);
-      if (shown) { setHeardBoth(true); armSubmit(); }   // pause timer starts only once you speak
+      if (shown) {
+        if (heldWritesRef.current.length) clearHeldAuto();
+        setHeardBoth(true);
+        armSubmit();   // pause timer starts only once you speak
+      }
     };
 
     rec.onerror = (e: any) => {
@@ -329,11 +480,12 @@ export default function JarvisWidget() {
     recRef.current = rec;
     try { rec.start(); } catch { return false; }
     return true;
-  }, [armSubmit, hasTTS]);
+  }, [armSubmit, hasTTS, clearHeldAuto]);
 
   /** Fallback for the Android app (no Web Speech API): tap-to-talk, stops on silence. */
   const recordOnce = useCallback(async () => {
     if (micBusy.current) return;   // a start is already in flight, or one is already running
+    if (heldWritesRef.current.length) clearHeldAuto();
     micBusy.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -347,6 +499,7 @@ export default function JarvisWidget() {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         if (blob.size < 1200) { setQ(''); return; }
         setQ('Transcribing…'); setBusy(true);
+        const t0 = performance.now();
         const fd = new FormData(); fd.append('audio', blob, 'q.webm');
         const tr = await transcribeQuestion(fd);
         setBusy(false);
@@ -354,7 +507,7 @@ export default function JarvisWidget() {
         else if (tr.error) {   // rate limit or server error — stop, don't retry straight into it
           setQ('');
           loopRef.current = false;
-          setMsgs(m => [...m, { role: 'assistant', content: tr.error! }]);
+          setMsgs(m => [...m, { role: 'assistant', content: tr.error!, responseSec: responseSec(t0) }]);
           await speak(tr.error!);
         }
         else { setQ(''); speak("Sorry, I didn't catch that."); }
@@ -405,7 +558,7 @@ export default function JarvisWidget() {
       speak('Microphone is not available.');
       setModeBoth('idle');
     }
-  }, [ask, speak]);
+  }, [ask, speak, clearHeldAuto]);
 
   // Mic button: start listening; once you've spoken it doubles as "send now"
   const micTap = () => {
@@ -416,6 +569,7 @@ export default function JarvisWidget() {
       return;
     }
     stopSpeaking();
+    if (heldWritesRef.current.length) clearHeldAuto();
     setVoiceBlocked(false);
     retriedRef.current = false;
     loopRef.current = true;
@@ -424,19 +578,30 @@ export default function JarvisWidget() {
   };
 
   // Reopen the mic after each answer so you can just keep talking.
-  listenAgainRef.current = () => {
+  const listenAgain = useCallback(() => {
     if (!openRef.current || !loopRef.current) return;
     if (hasSR) startRecognition();
     else recordOnce();
-  };
+  }, [hasSR, startRecognition, recordOnce]);
+
+  useEffect(() => {
+    listenAgainRef.current = listenAgain;
+  }, [listenAgain]);
 
   // ---------- panel lifecycle ----------
-  const closePanel = useCallback(() => { loopRef.current = false; stopListening(); stopSpeaking(); setPending([]); setOpen(false); }, [stopListening, stopSpeaking]);
+  const closePanel = useCallback(() => {
+    clearHeldAuto();
+    sharedOutRef.current = false;
+    loopRef.current = false; stopListening(); stopSpeaking(); setPending([]); setHeldWrites([]); setOpen(false);
+  }, [stopListening, stopSpeaking, clearHeldAuto]);
+
+  useEffect(() => () => clearHeldAuto(), [clearHeldAuto]);
 
   /** Greets, then listens; every answer reopens the mic until you stop it or close the panel. */
   const openPanel = useCallback(() => {
     setOpen(true);
     openRef.current = true;
+    sharedOutRef.current = false;
     loopRef.current = true;
     // Every open is a fresh conversation; the previous one is already saved under Chats
     setMsgs([]);
@@ -517,16 +682,21 @@ export default function JarvisWidget() {
     const held = pending;
     setPending([]);
     if (!ok || !held.length) {
-      if (held.length) setMsgs(m => [...m, { role: 'assistant', content: 'Left it alone.' }]);
+      if (held.length) {
+        const t0 = performance.now();
+        setMsgs(m => [...m, { role: 'assistant', content: 'Left it alone.', responseSec: responseSec(t0) }]);
+      }
       return;
     }
     setBusy(true);
+    const t0 = performance.now();
     const r = await runJarvisActions(held.map(p => p.action), Intl.DateTimeFormat().resolvedOptions().timeZone);
     setBusy(false);
     if (r.success) for (const t of r.createdTasks || []) syncTask(t);
+    const sec = responseSec(t0);
     setMsgs(m => [...m, r.success
-      ? { role: 'assistant', content: `Done — it's in ${[...new Set(held.map(h => h.group))].join(' and ')}.`, items: r.items }
-      : { role: 'assistant', content: r.error || 'Could not do that.' }]);
+      ? { role: 'assistant', content: `Done — it's in ${[...new Set(held.map(h => h.group))].join(' and ')}.`, items: r.items, responseSec: sec }
+      : { role: 'assistant', content: r.error || 'Could not do that.', responseSec: sec }]);
   };
 
   const toggleMute = () => {
@@ -542,6 +712,8 @@ export default function JarvisWidget() {
 
   const statusLabel =
     busy ? 'Thinking…'
+    : heldWrites.length > 0 && mode === 'capturing' ? (q ? 'Listening…' : 'Say yes or your change — or wait 5s')
+    : heldWrites.length > 0 ? 'Confirming in 5s — interrupt to change'
     : mode === 'capturing' ? (q ? 'Listening… pause when you\'re done' : 'Listening… go ahead, or tap the mic to stop')
     : speaking ? 'Speaking… tap to interrupt'
     : voiceBlocked ? 'Tap the mic to enable voice'
@@ -663,6 +835,11 @@ export default function JarvisWidget() {
                     })}
                   </div>
                 )}
+                {m.role === 'assistant' && m.responseSec != null && (
+                  <span className="jarvis-timing" aria-label={`Responded in ${m.responseSec} seconds`}>
+                    Responded in {m.responseSec} s
+                  </span>
+                )}
               </div>
             ))}
             {busy && (
@@ -684,7 +861,12 @@ export default function JarvisWidget() {
               {mode === 'capturing' && heard ? <Square size={18} fill="currentColor" /> : <Mic size={20} />}
             </button>
             <form style={{ display: 'flex', gap: '8px', flex: 1 }} onSubmit={e => { e.preventDefault(); ask(q); }}>
-              <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
+              <input ref={inputRef} value={q}
+                onChange={e => {
+                  setQ(e.target.value);
+                  if (heldWritesRef.current.length && e.target.value.trim()) clearHeldAuto();
+                }}
+                onFocus={() => { if (heldWritesRef.current.length) clearHeldAuto(); }}
                 placeholder={mode === 'capturing' ? 'Listening…' : 'Ask anything…'} />
               <button type="submit" disabled={!q.trim() || busy || mode === 'capturing'} aria-label="Send">
                 {busy ? <div className="loading-spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <Send size={16} />}
