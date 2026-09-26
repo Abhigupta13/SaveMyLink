@@ -86,4 +86,5 @@ TaskSchema.index({ assigneeEmails: 1 });
 
 // The Private Safe swaps the personal list, so isPrivate is part of that read, not a scan.
 TaskSchema.index({ userId: 1, isPrivate: 1, dueAt: 1 });
+TaskSchema.index({ momId: 1 }, { sparse: true });
 export default defineModel<ITask>('Task', TaskSchema);

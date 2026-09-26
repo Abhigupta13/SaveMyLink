@@ -5,15 +5,27 @@ import { usePreview } from '@/components/PreviewContext';
 import { useView } from '@/components/ViewContext';
 import { Star, Eye, EyeOff, LayoutGrid, List, Image as ImageIcon } from 'lucide-react';
 
-export default function CategoryFilter({ categories, activeCategoryId }: { categories: any[], activeCategoryId?: string }) {
+export default function CategoryFilter({
+  categories,
+  activeCategoryId,
+  onCategoryChange,
+}: {
+  categories: any[];
+  activeCategoryId?: string;
+  /** Client-side /links: avoid router navigation on chip tap. */
+  onCategoryChange?: (id: string | null) => void;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const isPrivate = searchParams.get('private') === 'true';
-  
+
   const { showPreview, togglePreview } = usePreview();
   const { columns, toggleColumns } = useView();
 
   const handleFilter = (id: string | null) => {
+    if (onCategoryChange) {
+      onCategoryChange(id);
+      return;
+    }
     const params = new URLSearchParams(searchParams.toString());
     if (id) {
       params.set('category', id);
@@ -25,11 +37,7 @@ export default function CategoryFilter({ categories, activeCategoryId }: { categ
     // deep in to a narrower one kept ?page=3 and opened on an empty grid, because the new filter
     // has nowhere near that many rows.
     params.delete('page');
-
-    // Always preserve private state if present in URL
-    if (isPrivate) {
-      params.set('private', 'true');
-    }
+    params.delete('private');
 
     router.push(`/links?${params.toString()}`);
   };

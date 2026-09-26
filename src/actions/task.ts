@@ -14,6 +14,7 @@ import { recordEvent } from "@/lib/models/Event";
 import { getServerSession } from "next-auth";
 import { Types } from "mongoose";
 import { revalidatePath } from "next/cache";
+import { loadProjectsWithPeople } from "@/actions/project";
 
 const lower = (v: unknown) => String(v ?? '').trim().toLowerCase();
 
@@ -40,7 +41,8 @@ async function myReminderDefault(userId: string): Promise<ReminderChoice | undef
  * date and group of somebody else's work is theirs to read. Writes were always refused
  * (writerScope with verified=false); this closes the read half.
  */
-async function claimAssignments(userId: string, email?: string | null) {
+/** Claim email-based assignments on first read — safe to call once per workspace bundle. */
+export async function claimTaskAssignments(userId: string, email?: string | null) {
   if (!email) return;
   if (!(await isVerified(userId))) return;
   const at = email.toLowerCase();
@@ -84,7 +86,7 @@ export async function getTasks(projectId?: string) {
 
     await connectToDatabase();
     // Claim tasks assigned to my email before I had an account
-    await claimAssignments(session.user.id, session.user.email);
+    await claimTaskAssignments(session.user.id, session.user.email);
 
     let query: any;
     if (projectId) {
@@ -100,7 +102,8 @@ export async function getTasks(projectId?: string) {
     const tasks = await Task.find(query)
       .populate('assigneeId', 'email name')
       .populate('signedOffBy', 'email name')   // so the chip can name who approved it, not just that someone did
-      .sort({ completed: 1, dueAt: 1, createdAt: -1 });
+      .sort({ completed: 1, dueAt: 1, createdAt: -1 })
+      .limit(500);
     return { success: true, tasks: JSON.parse(JSON.stringify(tasks)) };
   } catch (error) {
     console.error('Failed to get tasks:', error);
@@ -110,13 +113,72 @@ export async function getTasks(projectId?: string) {
 
 // All my open tasks (personal + assigned to me anywhere) — used by the
 // client to reconcile on-device reminder notifications.
+/** One server invocation for /tasks: projects, scoped task list, open tasks, reminder default. */
+export async function getTasksWorkspace(projectId?: string) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
+
+    await connectToDatabase();
+    const userId = session.user.id;
+    const email = (session.user.email || '').toLowerCase();
+    await claimTaskAssignments(userId, session.user.email);
+
+    const unlocked = await hasSafe(userId);
+
+    let taskQuery: Record<string, unknown>;
+    if (projectId) {
+      const project = await projectForMember(projectId, userId, email);
+      if (!project) return { success: false, error: 'Not a member of this project' };
+      taskQuery = { projectId };
+    } else {
+      taskQuery = { userId, projectId: null, ...privateFilter(unlocked) };
+    }
+
+    const reachable = [
+      { projectId: null },
+      { projectId: { $in: await myProjectIds(userId, email) } },
+    ];
+    const openQuery = {
+      completed: false,
+      $or: [
+        { userId, projectId: null, ...privateFilter(unlocked) },
+        { assigneeId: userId, $or: reachable },
+        { assigneeIds: userId, $or: reachable },
+      ],
+    };
+
+    const [projects, tasks, openTasks, reminderDefault] = await Promise.all([
+      loadProjectsWithPeople(userId, email),
+      Task.find(taskQuery)
+        .populate('assigneeId', 'email name')
+        .populate('signedOffBy', 'email name')
+        .sort({ completed: 1, dueAt: 1, createdAt: -1 })
+        .limit(500),
+      Task.find(openQuery).select('_id title dueAt completed projectId createdAt reminder').lean().limit(500),
+      myReminderDefault(userId),
+    ]);
+
+    return {
+      success: true,
+      projects,
+      tasks: JSON.parse(JSON.stringify(tasks)),
+      openTasks: JSON.parse(JSON.stringify(openTasks)),
+      reminderDefault,
+    };
+  } catch (error) {
+    console.error('Failed to load tasks workspace:', error);
+    return { success: false, error: 'Failed to fetch tasks' };
+  }
+}
+
 export async function getMyOpenTasks() {
   try {
     await connectToDatabase();
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
-    await claimAssignments(session.user.id, session.user.email);
+    await claimTaskAssignments(session.user.id, session.user.email);
 
     /* Where the assignee branches may look: my own personal work, or a group I can actually open.
        Being assigned something used to be enough on its own, with no project scope at all — so a

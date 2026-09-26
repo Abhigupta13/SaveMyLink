@@ -13,6 +13,8 @@ import { formatDay, formatDate } from '@/lib/time';
 import { getReminderDefault } from '@/actions/task';
 import ReminderPicker from '@/components/ReminderPicker';
 import type { ReminderChoice } from '@/lib/reminderRule';
+import { AppCacheNs, invalidateMomsCache } from '@/lib/appDataCache';
+import { runStaleQuery } from '@/lib/runStaleQuery';
 
 interface MomSectionProps {
   projects?: any[]; // all projects, so items can be routed to any of them
@@ -57,6 +59,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const { privateSafe } = useUser();
   const [moms, setMoms] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [pipeline, setPipeline] = useState(''); // status text while upload/transcribe/extract runs
@@ -156,33 +159,50 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
   const [momPrivate, setMomPrivate] = useState(false);
   useEffect(() => { setMomPrivate(privateSafe); }, [privateSafe]);
 
-  const fetchMoms = useCallback(async () => {
-    const res = await getMoms(projectId);
-    if (res.success) {
-      setMoms(res.moms || []);
-      setHinglish(!!res.hinglish);
-      // Seed editable drafts for MOMs awaiting review
-      setDrafts(prev => {
-        const next = { ...prev };
-        for (const mom of res.moms || []) {
-          if (!mom.tasksConfirmed && mom.candidates?.length && !next[mom._id]) {
-            next[mom._id] = mom.candidates.map((c: any) => ({
-              kind: (c.kind === 'note' || c.kind === 'brief' ? c.kind : 'task') as Kind,
-              title: c.title,
-              detail: c.detail,
-              assigneeEmail: c.assigneeEmail || '',
-              dueAt: toLocalInput(c.dueAt),
-              projectId: c.projectId ? String(c.projectId) : '',
-              missing: c.missing || [],
-              reminder: null,   // null = my default; the row's own picker overrides it
-            }));
-          }
+  const momsCacheKey = `${projectId || 'personal'}:${privateSafe ? '1' : '0'}`;
+
+  const applyMomsPayload = useCallback((payload: { moms: any[]; hinglish: boolean }) => {
+    setMoms(payload.moms || []);
+    setHinglish(payload.hinglish);
+    setDrafts(prev => {
+      const next = { ...prev };
+      for (const mom of payload.moms || []) {
+        if (!mom.tasksConfirmed && mom.candidates?.length && !next[mom._id]) {
+          next[mom._id] = mom.candidates.map((c: any) => ({
+            kind: (c.kind === 'note' || c.kind === 'brief' ? c.kind : 'task') as Kind,
+            title: c.title,
+            detail: c.detail,
+            assigneeEmail: c.assigneeEmail || '',
+            dueAt: toLocalInput(c.dueAt),
+            projectId: c.projectId ? String(c.projectId) : '',
+            missing: c.missing || [],
+            reminder: null,
+          }));
         }
-        return next;
-      });
-    }
-    setLoading(false);
-  }, [projectId]);
+      }
+      return next;
+    });
+  }, []);
+
+  const fetchMoms = useCallback(async (force?: boolean) => {
+    await runStaleQuery({
+      namespace: AppCacheNs.moms,
+      cacheKey: momsCacheKey,
+      force,
+      ui: { setLoading, setRefreshing, setFailed: () => {} },
+      fetch: async () => {
+        const res = await getMoms(projectId);
+        if (!res.success) throw new Error(res.error || 'Failed');
+        return { moms: res.moms || [], hinglish: !!res.hinglish };
+      },
+      apply: applyMomsPayload,
+    });
+  }, [momsCacheKey, projectId, applyMomsPayload]);
+
+  const reloadMoms = useCallback(() => {
+    invalidateMomsCache();
+    fetchMoms(true);
+  }, [fetchMoms]);
 
   useEffect(() => { fetchMoms(); }, [fetchMoms]);
 
@@ -250,7 +270,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     const ex = await extractMomTasks(momId, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setPipeline('');
     if (!ex.success) toast(ex.error || 'Something went wrong', 'error');
-    fetchMoms();
+    reloadMoms();
   };
 
   /**
@@ -272,12 +292,12 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       // minutes, plus state updates on a component that no longer exists.
       if (!aliveRef.current) return false;
       const res = await pollMomTranscription(momId);
-      if (!res.success) { say(''); toast(res.error || 'Something went wrong', 'error'); fetchMoms(); return false; }
+      if (!res.success) { say(''); toast(res.error || 'Something went wrong', 'error'); fetchMoms(true); return false; }
       if (res.done) return true;
     }
     say('');
     toast('Still transcribing — reopen this page in a bit to pick it up.', 'error');
-    fetchMoms();
+    reloadMoms();
     return false;
   };
 
@@ -298,7 +318,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     if (!up.success || !up.momId) {
       setPipeline(''); toast(up.error || 'Something went wrong', 'error'); return;
     }
-    fetchMoms();   // the meeting exists now — show it as in-flight straight away
+    reloadMoms();   // the meeting exists now — show it as in-flight straight away
 
     // Sarvam could not take it (dead balance, revoked key, their API down) and the server
     // transcribed it on the free engine instead. There is no job to wait for — the transcript
@@ -354,12 +374,12 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     const ex = await extractMomTasks(mom._id, Intl.DateTimeFormat().resolvedOptions().timeZone);
     setPipeline('');
     if (!ex.success) toast(ex.error || 'Something went wrong', 'error');
-    fetchMoms();
+    reloadMoms();
   };
 
   const saveMomEdits = async (momId: string) => {
     const res = await updateMom(momId, draftMom);
-    if (res.success) { setEditing(null); fetchMoms(); } else toast(res.error || 'Something went wrong', 'error');
+    if (res.success) { setEditing(null); reloadMoms(); } else toast(res.error || 'Something went wrong', 'error');
   };
 
   // Re-run the AI on an existing recording (also upgrades meetings extracted by older versions)
@@ -370,7 +390,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     setPipeline('');
     if (!ex.success) toast(ex.error || 'Something went wrong', 'error');
     setDrafts(d => { const n = { ...d }; delete n[mom._id]; return n; }); // force reseed from new candidates
-    fetchMoms();
+    reloadMoms();
   };
 
   const updateDraft = (momId: string, idx: number, patch: Partial<Draft>) => {
@@ -416,7 +436,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
     }
     const res = await confirmMomTasks(momId, items);
     if (res.success) {
-      fetchMoms();
+      reloadMoms();
       onTasksCreated();
     } else {
       toast(res.error || 'Something went wrong', 'error');
@@ -472,7 +492,7 @@ export default function MomSection({ project, projects = [], myEmail, memberOpti
       : false;
 
     const res = await deleteMom(momId, { alsoDeleteWork });
-    if (res.success) { fetchMoms(); onTasksCreated(); } else toast(res.error || 'Something went wrong', 'error');
+    if (res.success) { reloadMoms(); onTasksCreated(); } else toast(res.error || 'Something went wrong', 'error');
   };
 
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;

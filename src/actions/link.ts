@@ -11,6 +11,7 @@ import { authOptions } from "@/lib/auth";
 import { escapeRegex } from '@/lib/regex';
 import { normalizeUrl, youtubeId } from '@/lib/url';
 import { hasSafe } from '@/lib/safeCookie';
+import { getCategories } from '@/actions/category';
 
 export async function getLinkMetadata(url: string) {
   const session = await getServerSession(authOptions);
@@ -84,6 +85,30 @@ export async function getLinks(categoryId?: string, page: number = 1, limit: num
   return {
     links: JSON.parse(JSON.stringify(links)),
     totalCount
+  };
+}
+
+/** One client round-trip for /links (list + category chips). */
+export async function getLinksPageData(
+  categoryId?: string,
+  page: number = 1,
+  limit: number = 50,
+  search?: string,
+  privateSafe: boolean = false,
+) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return { success: false as const, error: 'Unauthorized' };
+
+  const [linkData, categories] = await Promise.all([
+    getLinks(categoryId, page, limit, search, privateSafe),
+    getCategories(privateSafe),
+  ]);
+
+  return {
+    success: true as const,
+    links: linkData.links,
+    totalCount: linkData.totalCount,
+    categories,
   };
 }
 

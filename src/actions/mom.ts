@@ -119,7 +119,7 @@ export async function getMoms(projectId?: string | null) {
     const moms = await Mom.find(projectId
       ? { projectId }
       : { projectId: null, userId: ctx.session.user.id, ...privateFilter(await hasSafe(ctx.session.user.id)) })
-      .sort({ createdAt: -1 }).lean();
+      .sort({ createdAt: -1 }).limit(200).lean();
     // Which recorder the client should use. Display and branching only — uploadMomAudioSarvam
     // re-resolves the key, so removing access actually cuts it rather than hiding a button.
     return {
