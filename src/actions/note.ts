@@ -14,6 +14,9 @@ import { hasSafe } from "@/lib/safeCookie";
 import { saveUpload, deleteUpload } from "@/lib/storage";
 import { grantProjectReaders } from "@/lib/driveGrants";
 import { extractText } from "@/lib/docText";
+import { loadProjectsWithPeople } from "@/actions/project";
+import { isNoteBodyEmpty, sanitizeNoteBody } from "@/lib/noteHtml";
+import { assignMentionLabel } from "@/lib/noteMentionLabels";
 
 async function me() {
   const session = await getServerSession(authOptions);
@@ -43,33 +46,62 @@ async function noteIWrite(id: string, userId: string, email: string) {
  * else's group. The group workspace used to fetch all 500 and throw away everything that was
  * not its own.
  */
+async function fetchNotesForUser(userId: string, email: string, projectId?: string) {
+  const unlocked = await hasSafe(userId);
+  const filter = withinProject(await mineOrMyProjects(userId, email, 'userId', unlocked), projectId);
+  return Note.find(filter).select('-attachments.text')
+    .populate('projectId', 'name')
+    .populate('userId', 'email name')
+    .sort({ pinned: -1, updatedAt: -1 }).limit(500).lean();
+}
+
+async function notesWithMomTitles(notes: Awaited<ReturnType<typeof fetchNotesForUser>>) {
+  const momIds = [...new Set(notes.map(n => n.momId).filter(Boolean).map(String))];
+  const found = momIds.length
+    ? await Mom.find({ _id: { $in: momIds } }).select('title').lean<{ _id: unknown; title?: string }[]>()
+    : [];
+  const titles = new Map(found.map(m => [String(m._id), m.title || '']));
+  return notes.map(n => ({ ...n, momTitle: n.momId ? titles.get(String(n.momId)) : undefined }));
+}
+
+/** One server invocation for /notes: all notes + project picker data. */
+export async function getNotesWorkspace() {
+  try {
+    const who = await me();
+    if (!who) return { success: false, error: 'Unauthorized' };
+    await connectToDatabase();
+    const [rawNotes, projects] = await Promise.all([
+      fetchNotesForUser(who.userId, who.email),
+      loadProjectsWithPeople(who.userId, who.email),
+    ]);
+    const notes = await notesWithMomTitles(rawNotes);
+    return {
+      success: true,
+      notes: JSON.parse(JSON.stringify(notes)),
+      projects,
+    };
+  } catch (error) {
+    console.error('Failed to load notes workspace:', error);
+    return { success: false, error: 'Failed to fetch notes' };
+  }
+}
+
+/** Project-scoped notes for workspace bundles — caller must already be connected and gated. */
+export async function loadNotesForProject(userId: string, email: string, projectId: string) {
+  const withOrigin = await notesWithMomTitles(await fetchNotesForUser(userId, email, projectId));
+  return JSON.parse(JSON.stringify(withOrigin));
+}
+
 export async function getNotes(projectId?: string) {
   try {
     const who = await me();
     if (!who) return { success: false, error: 'Unauthorized' };
     await connectToDatabase();
-    // The Private Safe swaps the personal half of this list and leaves the project half alone.
-    // The state comes off the signed cookie, never off an argument — a client that could ask for
-    // the private list would be the whole PIN.
-    const unlocked = await hasSafe(who.userId);
-    const filter = withinProject(await mineOrMyProjects(who.userId, who.email, 'userId', unlocked), projectId);
-    // Attachment text can be 12k a file and the list never renders it — leave it on the server
-    const notes = await Note.find(filter).select('-attachments.text')
-      .populate('projectId', 'name')   // meeting notes carry their project — shown as a chip on the card
-      .populate('userId', 'email name')  // a project note may not be mine, so say whose it is
-      .sort({ pinned: -1, updatedAt: -1 }).limit(500).lean();
+    const withOrigin = projectId
+      ? await loadNotesForProject(who.userId, who.email, projectId)
+      : await notesWithMomTitles(await fetchNotesForUser(who.userId, who.email));
 
-    // Titles resolved separately rather than by populate: a populated reference to a deleted
-    // meeting comes back as null, identical to a note that never came from one, and telling
-    // those apart is the whole point of "from a deleted meeting".
-    const momIds = [...new Set(notes.map(n => n.momId).filter(Boolean).map(String))];
-    const found = momIds.length
-      ? await Mom.find({ _id: { $in: momIds } }).select('title').lean<{ _id: unknown; title?: string }[]>()
-      : [];
-    const titles = new Map(found.map(m => [String(m._id), m.title || '']));
-    const withOrigin = notes.map(n => ({ ...n, momTitle: n.momId ? titles.get(String(n.momId)) : undefined }));
-
-    return { success: true, notes: JSON.parse(JSON.stringify(withOrigin)) };
+    return { success: true, notes: withOrigin };
   } catch (error) {
     console.error('Failed to get notes:', error);
     return { success: false, error: 'Failed to fetch notes' };
@@ -81,7 +113,8 @@ export async function createNote(data: { title?: string; body: string; projectId
     await connectToDatabase();
     const who = await me();
     if (!who) return { success: false, error: 'Unauthorized' };
-    if (!data.body?.trim() && !data.title?.trim()) return { success: false, error: 'Note is empty' };
+    const body = sanitizeNoteBody(data.body || '');
+    if (isNoteBodyEmpty(body) && !data.title?.trim()) return { success: false, error: 'Note is empty' };
     if (data.projectId && !(await projectForWriter(data.projectId, who.userId, who.email)))
       return { success: false, error: 'Not a member of that project' };
     // The checkbox is a request, not the answer: a note filed into a group belongs to the group,
@@ -89,7 +122,7 @@ export async function createNote(data: { title?: string; body: string; projectId
     const isPrivate = privacyOnWrite(data.isPrivate, data.projectId);
     const note = await Note.create({
       userId: who.userId, projectId: data.projectId || undefined,
-      title: data.title?.trim(), body: data.body?.trim() || '', isPrivate,
+      title: data.title?.trim(), body, isPrivate,
     });
     revalidatePath('/notes');
     return {
@@ -120,7 +153,7 @@ export async function updateNote(id: string, data: { title?: string; body?: stri
       note.projectId = (data.projectId || undefined) as any;
     }
     if (data.title !== undefined) note.title = data.title;
-    if (data.body !== undefined) note.body = data.body;
+    if (data.body !== undefined) note.body = sanitizeNoteBody(data.body);
     if (data.pinned !== undefined) note.pinned = data.pinned;
     // Settled AFTER the move, because where the note ends up is what decides whether it may be
     // private at all. A private note dragged into a group loses the padlock instead of keeping
@@ -209,14 +242,20 @@ export async function attachToNote(noteId: string | null, formData: FormData) {
     const { key, url, mimeType, size, buffer } = saved;
     // Same extraction the Digi Locker uses: '' for images and video, real text for PDFs
     const text = await extractText(buffer, mimeType, file.name);
-    note.attachments.push({ name: file.name, key, url, mimeType, size, text });
+    const taken = note.attachments.map((a) => a.mentionLabel || a.name);
+    const mentionLabel = assignMentionLabel(file.name, taken);
+    note.attachments.push({ name: file.name, key, url, mimeType, size, text, mentionLabel });
     await note.save();
     // A group note's attachment is group work — offer it to their own Drives as well, after the
     // response. A personal note is a no-op inside the helper.
     grantProjectReaders({ projectId: note.projectId, uploaderId: userId, uploaderEmail: who.email, keys: [key] });
 
     revalidatePath('/notes');
-    return { success: true, noteId: String(note._id), attachment: { name: file.name, key, url, mimeType, size } };
+    return {
+      success: true,
+      noteId: String(note._id),
+      attachment: { name: file.name, key, url, mimeType, size, mentionLabel },
+    };
   } catch (error) {
     console.error('Failed to attach file:', error);
     return { success: false, error: 'Failed to attach file' };

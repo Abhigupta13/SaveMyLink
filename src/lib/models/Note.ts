@@ -8,6 +8,8 @@ export interface INoteAttachment {
   mimeType?: string;
   size?: number;
   text?: string;     // extracted at upload so Jarvis can answer from inside the file
+  /** Stable `@` handle inside the note body, e.g. `@Gate photo`. */
+  mentionLabel?: string;
 }
 
 export interface INote extends MongooseDocument {
@@ -38,7 +40,7 @@ const NoteSchema = new Schema<INote>({
   pinned: { type: Boolean, default: false },
   // Owned by the note: deleted with it, and never shown in the Digi Locker
   attachments: {
-    type: [{ _id: false, name: String, key: String, url: String, mimeType: String, size: Number, text: String }],
+    type: [{ _id: false, name: String, key: String, url: String, mimeType: String, size: Number, text: String, mentionLabel: String }],
     default: [],
   },
   // Private is personal-only: a record filed under a group belongs to that group, so
@@ -53,4 +55,5 @@ NoteSchema.index({ projectId: 1, pinned: -1, updatedAt: -1 });
 
 // The Private Safe swaps the personal list, so isPrivate is part of that read, not a scan.
 NoteSchema.index({ userId: 1, isPrivate: 1, pinned: -1, updatedAt: -1 });
+NoteSchema.index({ momId: 1 }, { sparse: true });
 export const Note: Model<INote> = defineModel<INote>('Note', NoteSchema);
