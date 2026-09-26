@@ -1,12 +1,11 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 /**
- * Remote-URL mode: the APK is a thin native shell and nothing web is bundled, so this URL *is* the
- * app. Get it wrong and every install opens a blank screen.
+ * Production APKs load a small local page from `capacitor-web/` first. When the network is up it
+ * forwards to the live site; when it is down the user sees a branded offline screen instead of
+ * Android’s generic “Web page not available”.
  *
- * That is not hypothetical. Commit ba37a7c baked a free pinggy tunnel in here, tunnels of that kind
- * expire after an hour, and the APK built from it sat on the download page for eight days telling
- * everyone who installed it that the app was broken. The download itself was always fine.
+ * Tunnel dev still uses `CAP_SERVER_URL` to point the WebView straight at a temporary host.
  *
  * Mirrors CANONICAL_APP_URL in src/lib/url.ts. Deliberately not imported from there: the Capacitor
  * CLI loads this file outside the Next build, where the `@/` path alias does not resolve.
@@ -17,7 +16,7 @@ const PRODUCTION_URL = 'https://allyouneedvault.vercel.app';
  * Point at a tunnel for a device test with `CAP_SERVER_URL=https://… npx cap sync android`, so the
  * throwaway address lives in a shell for ten minutes instead of in git forever.
  */
-const SERVER_URL = process.env.CAP_SERVER_URL?.trim() || PRODUCTION_URL;
+const TUNNEL_URL = process.env.CAP_SERVER_URL?.trim() || '';
 
 /** The hosts that expire while you are still looking at them. */
 const EPHEMERAL = /\b(pinggy|ngrok|trycloudflare|loca\.lt|localtunnel|serveo)\b/i;
@@ -31,11 +30,8 @@ if (EPHEMERAL.test(PRODUCTION_URL)) {
   );
 }
 
-// getUserMedia, MediaRecorder and speechSynthesis all need a secure context. Over plain http the
-// mic fails with an error the recording UI reports as "Microphone unavailable", which sends you
-// looking at Android permissions for something that is really this line.
-if (!SERVER_URL.startsWith('https://')) {
-  throw new Error(`capacitor.config.ts: server URL must be https, got "${SERVER_URL}" — the mic dies without a secure context.`);
+if (TUNNEL_URL && !TUNNEL_URL.startsWith('https://')) {
+  throw new Error(`capacitor.config.ts: CAP_SERVER_URL must be https, got "${TUNNEL_URL}" — the mic dies without a secure context.`);
 }
 
 const config: CapacitorConfig = {
@@ -50,9 +46,7 @@ const config: CapacitorConfig = {
   // plus a 4.8 MB copy of the previous APK — half the download, and a privacy leak in a file
   // anyone could unzip. An empty directory is the whole fix.
   webDir: 'capacitor-web',
-  server: {
-    url: SERVER_URL,
-  },
+  ...(TUNNEL_URL ? { server: { url: TUNNEL_URL } } : {}),
 };
 
 export default config;

@@ -24,6 +24,8 @@ function apkFileName(): string {
 }
 
 const nextConfig: NextConfig = {
+  // pdf-parse / pdf.js rely on native worker paths; bundling breaks password detection on server actions
+  serverExternalPackages: ['pdf-parse', 'pdfjs-dist', '@napi-rs/canvas'],
   async headers() {
     return [
       {

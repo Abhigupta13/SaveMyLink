@@ -10,6 +10,7 @@ import android.os.Environment;
 import android.os.Message;
 import android.webkit.CookieManager;
 import android.webkit.URLUtil;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -18,6 +19,7 @@ import android.widget.Toast;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebChromeClient;
+import com.getcapacitor.BridgeWebViewClient;
 
 /**
  * The app is a remote-URL Capacitor shell, so this WebView is the entire UI. A stock WebView is
@@ -52,6 +54,31 @@ public class MainActivity extends BridgeActivity {
 
         webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) ->
             startDownload(url, userAgent, contentDisposition, mimeType));
+
+        // Remote loads that fail (refresh while offline, tunnel dev) get our bundled screen instead
+        // of Chrome’s “Web page not available”.
+        webView.setWebViewClient(new BridgeWebViewClient(bridge) {
+            private static final String OFFLINE_SHELL = "file:///android_asset/public/index.html?offline=1";
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request != null && request.isForMainFrame()) {
+                    view.loadUrl(OFFLINE_SHELL);
+                    return;
+                }
+                super.onReceivedError(view, request, error);
+            }
+
+            @SuppressWarnings("deprecation")
+            @Override
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                if (failingUrl != null && failingUrl.equals(view.getUrl())) {
+                    view.loadUrl(OFFLINE_SHELL);
+                    return;
+                }
+                super.onReceivedError(view, errorCode, description, failingUrl);
+            }
+        });
     }
 
     /**
