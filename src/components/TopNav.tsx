@@ -11,12 +11,18 @@ import { useSession } from 'next-auth/react';
 import { Search, Plus, Home, X } from 'lucide-react';
 import { NAV, MOBILE_NAV, ownsItsFrame } from '@/lib/nav';
 import Wordmark from './brand/Wordmark';
+import { useUser } from '@/components/UserContext';
+import { useFeedback } from '@/components/ui/Feedback';
+import { invalidateLinksCache } from '@/lib/appDataCache';
+import { markShareFlow, consumeShareFlow } from '@/lib/shareIntent';
 
 export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
   const { data: session } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
+  const { privateSafe } = useUser();
+  const { toast } = useFeedback();
 
   const initial = ((session?.user?.name || session?.user?.email || 'U') as string)[0].toUpperCase();
   const [categories, setCategories] = useState(initialCategories);
@@ -25,6 +31,25 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
   useDialog(isModalOpen, () => setIsModalOpen(false));
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [searchValue, setSearchValue] = useState(searchParams.get('search') || '');
+  const [sharePrefill, setSharePrefill] = useState<{ url?: string; title?: string }>({});
+
+  // Android share sheet → /links?add=1&url=… — open add form on Links tab
+  useEffect(() => {
+    if (pathname !== '/links') return;
+    if (searchParams.get('add') !== '1') return;
+    const url = searchParams.get('url') || undefined;
+    const title = searchParams.get('title') || undefined;
+    if (!url && !title) return;
+    setSharePrefill({ url, title });
+    setIsModalOpen(true);
+    markShareFlow();
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('add');
+    params.delete('url');
+    params.delete('title');
+    const qs = params.toString();
+    router.replace(`/links${qs ? `?${qs}` : ''}`);
+  }, [pathname, searchParams, router]);
 
   // Links page search: debounce into ?search=
   useEffect(() => {
@@ -41,13 +66,24 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     return () => clearTimeout(timer);
   }, [searchValue, router, searchParams, pathname]);
 
-  const handleSaved = ({ isPrivate }: { isPrivate: boolean }) => {
+  const handleSaved = async ({ isPrivate }: { isPrivate: boolean }) => {
     setIsModalOpen(false);
+    setSharePrefill({});
+    invalidateLinksCache();
     const params = new URLSearchParams(window.location.search);
-    if (isPrivate) params.set('private', 'true');
+    params.delete('private');
     params.delete('category');
-    router.push(`/links?${params.toString()}`);
+    const qs = params.toString();
+    router.push(pathname === '/links' ? `/links${qs ? `?${qs}` : ''}` : '/links');
     router.refresh();
+    if (isPrivate && !privateSafe) {
+      toast('Saved to your Private Safe. Unlock it from Profile when you want to view it.', 'info');
+    }
+    const { Capacitor } = await import('@capacitor/core');
+    if (Capacitor.isNativePlatform() && consumeShareFlow()) {
+      const { SendIntent } = await import('@mindlib-capacitor/send-intent');
+      SendIntent.finish();
+    }
   };
 
   const isActive = (path: string) => path === '/' ? pathname === '/' : pathname.startsWith(path);
@@ -147,13 +183,18 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
       )}
 
       {isModalOpen && (
-        <div className="modal-overlay" onClick={() => setIsModalOpen(false)}>
+        <div className="modal-overlay" onClick={() => { setIsModalOpen(false); setSharePrefill({}); }}>
           <div className="modal-content" onClick={e => e.stopPropagation()} {...dialogProps} aria-label="Add a link">
             <div className="modal-header">
               <h2 className="modal-title">New Entry</h2>
-              <button className="modal-close" onClick={() => setIsModalOpen(false)} aria-label="Close"><X size={24} /></button>
+              <button className="modal-close" onClick={() => { setIsModalOpen(false); setSharePrefill({}); }} aria-label="Close"><X size={24} /></button>
             </div>
-            <AddLinkForm categories={categories} onSaved={handleSaved} />
+            <AddLinkForm
+              categories={categories}
+              onSaved={handleSaved}
+              initialUrl={sharePrefill.url}
+              initialTitle={sharePrefill.title}
+            />
           </div>
         </div>
       )}
