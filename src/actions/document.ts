@@ -21,24 +21,58 @@ import { grantProjectReaders } from '@/lib/driveGrants';
 // silently strips every export in the file. Mirrors the schema default in Document.ts.
 const DEFAULT_FOLDER = 'Personal';
 
+async function readAndExtractText(doc: { key?: string; user: unknown; url: string; mimeType?: string; name?: string }) {
+  try {
+    const buf = doc.key
+      ? await readBytes(doc.key, String(doc.user))
+      : await readFile(path.join(process.cwd(), 'public', doc.url));
+    return buf ? await extractText(buf, doc.mimeType, doc.name) : '';
+  } catch {
+    return '';
+  }
+}
+
+/** Extract and persist text for one file row — used by locker backfill and Jarvis hydration. */
+export async function fillDocumentText(doc: {
+  _id: unknown;
+  user: unknown;
+  key?: string;
+  url: string;
+  mimeType?: string;
+  name?: string;
+  type?: string;
+  text?: string | null;
+}): Promise<string> {
+  if (doc.type !== 'file') return doc.text ?? '';
+  if (doc.text && doc.text.length > 0) return doc.text;
+  const text = await readAndExtractText(doc);
+  await Document.updateOne({ _id: doc._id }, { text });
+  return text;
+}
+
 /**
  * Documents uploaded before text extraction existed have no text, so Jarvis cannot read them.
  * Backfill a few on each visit to the locker — the page is already awaiting a spinner here,
  * and it self-heals in a couple of visits rather than needing a migration.
- * ponytail: 4 per load; run a script over the collection if a locker is ever big enough to care.
  */
-async function backfillText(userId: string) {
-  const stale = await Document.find({ user: userId, type: 'file', text: { $exists: false } }).limit(4);
+async function backfillText(userId: string, email: string, unlocked: boolean) {
+  const scope = await mineOrMyProjects(userId, email, 'user', unlocked);
+  const stale = await Document.find({
+    ...scope,
+    type: 'file',
+    $or: [
+      { text: { $exists: false } },
+      {
+        text: '',
+        $or: [
+          { mimeType: 'application/pdf' },
+          { mimeType: { $regex: /^text\// } },
+        ],
+      },
+    ],
+  }).limit(4);
   for (const doc of stale) {
-    try {
-      // doc.key for anything stored since the move; the legacy path for older public/ files
-      // The owner comes off the row, never off the key — the key names a Drive account to open a
-      // token for, and `doc.user` is the stored, trusted answer to whose it is.
-      const buf = doc.key ? await readBytes(doc.key, String(doc.user)) : await readFile(path.join(process.cwd(), 'public', doc.url));
-      doc.text = buf ? await extractText(buf, doc.mimeType, doc.name) : '';
-    } catch {
-      doc.text = '';   // file is gone or unreadable — mark it tried so we stop retrying it
-    }
+    doc.text = await readAndExtractText(doc);
     await doc.save();
   }
 }
@@ -47,6 +81,15 @@ async function backfillText(userId: string) {
  * My documents, or — given a projectId — only that project's. The id is ANDed onto my read
  * scope, never substituted for it, so it can only narrow what I could already read.
  */
+/** Group file list for workspace bundles — no locker backfill (text not shown on this page). */
+export async function loadProjectDocuments(userId: string, email: string, projectId: string) {
+  const unlocked = await hasSafe(userId);
+  const scope = await mineOrMyProjects(userId, email, 'user', unlocked);
+  const docs = await Document.find(withinProject(scope, projectId)).select('-text')
+    .populate('projectId', 'name').sort({ createdAt: -1 }).lean();
+  return JSON.parse(JSON.stringify(docs));
+}
+
 export async function getDocuments(projectId?: string) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { docs: [], folders: [] };
@@ -54,26 +97,18 @@ export async function getDocuments(projectId?: string) {
 
   try {
     await connectToDatabase();
-    await backfillText(userId).catch(e => console.error('Doc backfill failed:', e));
-    // `text` can be 12k a document — the locker page never shows it, so leave it on the server.
-    // The folder list is derived from these client-side: a distinct() would miss documents
-    // saved before folders existed, which have no folder field at all rather than 'Personal'.
-    /* Two different questions, deliberately answered differently.
-        With a projectId this is a GROUP's file list, so it is mine-or-any-group-I-am-in narrowed to
-        that group — a shared contract belongs to everyone working on it, not only whoever uploaded
-        it. Without one this is the Digi Locker, which is personal filing and nothing else: a
-        document shared with a group is the group's, and lives in that group's Files tab. Showing it
-        in both made "my locker" mean two things at once, and the count on the page agreed with
-        neither. The owner field here is `user`, not `userId`. */
     const unlocked = await hasSafe(userId);
+    await backfillText(userId, session.user.email || '', unlocked).catch(e => console.error('Doc backfill failed:', e));
     const scope = projectId
       ? await mineOrMyProjects(userId, session.user.email, 'user', unlocked)
-      // projectId: null matches rows saved before this field existed as well as rows that never
-      // had one — addDocument stores `projectId || undefined`, so both shapes are in the data.
       : { user: userId, projectId: null, ...privateFilter(unlocked) };
-    const docs = await Document.find(withinProject(scope, projectId)).select('-text')
-      .populate('projectId', 'name').sort({ createdAt: -1 }).lean();
-    return { docs: JSON.parse(JSON.stringify(docs)) };
+    const docs = projectId
+      ? await loadProjectDocuments(userId, session.user.email, projectId)
+      : JSON.parse(JSON.stringify(
+          await Document.find(withinProject(scope, projectId)).select('-text')
+            .populate('projectId', 'name').sort({ createdAt: -1 }).lean(),
+        ));
+    return { docs };
   } catch (error: any) {
     console.error('Error fetching documents:', error);
     return { docs: [], error: error.message };

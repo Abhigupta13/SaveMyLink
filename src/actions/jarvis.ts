@@ -14,7 +14,11 @@ import { chatJSON, getEnvKey } from "@/lib/llm";
 import { formatInZone, formatStamp, safeZone, zonedToUtc } from "@/lib/time";
 import { myProjectFilter } from "@/lib/projectAccess";
 import { retrieve, promptLineFor, type Candidate } from "@/lib/retrieval";
+import { pickDocsToHydrate } from "@/lib/docHydrate";
+import { fillDocumentText } from "@/actions/document";
+import { MAX_DOC_TEXT } from "@/lib/docText";
 import { parseJarvisQuery, type JarvisQueryIntent } from "@/lib/jarvisQuery";
+import { expandJarvisQuery } from "@/lib/jarvisUnderstand";
 import { isProjectOwner, isProjectCreator, canWrite, type OwnableProject } from "@/lib/scope";
 import { hasSafe } from "@/lib/safeCookie";
 import { assistantFilter, privacyOnWrite } from "@/lib/privacy";
@@ -115,7 +119,7 @@ const stampIn = (tz: string): Fmt => v => formatStamp(v, tz);
 
 // Every item the user may read, each as one line the model can cite by id — and as the fields
 // lib/retrieval scores against, so only the few dozen that answer the question are actually sent.
-async function gatherContext(userId: string, email: string, includePrivate: boolean, d: Fmt, intent?: JarvisQueryIntent) {
+async function gatherContext(userId: string, email: string, includePrivate: boolean, d: Fmt, intent?: JarvisQueryIntent, question = '') {
   const ids = new Set<string>();
   const groupOf = new Map<string, string>();   // id → group name, for the shared chip on cited items
 
@@ -176,6 +180,15 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
     Doc.find({ $or: [{ user: userId, ...personal }, { projectId: { $in: projectIds } }] }).sort({ createdAt: -1 }).limit(slim ? 8 : 120).lean(),
     Expense.find(expenseQuery).sort({ date: -1 }).limit(expenseOnly && intent?.dateWindow ? 60 : 200).lean(),
   ]);
+
+  const docRows = docs as any[];
+  for (const row of pickDocsToHydrate(docRows, question)) {
+    try {
+      row.text = await fillDocumentText(row);
+    } catch {
+      row.text = row.text ?? '';
+    }
+  }
 
   const items: Candidate[] = [];
   const track = (id: any, projectId?: unknown) => {
@@ -246,7 +259,7 @@ async function gatherContext(userId: string, email: string, includePrivate: bool
   }
   for (const doc of docs as any[]) {
     // Contents where we could read them; a scan or a video still gets a line so it can be cited
-    const body = (doc.text || '').slice(0, 4000);
+    const body = (doc.text || '').slice(0, MAX_DOC_TEXT);
     const id = track(doc._id, doc.projectId);
     items.push({
       id, type: 'document', title: doc.name || '', at: ms(doc.createdAt),
@@ -723,13 +736,13 @@ export async function askJarvis(question: string, history: JarvisTurn[] = [], ti
     // Retrieval reads the CONVERSATION, not just the latest string. "and the one after that?" has
     // no searchable words of its own; the question before it does.
     const lastAsked = [...history].reverse().find(h => h.role === 'user')?.content || '';
-    const queryText = `${lastAsked} ${question}`.trim();
+    const queryText = expandJarvisQuery(`${lastAsked} ${question}`.trim());
     const nowMs = Date.now();
     const intent = parseJarvisQuery(queryText, nowMs, tz);
 
     // `stamp`, not `d`: every date in DATA carries its year, so the model can both reason about
     // relative dates and copy the right year into a dueAt it writes back.
-    const ctx = await gatherContext(userId, email, unlocked, stamp, intent);
+    const ctx = await gatherContext(userId, email, unlocked, stamp, intent, queryText);
 
     // Retrieval, not a dump: score the vault against the question here and send only what answers
     // it. ctx.items already holds nothing but rows myProjectFilter let through, and retrieve()
@@ -765,6 +778,8 @@ Answer ONLY from the DATA below — the items from everything the user has saved
 DATA is a SEARCH RESULT, not the whole vault: it holds the most relevant items, not all of them. So never answer with a total ("you have 12 links"), never claim something does not exist because it is missing here, and if the user seems to want a full list say what you found and point them at the page for the rest.
 A DOC line carries the file's actual contents where they could be read, so answer from what is inside it, not just its name — quote the figure, date or clause the user asks for. DOCs are filed in folders (Personal, a project name, whatever they chose); "what is in my Personal folder" means the DOCs with that folder. Contents may be cut off partway through a long file, and a scan, photo or video says so instead — in that case say you can see the document but cannot read inside it rather than guessing.
 Match meaning, not just words (e.g. "site that turns code into pretty images" should match a saved ray.so link; "anything about Morphle Labs" should match links, tasks, meetings, contacts, notes mentioning it).
+SPELLING, GRAMMAR AND SPEECH MISTAKES — users type quickly or dictate; fix errors mentally before answering. Interpret typos, missing words, wrong homophones, and voice-to-text slips (e.g. "wat r my taks due tomoro" → tasks due tomorrow; "expnse on amzon" → Amazon expenses). Never lecture about spelling. Only ask a brief clarifying question when two meanings stay equally likely after you correct.
+When you create or update vault items from messy input, write clear English in titles and bodies, but keep proper names, numbers, emails, and URLs exactly as intended.
 LANGUAGE — you understand English and Hindi, and you always answer in English.
 Hindi reaches you in Devanagari or as Hinglish (Latin script, mixed with English); understand all of it, including transcription slips, then reply in plain English. Never answer in Hindi, Devanagari or Hinglish, even when that is what the user wrote.
 Text the user dictates to be saved is translated to English too, so the vault stays in one language: "kal shaam tak vendor ko call karna hai" becomes the task "Call the vendor by tomorrow evening". Titles of items already saved are quoted exactly as they are stored, never re-translated.
@@ -961,7 +976,7 @@ export async function transcribeQuestion(formData: FormData) {
     // Whisper routinely detects spoken Hindi as Urdu and returns Perso-Arabic script. No
     // `language` param, because the user switches between the two mid-sentence — the prompt
     // pins detection to English and Hindi instead.
-    form.append('prompt', 'A voice note to a personal assistant app. The speaker uses only English and Hindi, often mixed in one sentence (Hinglish). Transcribe Hinglish in Latin script and pure Hindi in Devanagari. Never Urdu or any other language or script.');
+    form.append('prompt', 'A voice note to a personal assistant app. The speaker uses only English and Hindi, often mixed in one sentence (Hinglish). Casual speech with fillers, grammar mistakes, and mispronunciations is normal — transcribe what they meant using sensible English spelling when the word is clear. Transcribe Hinglish in Latin script and pure Hindi in Devanagari. Never Urdu or any other language or script.');
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${groqKey}` },

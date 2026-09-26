@@ -59,14 +59,14 @@ const URGENT_ASK = /\b(urgent|urgently|overdue|due|deadline|today|tonight|tomorr
  * type into the top forty, never enough to beat a line that actually contains the answer.
  */
 const TYPE_HINTS: [RegExp, CandidateType[]][] = [
-  [/\b(task|tasks|todo|to-do|due|deadline|urgent|overdue|assigned|assign|pending|finish|complete|kaam)\b/, ['task']],
-  [/\b(link|links|site|website|url|bookmark|page|video|article|saved)\b/, ['link']],
-  [/\b(meeting|meetings|mom|minutes|call|discussed|decided|standup|sync|baithak)\b/, ['mom']],
-  [/\b(note|notes|wrote|jotted|noted)\b/, ['note']],
-  [/\b(contact|contacts|phone|number|whatsapp|address|reach|call|email)\b/, ['contact']],
-  [/\b(doc|docs|document|documents|file|files|pdf|invoice|contract|receipt|locker)\b/, ['document']],
-  [/\b(project|projects|group|groups|team|client)\b/, ['project']],
-  [/\b(expense|expenses|spending|spent|cost|price|bought|buy|purchase|payment|bill|money|invested|investment|wasted|rupees|inr|kharcha)\b/, ['expense']],
+  [/\b(task|tasks|tsk|taks|todo|to-do|due|deadline|urgent|overdue|assigned|assign|pending|finish|complete|kaam)\b/, ['task']],
+  [/\b(link|links|site|website|url|bookmark|bokmark|page|video|article|saved)\b/, ['link']],
+  [/\b(meeting|meetings|meting|mom|minutes|call|discussed|decided|standup|sync|baithak)\b/, ['mom']],
+  [/\b(note|notes|notess|wrote|jotted|noted)\b/, ['note']],
+  [/\b(contact|contacts|contct|phone|number|whatsapp|address|reach|call|email)\b/, ['contact']],
+  [/\b(doc|docs|document|documents|documnt|file|files|pdf|invoice|contract|receipt|locker)\b/, ['document']],
+  [/\b(project|projects|projct|group|groups|team|client)\b/, ['project']],
+  [/\b(expense|expenses|expnse|expenss|spending|spent|cost|price|bought|buy|purchase|payment|bill|money|invested|investment|wasted|rupees|inr|kharcha)\b/, ['expense']],
 ];
 const TYPE_BOOST = 1.2;
 
