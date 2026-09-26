@@ -173,6 +173,11 @@
 .a-note-body { font-size: 0.95rem; line-height: 1.65; color: var(--text-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
 .a-note-shot { display: block; margin-top: 12px; }
 .a-note-shot img { display: block; max-width: 100%; max-height: 260px; border-radius: 14px; border: 1px solid var(--border-color); }
+.feedback-shot-error {
+  margin-top: 12px; padding: 12px 14px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; line-height: 1.45;
+  color: var(--text-secondary); background: var(--bg-tertiary); border: 1px solid var(--border-color);
+}
+.feedback-shot-error p { margin: 0 0 8px; }
 .a-note-from { margin-top: 10px; font-size: 0.72rem; font-weight: 600; color: var(--text-tertiary); overflow-wrap: anywhere; }
 
 .a-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; margin-top: 30px; font-size: 13px; color: var(--text-tertiary); }

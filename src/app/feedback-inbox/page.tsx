@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { Bug, Lightbulb, MessageSquare, Check, Mail, MailWarning, MailCheck, MailX, Undo2 } from 'lucide-react';
 import { getSuggestions, resolveSuggestion, reopenSuggestion } from '@/actions/suggestion';
+import FeedbackScreenshot from '@/components/FeedbackScreenshot';
 import { useFeedback } from '@/components/ui/Feedback';
 import Loading from '@/components/ui/Loading';
 import { formatInZone } from '@/lib/time';
@@ -135,10 +136,10 @@ export default function FeedbackInboxPage() {
 
               <p style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap', marginBottom: '10px' }}>{r.message}</p>
 
-              {r.shot?.url && (
-                <a href={r.shot.url} target="_blank" rel="noreferrer">
-                  <img src={r.shot.url} alt="Screenshot" style={{ maxWidth: '100%', maxHeight: '240px', borderRadius: '12px', border: '1px solid var(--border-color)', marginBottom: '10px' }} />
-                </a>
+              {(r.shot?.url || r.shot?.key) && (
+                <div style={{ marginBottom: 10 }}>
+                  <FeedbackScreenshot shot={r.shot} maxHeight={240} />
+                </div>
               )}
 
               <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontWeight: 600, wordBreak: 'break-word' }}>

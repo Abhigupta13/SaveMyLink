@@ -4,6 +4,10 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Bell } from 'lucide-react';
 import { unreadNotificationCount } from '@/actions/notifications';
+import { AppCacheNs } from '@/lib/appDataCache';
+import { cacheGet, cacheIsFresh, cacheSet } from '@/lib/clientQueryCache';
+
+const NOTIF_FRESH_MS = 60_000;
 
 /**
  * The way in to /notifications, and the only place the count is shown.
@@ -31,8 +35,17 @@ export default function NotificationsBell({
 
   useEffect(() => {
     let cancelled = false;
+    const cached = cacheGet<number>(AppCacheNs.notifications, 'unread');
+    if (cached && cacheIsFresh(cached.fetchedAt, NOTIF_FRESH_MS)) {
+      setCount(cached.data);
+      return;
+    }
     unreadNotificationCount()
-      .then(n => { if (!cancelled) setCount(n); })
+      .then(n => {
+        if (cancelled) return;
+        cacheSet(AppCacheNs.notifications, 'unread', n);
+        setCount(n);
+      })
       .catch(() => { /* a count that cannot be fetched is a bell without a badge, not an error */ });
     return () => { cancelled = true; };
   }, [pathname]);

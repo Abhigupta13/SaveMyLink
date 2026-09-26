@@ -861,7 +861,7 @@ export default function JarvisWidget() {
               {mode === 'capturing' && heard ? <Square size={18} fill="currentColor" /> : <Mic size={20} />}
             </button>
             <form style={{ display: 'flex', gap: '8px', flex: 1 }} onSubmit={e => { e.preventDefault(); ask(q); }}>
-              <input ref={inputRef} value={q}
+              <input ref={inputRef} value={q} spellCheck lang="en"
                 onChange={e => {
                   setQ(e.target.value);
                   if (heldWritesRef.current.length && e.target.value.trim()) clearHeldAuto();

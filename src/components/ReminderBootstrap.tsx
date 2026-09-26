@@ -5,6 +5,9 @@ import { useSession } from 'next-auth/react';
 import { getMyOpenTasks } from '@/actions/task';
 import { reconcile } from '@/lib/taskNotifications';
 import type { ReminderChoice } from '@/lib/reminderRule';
+import { useUser } from '@/components/UserContext';
+import { cacheIsFresh } from '@/lib/clientQueryCache';
+import { getCachedOpenTasks, setCachedOpenTasks } from '@/lib/openTasksCache';
 
 /**
  * Re-arm this account's reminders once per app open.
@@ -20,16 +23,31 @@ import type { ReminderChoice } from '@/lib/reminderRule';
  */
 export default function ReminderBootstrap() {
   const { status } = useSession();
+  const { privateSafe } = useUser();
 
   useEffect(() => {
     if (status !== 'authenticated') return;
     let disposed = false;
+    const run = (tasks: Parameters<typeof reconcile>[0], def: ReminderChoice | null) => {
+      reconcile(tasks, def).catch(() => {});
+    };
+
+    const cached = getCachedOpenTasks(privateSafe);
+    if (cached && cacheIsFresh(cached.fetchedAt)) {
+      run(cached.data.tasks as Parameters<typeof reconcile>[0], (cached.data.reminderDefault as ReminderChoice) || null);
+      return;
+    }
+
     getMyOpenTasks().then(res => {
       if (disposed || !res.success) return;
-      reconcile(res.tasks || [], (res.reminderDefault as ReminderChoice) || null).catch(() => {});
+      setCachedOpenTasks(privateSafe, {
+        tasks: res.tasks || [],
+        reminderDefault: res.reminderDefault as ReminderChoice | null,
+      });
+      run((res.tasks || []) as Parameters<typeof reconcile>[0], (res.reminderDefault as ReminderChoice) || null);
     }).catch(() => {});
     return () => { disposed = true; };
-  }, [status]);
+  }, [status, privateSafe]);
 
   return null;
 }

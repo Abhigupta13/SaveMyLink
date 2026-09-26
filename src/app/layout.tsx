@@ -14,6 +14,7 @@ import TimeZoneCookie from "@/components/TimeZoneCookie";
 import ExitFeedback from "@/components/ExitFeedback";
 import DriveOutcome from "@/components/DriveOutcome";
 import BackButtonListener from "@/components/BackButtonListener";
+import NetworkGate from "@/components/NetworkGate";
 import JarvisWidget from "@/components/JarvisWidget";
 import Tour from "@/components/Tour";
 import { FeedbackProvider } from "@/components/ui/Feedback";
@@ -86,9 +87,12 @@ export default async function RootLayout({
                 <TimeZoneCookie />
                 <Suspense fallback={null}><DriveOutcome /></Suspense>
                 <BackButtonListener />
+                <NetworkGate />
                 {/* Registers the exit-time feedback prompt that BackButtonListener consults. */}
                 <ExitFeedback />
-                <TopNav initialCategories={categories} />
+                <Suspense fallback={null}>
+                  <TopNav initialCategories={categories} />
+                </Suspense>
                 <main className="flex-1">
                   {children}
                 </main>

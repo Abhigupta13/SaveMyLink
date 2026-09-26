@@ -6,6 +6,7 @@
  *   ALL-YOU-NEED/
  *     personal/      — notes and anything else not filed under a group
  *     digilocker/    — uploaded from the Digi Locker tab
+ *     bills/         — expense import (statements, receipts — not identity docs)
  *     <Group name>/  — anything belonging to a project group
  *
  * The point of the tree is that it still makes sense when it is opened in Drive months later by
@@ -22,8 +23,10 @@ export const DRIVE_ROOT = 'ALL-YOU-NEED';
 export const PERSONAL_FOLDER = 'personal';
 /** Uploaded from the Digi Locker tab, and not filed under a group. */
 export const LOCKER_FOLDER = 'digilocker';
+/** Credit-card bills and receipts from expense import — not Digi Locker identity docs. */
+export const BILLS_FOLDER = 'bills';
 
-export type UploadSource = 'document' | 'note' | 'message' | 'feedback';
+export type UploadSource = 'document' | 'note' | 'message' | 'feedback' | 'expense';
 
 /** Control characters, which have no business in a file name and are header injection in a URL. */
 const CONTROL = /[\u0000-\u001f\u007f]/g;
@@ -72,6 +75,7 @@ export function safeFileName(name: string | null | undefined): string {
 export function folderFor(source: UploadSource, projectName?: string | null): string {
   if (projectName && String(projectName).trim()) return safeFolderName(projectName, 'group');
   if (source === 'document') return LOCKER_FOLDER;
+  if (source === 'expense') return BILLS_FOLDER;
   if (source === 'feedback') return 'feedback';
   return PERSONAL_FOLDER;
 }

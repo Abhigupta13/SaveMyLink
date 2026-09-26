@@ -3,6 +3,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { getPinStatus, verifyPrivatePin, getSafeStatus, lockPrivateSafe } from '@/actions/pin';
+import { invalidatePersonalDataCaches } from '@/lib/appDataCache';
 
 interface UserContextType {
   privateSafe: boolean;
@@ -47,25 +48,24 @@ export function UserProvider({ children }: { children: ReactNode }) {
     }
   }, [status, session]);
 
-  // Persistence (Sync with Cookie & URL)
+  // Persistence: cookie is a hint — the server-side PIN grant decides.
   useEffect(() => {
     const getCookie = (name: string) => {
       const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
       return match ? match[2] : null;
     };
-    
-    const searchParams = new URLSearchParams(window.location.search);
-    const inUrl = searchParams.get('private') === 'true';
-    const inCookie = getCookie('privateSafe') === 'true';
-    
-    if (inUrl || inCookie) {
-      // Cookie/URL is only a hint — the server-side PIN grant decides
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('private') === 'true') {
+      params.delete('private');
+      const qs = params.toString();
+      window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+    }
+
+    if (getCookie('privateSafe') === 'true') {
       getSafeStatus().then(({ safe }) => {
         if (safe) {
           setPrivateSafeState(true);
-          if (inUrl && !inCookie) {
-            document.cookie = `privateSafe=true; path=/; max-age=${30 * 24 * 60 * 60}`;
-          }
         } else {
           document.cookie = 'privateSafe=false; path=/; max-age=0';
         }
@@ -78,6 +78,16 @@ export function UserProvider({ children }: { children: ReactNode }) {
     if (!value) lockPrivateSafe();   // destroy the server-side grant too
     document.cookie = `privateSafe=${value}; path=/; max-age=${30 * 24 * 60 * 60}`;
     setSidebarOpen(false);
+    if (!value && typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has('private')) {
+        params.delete('private');
+        const qs = params.toString();
+        window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+      }
+    }
+    // Personal lists swap with the safe — drop client caches so the next view refetches once.
+    invalidatePersonalDataCaches();
     router.refresh();
   };
 

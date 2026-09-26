@@ -6,6 +6,7 @@ import { useSession } from 'next-auth/react';
 import { Bug, Lightbulb, MessageSquare, Link as LinkIcon, StickyNote, CheckSquare, Mic, Library, FolderOpen, Users, ArrowRight, Plus, Minus, Ban, RotateCcw, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getAdminStats, listUsersForManage, setSarvamAccess, setUserSuspended, deleteUserAsAdmin } from '@/actions/admin';
 import { getSuggestions } from '@/actions/suggestion';
+import FeedbackScreenshot from '@/components/FeedbackScreenshot';
 import { formatInZone } from '@/lib/time';
 import { useFeedback } from '@/components/ui/Feedback';
 import Loading from '@/components/ui/Loading';
@@ -65,7 +66,7 @@ const USAGE: [UsageKey, string, typeof LinkIcon][] = [
 type Stats = Extract<Awaited<ReturnType<typeof getAdminStats>>, { success: true }>;
 interface FeedbackRow {
   _id: string; kind: string; message: string; createdAt: string;
-  email?: string; page?: string; shot?: { url?: string };
+  email?: string; page?: string; shot?: { url?: string; key?: string; mimeType?: string };
 }
 
 type ManageRow = {
@@ -545,11 +546,8 @@ export default function AdminPage() {
                       <span className="a-note-when">{formatInZone(r.createdAt)}</span>
                     </div>
                     <p className="a-note-body">{r.message}</p>
-                    {r.shot?.url && (
-                      <a className="a-note-shot" href={r.shot.url} target="_blank" rel="noreferrer">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={r.shot.url} alt="Screenshot attached to this report" />
-                      </a>
+                    {(r.shot?.url || r.shot?.key) && (
+                      <FeedbackScreenshot shot={r.shot} className="a-note-shot" imgClassName="" />
                     )}
                     <div className="a-note-from">{r.email || 'unknown'}{r.page ? ` · ${r.page}` : ''}</div>
                   </article>

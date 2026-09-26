@@ -48,7 +48,7 @@ export async function submitSuggestion(formData: FormData) {
     if (file && file.size) {
       const adminEmail = feedbackDriveEmail();
       const owner = adminEmail
-        ? await User.findOne({ email: adminEmail, deletedAt: null }).select('_id').lean<{ _id: unknown } | null>()
+        ? await User.findOne({ email: adminEmail.toLowerCase(), deletedAt: null }).select('_id').lean<{ _id: unknown } | null>()
         : null;
       if (!owner) {
         shotDropped = 'unavailable';
@@ -57,7 +57,14 @@ export async function submitSuggestion(formData: FormData) {
         // The screenshot goes to the ADMIN's Drive, not the reporter's: it is being sent to us, and
         // asking someone to connect Google before they can report a bug is how bugs stop arriving.
         const saved = await saveUpload(String(owner._id), file, { source: 'feedback' });
-        if (saved.ok) shot = { key: saved.key, url: saved.url, mimeType: saved.mimeType, size: saved.size };
+        if (saved.ok) {
+          shot = {
+            key: saved.key,
+            url: saved.url,
+            mimeType: saved.mimeType || file.type || 'image/jpeg',
+            size: saved.size,
+          };
+        }
         else { shotDropped = saved.reason; console.error('[suggestion] screenshot dropped:', saved.reason); }
       }
     }
