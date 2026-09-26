@@ -28,4 +28,11 @@ const ProjectSchema = new Schema<IProject>({
   notes: { type: String, default: '' },
 }, { timestamps: true });
 
+// Membership lookups (myProjectFilter $or branches) — without these, every picker/search scans.
+ProjectSchema.index({ ownerId: 1 });
+ProjectSchema.index({ memberEmails: 1 });
+ProjectSchema.index({ viewerEmails: 1 });
+ProjectSchema.index({ ownerEmails: 1 });
+ProjectSchema.index({ createdAt: 1 });
+
 export const Project: Model<IProject> = defineModel<IProject>('Project', ProjectSchema);

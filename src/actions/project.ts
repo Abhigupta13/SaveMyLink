@@ -19,10 +19,9 @@ import { dropAssignee } from "@/lib/dropAssignee";
 import { sinceDays } from "@/lib/activity";
 import { getServerSession } from "next-auth";
 import { revalidatePath } from "next/cache";
-import { getTasks } from "@/actions/task";
-import { getMoms } from "@/actions/mom";
-import { getNotes } from "@/actions/note";
-import { getDocuments } from "@/actions/document";
+import { claimTaskAssignments } from "@/actions/task";
+import { loadNotesForProject } from "@/actions/note";
+import { loadProjectDocuments } from "@/actions/document";
 
 /**
  * A readable name for each email, so a project shows people rather than a wall of addresses.
@@ -75,28 +74,33 @@ export async function listProjects() {
   }
 }
 
+/** Shared by getProjects and workspace bundles (one session + one DB connect). */
+export async function loadProjectsWithPeople(userId: string, email: string) {
+  const projects = await Project.find(await myProjectFilter(userId, email))
+    .populate('ownerId', 'email name').sort({ createdAt: 1 }).lean();
+
+  const names = await displayNames(
+    (projects as any[]).flatMap(p => [p.ownerId?.email, ...(p.memberEmails || []), ...(p.viewerEmails || [])]),
+    userId,
+  );
+  const withPeople = (projects as any[]).map(p => ({
+    ...p,
+    people: [...new Set([String(p.ownerId?.email || '').toLowerCase(), ...(p.memberEmails || []), ...(p.viewerEmails || [])])]
+      .filter(Boolean)
+      .map(e => ({ email: e, ...(names.get(e) || { hasAccount: false }) })),
+  }));
+
+  return JSON.parse(JSON.stringify(withPeople));
+}
+
 export async function getProjects() {
   try {
     await connectToDatabase();
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) return { success: false, error: 'Unauthorized' };
 
-    const projects = await Project.find(await myProjectFilter(session.user.id, session.user.email))
-      .populate('ownerId', 'email name').sort({ createdAt: 1 }).lean();
-
-    // One lookup for every member of every project rather than one per project
-    const names = await displayNames(
-      (projects as any[]).flatMap(p => [p.ownerId?.email, ...(p.memberEmails || []), ...(p.viewerEmails || [])]),
-      session.user.id,
-    );
-    const withPeople = (projects as any[]).map(p => ({
-      ...p,
-      people: [...new Set([String(p.ownerId?.email || '').toLowerCase(), ...(p.memberEmails || []), ...(p.viewerEmails || [])])]
-        .filter(Boolean)
-        .map(email => ({ email, ...(names.get(email) || { hasAccount: false }) })),
-    }));
-
-    return { success: true, projects: JSON.parse(JSON.stringify(withPeople)) };
+    const projects = await loadProjectsWithPeople(session.user.id, session.user.email);
+    return { success: true, projects };
   } catch (error) {
     console.error('Failed to get projects:', error);
     return { success: false, error: 'Failed to fetch projects' };
@@ -409,9 +413,9 @@ export async function getProjectEvents(projectId: string, days?: number) {
  * to the database.
  *
  * The gate is projectForMember, once, before anything is read — the same read gate every other
- * project-scoped action uses, so a projectId off the wire is never trusted. The reads underneath
- * are the existing actions rather than copies of them: each re-checks scope on its own, which is
- * what keeps this from becoming a second place where access rules have to be right.
+ * project-scoped action uses, so a projectId off the wire is never trusted. After that, parallel
+ * project-scoped reads run in-process (shared loaders for notes/docs; direct model queries for
+ * tasks, meetings, events) instead of nesting six server actions that each re-session and re-connect.
  */
 export async function getProjectWorkspace(projectId: string, days?: number) {
   try {
@@ -429,38 +433,47 @@ export async function getProjectWorkspace(projectId: string, days?: number) {
       ...(project.viewerEmails || []),
     ].filter(Boolean))] as string[];
 
-    const [names, projects, tasks, moms, notes, docs, events, unreadCount] = await Promise.all([
-      // Only this group's people, not every person in every group I am in
-      displayNames(emails, session.user.id),
-      // MomSection routes confirmed items into any group, so it needs the names of all of them
-      listProjects(),
-      getTasks(projectId),
-      getMoms(projectId),
-      getNotes(projectId),
-      getDocuments(projectId),
-      getProjectEvents(projectId, days),
-      // A count, not the messages: the chat card needs a number on the summary screen, and the
-      // panel fetches the thread itself when it is opened. Already gated — projectForMember ran
-      // above, and this query cannot widen past the projectId it just cleared.
-      //
-      // UNREAD, not the total. A card reading "47" on a group you have read every word of tells
-      // you nothing you would act on; the only number worth a glance from the summary screen is
-      // how much of it is new to you.
-      unreadMessageCount(projectId, session.user.id),
+    const userId = session.user.id;
+    const email = (session.user.email || '').toLowerCase();
+
+    await claimTaskAssignments(userId, session.user.email);
+
+    const [names, projects, tasks, moms, notes, documents, events, unreadCount] = await Promise.all([
+      displayNames(emails, userId),
+      Project.find(await myProjectFilter(userId, email))
+        .select('name ownerId ownerEmails memberEmails viewerEmails')
+        .populate('ownerId', 'email')
+        .sort({ createdAt: 1 })
+        .lean(),
+      Task.find({ projectId })
+        .populate('assigneeId', 'email name')
+        .populate('signedOffBy', 'email name')
+        .sort({ completed: 1, dueAt: 1, createdAt: -1 })
+        .limit(500)
+        .lean(),
+      Mom.find({ projectId }).sort({ createdAt: -1 }).limit(200).lean(),
+      loadNotesForProject(userId, email, projectId),
+      loadProjectDocuments(userId, email, projectId),
+      Event.find({ projectId, at: { $gte: sinceDays(days) } })
+        .populate('actorId', 'email name')
+        .sort({ at: -1 })
+        .limit(200)
+        .lean(),
+      unreadMessageCount(projectId, userId),
     ]);
 
     return {
       success: true,
       project: JSON.parse(JSON.stringify({
         ...project.toObject(),
-        people: emails.map(email => ({ email, ...(names.get(email) || { hasAccount: false }) })),
+        people: emails.map(e => ({ email: e, ...(names.get(e) || { hasAccount: false }) })),
       })),
-      projects: projects.success ? projects.projects : [],
-      tasks: tasks.success ? tasks.tasks : [],
-      moms: moms.success ? moms.moms : [],
-      notes: notes.success ? notes.notes : [],
-      documents: docs.docs || [],
-      events: events.success ? events.events : [],
+      projects: JSON.parse(JSON.stringify(projects)),
+      tasks: JSON.parse(JSON.stringify(tasks)),
+      moms: JSON.parse(JSON.stringify(moms)),
+      notes,
+      documents,
+      events: JSON.parse(JSON.stringify(events)),
       unreadCount,
     };
   } catch (error) {
