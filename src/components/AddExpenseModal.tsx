@@ -2,8 +2,21 @@
 
 import React, { useState, useEffect } from 'react';
 import { X, Plus, Trash2 } from 'lucide-react';
-import { createExpense, updateExpense, deleteExpense, ExpenseInput } from '@/actions/expense';
-import { ExpenseCategory } from '@/lib/models/Expense';
+import {
+  createExpense,
+  updateExpense,
+  deleteExpense,
+  ExpenseInput,
+  getCategoryTotalsForPicker,
+  type CategoryTotalsByFlow,
+} from '@/actions/expense';
+import { formatCompactINR } from '@/lib/expenseFlow';
+import { ExpenseCategory, ExpenseFlow } from '@/lib/models/Expense';
+import {
+  categoryOptionsForFlow,
+  defaultCategoryForFlow,
+  isKnownCategoryForFlow,
+} from '@/lib/expenseCategories';
 import { useDialog, dialogProps } from '@/components/ui/useDialog';
 import { useFeedback } from '@/components/ui/Feedback';
 
@@ -14,6 +27,7 @@ interface ExpenseItem {
   currency?: string;
   date: string;
   category: ExpenseCategory;
+  flow?: ExpenseFlow;
   merchant?: string;
   notes?: string;
   isPrivate?: boolean;
@@ -24,30 +38,16 @@ interface AddExpenseModalProps {
   onClose: () => void;
   onSuccess: () => void;
   initialData?: ExpenseItem | null;
-  projects?: any[];
-  defaultProject?: string;
+  /** Personal ledger only — pass null (default). */
+  ledgerProjectId?: string | null;
 }
-
-const CATEGORIES: { value: string; label: string; icon: string }[] = [
-  { value: 'food', label: 'Food & Dining', icon: '🍔' },
-  { value: 'grocery', label: 'Grocery', icon: '🛒' },
-  { value: 'health', label: 'Health & Care', icon: '🩺' },
-  { value: 'gym', label: 'Gym & Fitness', icon: '🏋️‍♂️' },
-  { value: 'travel', label: 'Travel & Cab', icon: '✈️' },
-  { value: 'shopping', label: 'Shopping', icon: '🛍️' },
-  { value: 'bills', label: 'Bills & Utilities', icon: '⚡' },
-  { value: 'maintenance', label: 'Maintenance', icon: '🔧' },
-  { value: 'entertainment', label: 'Entertainment', icon: '🎬' },
-  { value: 'other', label: 'Other', icon: '📦' },
-];
 
 export default function AddExpenseModal({
   isOpen,
   onClose,
   onSuccess,
   initialData,
-  projects = [],
-  defaultProject = '',
+  ledgerProjectId = null,
 }: AddExpenseModalProps) {
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
@@ -56,20 +56,23 @@ export default function AddExpenseModal({
   const [merchant, setMerchant] = useState('');
   const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [notes, setNotes] = useState('');
-  const [projectId, setProjectId] = useState(defaultProject);
+  const [flow, setFlow] = useState<ExpenseFlow>('out');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [categoryTotals, setCategoryTotals] = useState<CategoryTotalsByFlow | null>(null);
   const { confirm, toast } = useFeedback();
 
   useDialog(isOpen, onClose);
 
   useEffect(() => {
     if (initialData) {
+      const entryFlow: ExpenseFlow = initialData.flow === 'in' ? 'in' : 'out';
       setTitle(initialData.title || '');
       setAmount(initialData.amount ? String(initialData.amount) : '');
-      const isKnown = CATEGORIES.some(c => c.value === initialData.category);
+      setFlow(entryFlow);
+      const isKnown = isKnownCategoryForFlow(initialData.category, entryFlow);
       if (isKnown) {
-        setCategory(initialData.category || 'food');
+        setCategory(initialData.category || defaultCategoryForFlow(entryFlow));
         setCustomCategory('');
       } else {
         setCategory('other');
@@ -90,12 +93,42 @@ export default function AddExpenseModal({
       setMerchant('');
       setDate(new Date().toISOString().split('T')[0]);
       setNotes('');
-      setProjectId(defaultProject);
+      setFlow('out');
     }
     setError(null);
-  }, [initialData, isOpen, defaultProject]);
+  }, [initialData, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      const res = await getCategoryTotalsForPicker({ projectId: ledgerProjectId ?? null });
+      if (!cancelled && res.success && res.totals) setCategoryTotals(res.totals);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, ledgerProjectId]);
 
   if (!isOpen) return null;
+
+  const categoryOptions = categoryOptionsForFlow(flow);
+  const flowTotals = categoryTotals?.[flow === 'in' ? 'in' : 'out'];
+
+  function totalsLabel(catValue: string): string | null {
+    if (!flowTotals) return null;
+    const t = flowTotals[catValue];
+    if (!t) return `${formatCompactINR(0)} · ${formatCompactINR(0)}`;
+    return `${formatCompactINR(t.month)} · ${formatCompactINR(t.allTime)}`;
+  }
+
+  function handleFlowChange(next: ExpenseFlow) {
+    setFlow(next);
+    if (!isKnownCategoryForFlow(category, next)) {
+      setCategory(defaultCategoryForFlow(next));
+      setCustomCategory('');
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -126,6 +159,7 @@ export default function AddExpenseModal({
         merchant: merchant.trim() || undefined,
         date,
         notes: notes.trim() || undefined,
+        flow,
         isPrivate: false,
       };
 
@@ -199,6 +233,22 @@ export default function AddExpenseModal({
             </div>
           )}
 
+          <div className="segmented" role="radiogroup" aria-label="Money in or out" style={{ display: 'flex', gap: '6px' }}>
+            {(['out', 'in'] as ExpenseFlow[]).map((f) => (
+              <button
+                key={f}
+                type="button"
+                role="radio"
+                aria-checked={flow === f}
+                className={`segment ${flow === f ? 'on' : ''}`}
+                style={{ flex: 1, fontSize: '0.8rem', fontWeight: 800 }}
+                onClick={() => handleFlowChange(f)}
+              >
+                {f === 'out' ? 'Spent / paid (−)' : 'Received (+)'}
+              </button>
+            ))}
+          </div>
+
           {/* Amount & Title */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
             <div>
@@ -224,7 +274,7 @@ export default function AddExpenseModal({
               </label>
               <input
                 type="text"
-                placeholder="e.g. Swiggy Dinner, Groceries..."
+                placeholder={flow === 'in' ? 'e.g. March salary, HDFC cashback…' : 'e.g. Swiggy dinner, rent paid…'}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 className="field"
@@ -235,12 +285,18 @@ export default function AddExpenseModal({
 
           {/* Category Picker */}
           <div>
-            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, marginBottom: '6px', color: 'var(--text-secondary)' }}>
-              Category Tag
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
-              {CATEGORIES.map((cat) => {
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                {flow === 'in' ? 'Income type' : 'Spending category'}
+              </label>
+              <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--text-tertiary)' }}>
+                This month · All time
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+              {categoryOptions.map((cat) => {
                 const isSelected = category === cat.value;
+                const totals = totalsLabel(cat.value);
                 return (
                   <button
                     key={cat.value}
@@ -255,16 +311,32 @@ export default function AddExpenseModal({
                       fontWeight: isSelected ? 800 : 600,
                       fontSize: '0.75rem',
                       display: 'flex',
+                      flexDirection: 'column',
                       alignItems: 'center',
-                      gap: '4px',
+                      gap: '2px',
                       cursor: 'pointer',
                       justifyContent: 'center',
+                      minHeight: '52px',
                     }}
                   >
-                    <span>{cat.icon}</span>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {cat.label.split(' ')[0]}
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span>{cat.icon}</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '72px' }}>
+                        {cat.label.split(' ')[0]}
+                      </span>
                     </span>
+                    {totals && (
+                      <span
+                        style={{
+                          fontSize: '0.62rem',
+                          fontWeight: 700,
+                          color: flow === 'in' ? 'var(--accent-text-success, #16a34a)' : 'var(--text-tertiary)',
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        {totals}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -273,7 +345,7 @@ export default function AddExpenseModal({
               <div style={{ marginTop: '8px' }}>
                 <input
                   type="text"
-                  placeholder="Enter custom category name (e.g. Subscriptions, Pet...)"
+                  placeholder={flow === 'in' ? 'Custom income type (e.g. Freelance, Gift…)' : 'Custom category (e.g. Subscriptions, Pet…)'}
                   value={customCategory}
                   onChange={(e) => setCustomCategory(e.target.value)}
                   className="field"

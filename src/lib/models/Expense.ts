@@ -3,10 +3,13 @@ import { defineModel } from './registry';
 
 export type ExpenseCategory = 'food' | 'grocery' | 'health' | 'gym' | 'travel' | 'shopping' | 'bills' | 'maintenance' | 'entertainment' | 'other' | (string & {});
 export type ExpenseClassification = 'expense' | 'investment' | 'waste';
+/** `out` = money spent or sent; `in` = salary, cashback, refunds received. */
+export type ExpenseFlow = 'in' | 'out';
 
 export interface IExpense extends MongooseDocument {
   title: string;
   amount: number;
+  flow?: ExpenseFlow;
   currency: string;
   date: Date;
   category: ExpenseCategory;
@@ -15,6 +18,7 @@ export interface IExpense extends MongooseDocument {
   notes?: string;
   userId: mongoose.Types.ObjectId;
   projectId?: mongoose.Types.ObjectId;
+  receiptDocumentId?: mongoose.Types.ObjectId;
   isPrivate?: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -23,6 +27,7 @@ export interface IExpense extends MongooseDocument {
 const ExpenseSchema = new Schema<IExpense>({
   title: { type: String, required: true },
   amount: { type: Number, required: true },
+  flow: { type: String, enum: ['in', 'out'], default: 'out' },
   currency: { type: String, default: 'INR' },
   date: { type: Date, default: Date.now, required: true },
   category: { 
@@ -40,6 +45,7 @@ const ExpenseSchema = new Schema<IExpense>({
   notes: { type: String },
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   projectId: { type: Schema.Types.ObjectId, ref: 'Project' },
+  receiptDocumentId: { type: Schema.Types.ObjectId, ref: 'Document' },
   isPrivate: { type: Boolean, default: false }
 }, {
   timestamps: true
