@@ -81,7 +81,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ key:
 
   const upstream = out.res;
   const meta = await fileMeta(key);
-  const { type, disposition } = safeContentType(meta?.mimeType, upstream.headers.get('content-type'));
+  let { type, disposition } = safeContentType(meta?.mimeType, upstream.headers.get('content-type'));
+  // Drive often responds as octet-stream + attachment; <img> and inline preview need image/* + inline.
+  const storedImage = meta?.mimeType?.toLowerCase().startsWith('image/');
+  if (storedImage) {
+    type = meta!.mimeType!.toLowerCase();
+    disposition = 'inline';
+  }
   const filename = safeFilename(meta?.name);
 
   const headers = new Headers();

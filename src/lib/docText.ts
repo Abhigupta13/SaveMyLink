@@ -16,10 +16,9 @@ export async function extractText(buf: Buffer, mimeType = '', name = ''): Promis
   const ext = path.extname(name).toLowerCase();
   try {
     if (mimeType === 'application/pdf' || ext === '.pdf') {
-      const { PDFParse } = await import('pdf-parse');
-      const parser = new PDFParse({ data: new Uint8Array(buf) });
-      try { return clean((await parser.getText()).text || ''); }
-      finally { await parser.destroy(); }
+      const { extractPdfText } = await import('@/lib/pdfText');
+      const res = await extractPdfText(buf);
+      return res.ok ? res.text : '';
     }
     if (mimeType.startsWith('text/') || TEXT_EXT.includes(ext)) return clean(buf.toString('utf8'));
   } catch (error) {

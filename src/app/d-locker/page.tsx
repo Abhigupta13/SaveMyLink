@@ -8,7 +8,9 @@ import { getDocuments, addDocument, deleteDocument, moveDocument, fileDocumentUn
 import { goConnectDrive, DRIVE_OUTCOME_MESSAGE, type DriveOutcome } from '@/lib/driveConnect';
 import { useDriveGate } from '@/components/useDriveGate';
 import { getProjects } from '@/actions/project';
-import { ExternalLink, Download, X } from 'lucide-react';
+import DocPreviewModal from '@/components/DocPreviewModal';
+import { kindOfDoc, extOfDoc } from '@/components/DocFilePreview';
+import { listCachedFiles, type CachedFileMeta } from '@/lib/offlineFileCache';
 import { useFeedback } from '@/components/ui/Feedback';
 import Loading from '@/components/ui/Loading';
 import LoadError from '@/components/ui/LoadError';
@@ -50,6 +52,7 @@ export default function DLockerPage() {
   const [isAddingDoc, setIsAddingDoc] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [preview, setPreview] = useState<any | null>(null);
+  const [cachedOffline, setCachedOffline] = useState<CachedFileMeta[]>([]);
 
   // Form state
   const [docType, setDocType] = useState<'file' | 'link'>('file');
@@ -83,10 +86,17 @@ export default function DLockerPage() {
     setFailed(false);
     try {
       const res = await getDocuments();
-      if (res.docs) setDocs(res.docs);
-      else setFailed(true);
+      if (res.docs) {
+        setDocs(res.docs);
+        setFailed(false);
+        setCachedOffline([]);
+      } else {
+        setFailed(true);
+        listCachedFiles().then(setCachedOffline).catch(() => setCachedOffline([]));
+      }
     } catch {
       setFailed(true);
+      listCachedFiles().then(setCachedOffline).catch(() => setCachedOffline([]));
     } finally {
       setIsLoading(false);
     }
@@ -201,18 +211,8 @@ export default function DLockerPage() {
     return '📁';
   };
 
-  // What we can actually preview in-browser without extra libraries
-  const kindOf = (doc: any): 'image' | 'video' | 'pdf' | 'audio' | 'link' | 'file' => {
-    if (doc.type === 'link') return 'link';
-    const m = (doc.mimeType || '').toLowerCase();
-    const ext = (doc.url || '').split('.').pop()?.toLowerCase() || '';
-    if (m.startsWith('image/') || ['png','jpg','jpeg','gif','webp','svg','avif','bmp'].includes(ext)) return 'image';
-    if (m.startsWith('video/') || ['mp4','webm','mov','mkv'].includes(ext)) return 'video';
-    if (m.startsWith('audio/') || ['mp3','wav','m4a','ogg'].includes(ext)) return 'audio';
-    if (m === 'application/pdf' || ext === 'pdf') return 'pdf';
-    return 'file';
-  };
-  const extOf = (doc: any) => ((doc.name?.includes('.') ? doc.name : doc.url) || '').split('.').pop()?.slice(0, 4).toUpperCase() || 'FILE';
+  const kindOf = kindOfDoc;
+  const extOf = extOfDoc;
   const favicon = (url: string) => { try { return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=128`; } catch { return ''; } };
 
   const formatSize = (bytes?: number) => {
@@ -233,9 +233,22 @@ export default function DLockerPage() {
 
   // Before the empty state, never instead of it: "Your Digi Locker is empty" is the last thing
   // someone whose documents just failed to load should be told.
-  if (failed) {
+  const offlineDocs: DocType[] = cachedOffline.map((c) => ({
+    _id: `offline:${c.key}`,
+    name: c.name,
+    type: 'file' as const,
+    url: `/api/files/${c.key}`,
+    mimeType: c.mimeType,
+    size: c.size,
+    createdAt: new Date(c.cachedAt).toISOString(),
+  }));
+
+  if (failed && !offlineDocs.length) {
     return <LoadError what="your documents" onRetry={fetchDocs} />;
   }
+
+  const showingOfflineCopy = failed && offlineDocs.length > 0;
+  const gridDocs = showingOfflineCopy ? offlineDocs : visibleDocs;
 
   return (
     <main className="container d-locker-container">
@@ -260,7 +273,14 @@ export default function DLockerPage() {
           banner has to admit that only half of it swapped. */}
       <SafeBanner noun="files" />
 
-      {folders.length > 1 && (
+      {showingOfflineCopy && (
+        <div className="offline-locker-banner" role="status">
+          Could not reach the server — showing {offlineDocs.length} file{offlineDocs.length === 1 ? '' : 's'} you opened before on this device.
+          Reconnect to see your full locker and sync again.
+        </div>
+      )}
+
+      {folders.length > 1 && !showingOfflineCopy && (
         <div className="folder-bar">
           {[ALL, ...folders].map(f => (
             <button key={f} className={`folder-chip ${activeFolder === f ? 'on' : ''}`} onClick={() => setActiveFolder(f)}>
@@ -272,10 +292,12 @@ export default function DLockerPage() {
       )}
 
       <div className="doc-grid">
-        {visibleDocs.length > 0 ? (
-          visibleDocs.map((doc) => (
+        {gridDocs.length > 0 ? (
+          gridDocs.map((doc) => (
             <div key={doc._id} className="doc-card" onClick={() => setPreview(doc)}>
-              <button className="doc-delete-btn" onClick={(e) => handleDelete(e, doc._id)} title="Delete">&times;</button>
+              {!doc._id.startsWith('offline:') && (
+                <button className="doc-delete-btn" onClick={(e) => handleDelete(e, doc._id)} title="Delete">&times;</button>
+              )}
 
               <div className="doc-thumb">
                 {(() => {
@@ -297,7 +319,7 @@ export default function DLockerPage() {
               </div>
             </div>
           ))
-        ) : privateSafe && !docs.length ? (
+        ) : privateSafe && !docs.length && !showingOfflineCopy ? (
           /* "Your Digi Locker is empty" about a locker that is not empty, only swapped. Keyed on
              docs rather than the folder: with the safe open the folder bar has nothing to draw, so
              "Nothing in Taxes yet" would be a dead end with no way back to All. */
@@ -319,52 +341,16 @@ export default function DLockerPage() {
         )}
       </div>
 
-      {preview && (() => {
-        const kind = kindOf(preview);
-        return (
-          <div className="modal-overlay" onClick={() => setPreview(null)}>
-            <div className="preview-shell" onClick={e => e.stopPropagation()}>
-              <div className="preview-bar">
-                <span className="preview-name">{preview.name}</span>
-                <input className="preview-folder" type="text" list="folder-options" title="Move to folder"
-                  defaultValue={preview.folder || DEFAULT_FOLDER}
-                  onBlur={e => { if (e.target.value.trim() !== (preview.folder || DEFAULT_FOLDER)) handleMove(preview._id, e.target.value); }} />
-                {projects.length > 0 && (
-                  <select className="preview-folder" title="Share with a project"
-                    value={preview.projectId?._id || ''} onChange={e => handleShareWithProject(preview._id, e.target.value)}>
-                    <option value="">Just me</option>
-                    {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
-                  </select>
-                )}
-                <a className="icon-btn" href={preview.url} target="_blank" rel="noreferrer" title="Open in new tab"><ExternalLink size={16} /></a>
-                {preview.type === 'file' && (
-                  <a className="icon-btn" href={preview.url} download={preview.name} title="Download"><Download size={16} /></a>
-                )}
-                <button className="icon-btn" onClick={() => setPreview(null)} title="Close"><X size={16} /></button>
-              </div>
-
-              <div className="preview-body">
-                {kind === 'image' && <img src={preview.url} alt={preview.name} />}
-                {kind === 'video' && <video src={preview.url} controls autoPlay />}
-                {kind === 'audio' && <audio src={preview.url} controls style={{ width: '100%' }} />}
-                {kind === 'pdf' && <iframe src={preview.url} title={preview.name} />}
-                {(kind === 'file' || kind === 'link') && (
-                  <div className="preview-fallback">
-                    <div className={`doc-glyph ${kind}`} style={{ width: '72px', height: '72px', fontSize: '0.9rem' }}>
-                      <span>{kind === 'link' ? '\u2197' : extOf(preview)}</span>
-                    </div>
-                    <p>{kind === 'link' ? 'External link \u2014 open it in a new tab.' : 'No in-app preview for this file type.'}</p>
-                    <a className="btn-primary" href={preview.url} target="_blank" rel="noreferrer"
-                      style={{ padding: '11px 24px', borderRadius: '12px', fontWeight: 800, textDecoration: 'none' }}>
-                      {kind === 'link' ? 'Open link' : 'Open file'}
-                    </a>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {preview && (
+        <DocPreviewModal
+          doc={preview}
+          defaultFolder={DEFAULT_FOLDER}
+          projects={projects}
+          onClose={() => setPreview(null)}
+          onMove={handleMove}
+          onShareWithProject={handleShareWithProject}
+        />
+      )}
 
       {isAddingDoc && (
         <div className="modal-overlay" onClick={() => setIsAddingDoc(false)}>
