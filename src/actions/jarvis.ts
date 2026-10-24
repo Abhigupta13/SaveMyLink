@@ -36,6 +36,7 @@ import { Category } from "@/lib/models/Category";
 import { createLink, deleteLink } from "@/actions/link";
 import { createTask, updateTask, toggleTask, deleteTask } from "@/actions/task";
 import { deleteNote } from "@/actions/note";
+import { prepareNoteBodyFromJarvis } from "@/lib/jarvisNoteBody";
 import Expense from "@/lib/models/Expense";
 import { createExpense, updateExpense as updateExpenseAction, deleteExpense } from "@/actions/expense";
 import { deleteContact } from "@/actions/contact";
@@ -418,9 +419,12 @@ async function applyActions(actions: any[], env: {
           const note = await Note.findOne({ _id: a.id, userId, ...personal });
           if (!note) continue;
           const set = patch(a, { title: str, text: str });
-          if (set.text !== undefined) { note.body = set.text; delete set.text; }
+          if (set.text !== undefined) { note.body = prepareNoteBodyFromJarvis(set.text); delete set.text; }
           const add = str(a.appendText);
-          if (add) note.body = [note.body, add].filter(Boolean).join('\n');
+          if (add) {
+            const chunk = prepareNoteBodyFromJarvis(add);
+            note.body = note.body ? `${note.body}${chunk}` : chunk;
+          }
           if (set.title !== undefined) note.title = set.title;
           if (!note.isModified()) continue;
           if (hold(a, note.projectId)) continue;
@@ -540,7 +544,9 @@ async function applyActions(actions: any[], env: {
           // goes through the rule rather than around it, so a model that one day starts emitting
           // isPrivate cannot store a padlock the rest of the app would not have allowed.
           const note = await Note.create({
-            userId, title: a.title ? String(a.title) : undefined, body: String(a.text || ''),
+            userId,
+            title: a.title ? String(a.title) : undefined,
+            body: prepareNoteBodyFromJarvis(String(a.text || '')),
             isPrivate: privacyOnWrite(a.isPrivate),
           });
           created.push({ id: String(note._id), type: 'note', title: note.title || String(a.text).slice(0, 60), detail: 'Saved to Notes' });
@@ -793,7 +799,7 @@ WHAT YOU CAN DO
 1. Answer questions from DATA.
 2. Create or change things, ONLY by emitting an "actions" entry — you have no other way to touch anything:
    - {"type":"create_task","title":"...","description":"<optional>","dueAt":"YYYY-MM-DDTHH:mm" (local time, optional),"projectName":"<exact project name from DATA, optional>","assigneeEmail":"<optional>"}
-   - {"type":"create_note","title":"<short title, optional>","text":"the note body"}
+   - {"type":"create_note","title":"<short title, optional>","text":"the note body — plain text or note HTML (see NOTE FORMATTING)"}
    - {"type":"create_expense","title":"...","amount":450,"category":"food|health|gym|travel|shopping|bills|entertainment|other","classification":"expense|investment|waste","merchant":"<Amazon|Flipkart|Swiggy|etc, optional>","date":"YYYY-MM-DD (optional)"}
    - {"type":"update_expense","id":"<EXPENSE id from DATA>","title":"<optional>","amount":<optional number>,"category":"food|health|gym|travel|shopping|bills|entertainment|other","classification":"expense|investment|waste","merchant":"<optional>"}
    - {"type":"delete_expense","id":"<EXPENSE id from DATA>"}
@@ -818,6 +824,11 @@ WHAT YOU CAN DO
    When the user confirms ("yes", "go ahead", "that's right") or revises ("no, make it 400"), the app handles it — on revision, emit fresh actions for the new intent.
    Emit an action whenever the user asks to add/remind/save/log something, or to change/rename/reschedule/append/tick off/delete/remove something that already exists.
    Only send the fields that change — omitted fields are left alone. To add a point or line to an existing task or note, use appendDescription / appendText; only use description / text when the user wants the whole thing rewritten.
+   NOTE FORMATTING — notes render rich HTML in the app. When the user asks for a checklist, shopping list, or tick list, put a divider, the checklist, then another divider (the app also builds this from plain bullet lines). Use this HTML shape:
+   - Divider: <hr class="note-divider" contenteditable="false" />
+   - Checklist: <ul class="note-checklist"><li><input type="checkbox" contenteditable="false" /> Item one</li><li><input type="checkbox" contenteditable="false" checked /> Done item</li></ul>
+   - Table: <table class="note-table"><thead><tr><th>Col A</th><th>Col B</th></tr></thead><tbody><tr><td>…</td><td>…</td></tr></tbody></table>
+   Plain text still works: a paragraph, then lines like "- Milk" / "- [ ] Eggs" / "- [x] Bread" on their own, separated by blank lines, become a checklist with dividers. Markdown pipe tables (header row, --- separator, body rows) become a table.
    Resolve relative times ("tomorrow 5pm", "in 2 hours", "move it to Friday") against NOW, given at the very end of this message.
    Match the item the user means by its meaning, not exact wording ("my website redesign task" → the TASK whose title is about redesigning the website), and copy its id from DATA.
 3. Save a link the user gives you: {"type":"save_link","url":"https://…"} — for "save this link", "bookmark that", or a URL pasted or dictated with no other instruction. Write the URL properly even when it was dictated ("ray dot so" → "https://ray.so"). Never invent a URL you were not given, and never use this to save a note — that is create_note.
