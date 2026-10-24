@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
-import { Lock, Unlock, Share2, FileText, BarChart3, Compass, Sparkles, Languages, BellRing, ChevronRight, ChevronDown, Smartphone } from 'lucide-react';
+import { Lock, Unlock, Share2, FileText, BarChart3, BookOpen, Compass, Sparkles, Languages, BellRing, ChevronRight, ChevronDown, Smartphone } from 'lucide-react';
 import { getReminderDefault, setReminderDefault } from '@/actions/task';
 import ReminderPicker from '@/components/ReminderPicker';
 import { DEFAULT_CHOICE, type ReminderChoice } from '@/lib/reminderRule';
@@ -119,6 +119,14 @@ export default function ProfilePage() {
               <span className="set-row-text">
                 <span className="set-row-title">Admin</span>
                 <span className="set-row-sub">How the app is doing, and everything sent through Help us improve</span>
+              </span>
+              <ChevronRight className="set-row-go" size={18} />
+            </Link>
+            <Link href="/admin/docs" className="set-row">
+              <span className="row-icon"><BookOpen size={18} strokeWidth={2.2} /></span>
+              <span className="set-row-text">
+                <span className="set-row-title">Product docs</span>
+                <span className="set-row-sub">Features, technology, strategy, and who can do what</span>
               </span>
               <ChevronRight className="set-row-go" size={18} />
             </Link>

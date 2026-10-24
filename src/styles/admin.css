@@ -255,6 +255,7 @@
   transition: border-color .15s ease, color .15s ease;
 }
 .a-head-btn:hover { border-color: var(--accent-text); color: var(--accent-text); }
+.a-docs-entry { margin-top: 16px; }
 
 /* ── Revoke access. A column of rows, not the tap-anywhere grid the Sarvam card uses: every action
       here is a named button, because one of them cannot be undone and none of them should be

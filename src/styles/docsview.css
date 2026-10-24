@@ -1,0 +1,132 @@
+/* /admin/docs — reading the product markdown. Scoped under .docsview, dv- prefixed,
+   same reason admin.css uses a-: globals.css already owns .card, .row, .grid.
+   Phone first. From 860px the documents sit on the left and the sections stick on the right. */
+
+.docsview {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 8px 16px 120px;
+}
+.docsview :focus-visible { outline: 2px solid var(--accent-color); outline-offset: 3px; }
+
+.dv-top { padding: 8px 0 18px; }
+.dv-back {
+  display: inline-flex; align-items: center; min-height: 44px;
+  color: var(--text-secondary); font-size: 0.82rem; font-weight: 700; text-decoration: none;
+}
+.dv-back:hover { color: var(--accent-text); }
+.dv-eyebrow {
+  margin: 4px 0 8px; font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--text-tertiary); font-weight: 700;
+}
+.docsview h1 {
+  margin: 0; font-family: var(--font-display); font-weight: 300;
+  font-size: clamp(32px, 8vw, 48px); line-height: 1.05; letter-spacing: -.03em;
+  font-variation-settings: 'opsz' 96, 'SOFT' 50; color: var(--text-primary); text-wrap: balance;
+}
+.dv-lede {
+  margin: 10px 0 0; max-width: 36rem; font-size: 0.95rem; line-height: 1.55; color: var(--text-secondary);
+}
+.dv-search {
+  display: block; width: 100%; max-width: 28rem; margin-top: 16px;
+  min-height: 44px; padding: 0 14px; border-radius: 14px;
+  border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary);
+  font: inherit; font-size: 0.95rem;
+}
+.dv-search::placeholder { color: var(--text-tertiary); }
+
+.dv-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-areas: "docs" "onpage" "main";
+  gap: 8px 28px;
+}
+.dv-docs { grid-area: docs; }
+.dv-onpage { grid-area: onpage; }
+.dv-main { grid-area: main; min-width: 0; }
+
+.dv-pills, .dv-results, .dv-onpage ul { list-style: none; margin: 0; padding: 0; }
+.dv-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.dv-pills a, .dv-results > li > a {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 8px 14px;
+  border-radius: 999px; border: 1px solid var(--border-color); background: var(--bg-secondary);
+  color: var(--text-secondary); font-size: 0.82rem; font-weight: 700; text-decoration: none;
+}
+.dv-pills a:hover, .dv-results > li > a:hover { color: var(--text-primary); border-color: var(--accent-color); }
+.dv-pills a[aria-current="page"], .dv-results > li > a[aria-current="page"] {
+  background: var(--accent-strong); border-color: var(--accent-strong); color: #fff;
+}
+
+.dv-results { display: grid; gap: 14px; }
+.dv-results ul { margin-top: 6px; }
+.dv-results ul a, .dv-onpage a {
+  display: block; padding: 6px 0; color: var(--text-secondary); text-decoration: none;
+  font-size: 0.88rem; line-height: 1.4;
+}
+.dv-results ul a:hover, .dv-onpage a:hover { color: var(--accent-text); }
+
+.dv-onpage-label {
+  margin: 8px 0 4px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--text-tertiary); font-weight: 700;
+}
+.dv-empty { margin: 8px 0; font-size: 0.85rem; color: var(--text-tertiary); }
+
+.dv-article { color: var(--text-primary); font-size: 0.98rem; line-height: 1.65; }
+.dv-article p,
+.dv-article h2,
+.dv-article h3,
+.dv-article ul,
+.dv-article ol,
+.dv-article blockquote { max-width: 68ch; }
+.dv-article h2, .dv-article h3 { scroll-margin-top: 76px; text-wrap: balance; }
+.dv-article h2 {
+  margin: 1.8em 0 0.5em; font-family: var(--font-display); font-weight: 400;
+  font-size: 1.55rem; letter-spacing: -.02em; line-height: 1.2; color: var(--text-primary);
+}
+.dv-article h3 {
+  margin: 1.4em 0 0.4em; font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em;
+}
+.dv-article p { margin: 0.7em 0; }
+.dv-article a { color: var(--accent-text); font-weight: 700; text-underline-offset: 2px; }
+.dv-article ul, .dv-article ol { margin: 0.6em 0; padding-left: 1.2em; }
+.dv-article li { margin: 0.25em 0; }
+.dv-article li > ul, .dv-article li > ol { margin: 0.2em 0; }
+.dv-article blockquote {
+  margin: 1em 0; padding: 4px 0 4px 14px; border-left: 3px solid var(--accent-color);
+  color: var(--text-secondary);
+}
+.dv-article hr { border: 0; border-top: 1px solid var(--border-color); margin: 1.6em 0; max-width: 68ch; }
+.dv-article code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86em; padding: 0.1em 0.35em; border-radius: 6px;
+  background: var(--bg-tertiary); overflow-wrap: anywhere;
+}
+.dv-article pre {
+  margin: 1em 0; padding: 14px 16px; border-radius: 16px; overflow: auto; max-width: 100%;
+  background: var(--bg-secondary); border: 1px solid var(--border-color);
+}
+.dv-article pre code { padding: 0; background: none; font-size: 0.82rem; line-height: 1.55; }
+
+.dv-table { overflow-x: auto; margin: 1em 0; max-width: 100%; border-radius: 16px; border: 1px solid var(--border-color); }
+.dv-article .dv-table { max-width: 100%; }
+.dv-table table { width: 100%; border-collapse: collapse; font-size: 0.86rem; line-height: 1.45; }
+.dv-table th, .dv-table td {
+  text-align: left; vertical-align: top; padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color); white-space: nowrap;
+}
+.dv-table th { font-size: 0.72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); font-weight: 700; }
+.dv-table tr:last-child td { border-bottom: 0; }
+.dv-table td { white-space: normal; color: var(--text-secondary); }
+.dv-table td code, .dv-table th code { white-space: nowrap; }
+
+@media (min-width: 860px) {
+  .dv-layout {
+    grid-template-columns: 200px minmax(0, 1fr) 200px;
+    grid-template-areas: "docs main onpage";
+    align-items: start;
+  }
+  .dv-pills { flex-direction: column; align-items: stretch; }
+  .dv-pills a { border-radius: 12px; justify-content: flex-start; }
+  .dv-onpage { position: sticky; top: 70px; max-height: calc(100vh - 90px); overflow: auto; }
+  .dv-docs { position: sticky; top: 70px; }
+}

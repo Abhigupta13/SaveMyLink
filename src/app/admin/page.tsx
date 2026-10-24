@@ -369,6 +369,9 @@ export default function AdminPage() {
         <p className="a-lede">
           Counts only. The allowlist is the one place a person is named.
         </p>
+        <Link href="/admin/docs" className="a-head-btn a-docs-entry">
+          Product docs <ArrowRight size={14} />
+        </Link>
       </header>
 
       {/* Window picker — drives the time-based numbers; all-time totals keep an in-range companion */}

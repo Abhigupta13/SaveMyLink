@@ -48,6 +48,12 @@ const nextConfig: NextConfig = {
     // MOM audio uploads (~14MB/hr opus) + d-locker files; default is 1MB
     serverActions: { bodySizeLimit: '30mb' },
   },
+  // /admin/docs reads docs/*.md at request time. A dynamic path is not traced on its own,
+  // and a fully static page would ignore this — the route is force-dynamic. Keys are URL globs.
+  outputFileTracingIncludes: {
+    '/admin/docs': ['./docs/**/*.md'],
+    '/admin/docs/*': ['./docs/**/*.md'],
+  },
 } as any;
 
 export default nextConfig;
