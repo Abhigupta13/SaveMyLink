@@ -4,27 +4,32 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { hintFor } from '@/lib/nav';
 import { useSession } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
-import { Plus, Pin, Trash2, X, Paperclip, Camera, FileText, Image as ImageIcon } from 'lucide-react';
+import {
+  Plus, Pin, Trash2, X, Paperclip, Camera, FileText, Image as ImageIcon,
+  ArrowLeft, Pencil, MoreVertical,
+} from 'lucide-react';
 import { getNotesWorkspace, createNote, updateNote, deleteNote, attachToNote, removeAttachment } from '@/actions/note';
 import { AppCacheNs, invalidateNotesCache } from '@/lib/appDataCache';
 import { runStaleQuery } from '@/lib/runStaleQuery';
-import { goConnectDrive, DRIVE_OUTCOME_MESSAGE, type DriveOutcome } from '@/lib/driveConnect';
+import { goConnectDrive } from '@/lib/driveConnect';
 import { useDriveGate } from '@/components/useDriveGate';
-import { getProjects, createProject } from '@/actions/project';
+import { createProject } from '@/actions/project';
 import ProjectPicker from '@/components/ProjectPicker';
 import { useFeedback } from '@/components/ui/Feedback';
 import Loading from '@/components/ui/Loading';
 import LoadError from '@/components/ui/LoadError';
 import { useShareNotice } from '@/components/ShareNotice';
 import { useUser } from '@/components/UserContext';
-import { SafeBanner, SafeEmpty, PrivateToggle, droppedPrivacy } from '@/components/PrivateSafe';
+import { SafeBanner, SafeEmpty, droppedPrivacy } from '@/components/PrivateSafe';
 import { shrinkImage } from '@/lib/shrinkImage';
 import { formatTime, formatDay } from '@/lib/time';
 import { isProjectOwner } from '@/lib/scope';
 import { isNoteBodyEmpty, noteBodyPlainText } from '@/lib/noteHtml';
 import NoteRichEditor, { type NoteMentionOption } from '@/components/NoteRichEditor';
 import NoteBodyView from '@/components/NoteBodyView';
+import NoteSettingsSheet from '@/components/NoteSettingsSheet';
 import { mentionLabelOf, isImageAttachment } from '@/lib/noteMentionLabels';
+import { noteCardStyle } from '@/lib/noteColors';
 import CachedAppFileImage from '@/components/CachedAppFileImage';
 
 const isImage = (a: any) => (a.mimeType || '').startsWith('image/');
@@ -35,35 +40,40 @@ const when = (iso: string) => {
   return sameDay ? formatTime(d) : formatDay(d);
 };
 
+const firstImage = (attachments: any[] | undefined) =>
+  (attachments || []).find((a) => isImage(a));
+
+type PanelMode = 'view' | 'edit';
+
 export default function NotesClient() {
   const { toast, confirm } = useFeedback();
   const { confirmShare, shareDialog } = useShareNotice();
   const { privateSafe } = useUser();
-  // Asks before the picker rather than after the upload: attachments go to the user own Drive,
-  // so with none connected the file dialog can only ever end in a failure.
   const ensureDrive = useDriveGate();
   const { data: session, status } = useSession();
   const myEmail = (session?.user?.email || '').toLowerCase();
   const [notes, setNotes] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
-  const [scope, setScope] = useState<any | null>(null);   // null = Personal, same as Tasks and Meetings
+  const [scope, setScope] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  // Distinct from "no notes": empty means empty, this means we could not find out.
   const [failed, setFailed] = useState(false);
-  const [editing, setEditing] = useState<any | null>(null); // note being edited, or {} for new
+  const [panelMode, setPanelMode] = useState<PanelMode | null>(null);
+  const [meta, setMeta] = useState<{ updatedAt?: string; pinned?: boolean }>({});
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
-  const [noteProject, setNoteProject] = useState('');   // project of the note being edited
-  const [notePrivate, setNotePrivate] = useState(false);   // what the switch is asking for; the server decides
+  const [noteProject, setNoteProject] = useState('');
+  const [notePrivate, setNotePrivate] = useState(false);
+  const [noteColor, setNoteColor] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [q, setQ] = useState('');
   const [attachments, setAttachments] = useState<any[]>([]);
   const [uploading, setUploading] = useState(false);
   const [hasCamera, setHasCamera] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
-  // Attaching creates the note server-side if it did not exist, so later saves target that row
   const noteIdRef = useRef<string | null>(null);
+  const openedAsNewRef = useRef(false);
 
   const mentionAttachments: NoteMentionOption[] = attachments
     .filter(isImageAttachment)
@@ -74,15 +84,7 @@ export default function NotesClient() {
       label: mentionLabelOf(a, attachments),
     }));
 
-  // Arriving from a group's workspace: ?project=<id> opens this page already in that scope, so
-  // "write a note" from inside a project does not silently drop you into Personal. The page is
-  // dynamically rendered, so useSearchParams needs no Suspense boundary here.
   const wantedProject = useSearchParams().get('project');
-
-  /* A throw used to leave the spinner running forever, and a resolved `success: false` rendered
-     "No notes yet" — telling someone their notes are gone when the load merely failed. `failed`
-     keeps those two apart. Only the notes call decides it: the projects call feeds the scope
-     picker, and losing that should not blank a page full of notes we did fetch. */
   const notesCacheKey = `all:${privateSafe ? '1' : '0'}`;
 
   const applyWorkspace = useCallback((data: { notes: any[]; projects: any[] }) => {
@@ -114,41 +116,119 @@ export default function NotesClient() {
   }, [load]);
 
   useEffect(() => { if (status === 'authenticated') load(); }, [status, privateSafe, load]);
-  // `capture` is ignored on desktop, where the button would just be a second file picker.
-  // Checked after mount so the server and first client render agree.
   useEffect(() => { setHasCamera(window.matchMedia('(pointer: coarse)').matches); }, []);
 
-  const open = (note: any | null) => {
-    setEditing(note || {});
+  const fillDraft = (note: any | null) => {
     setTitle(note?.title || '');
     setBody(note?.body || '');
-    // A new note lands in whatever scope you are looking at — that is what you meant by being there
     setNoteProject(note ? (note.projectId?._id || '') : (scope?._id || ''));
-    // …and in whichever vault you are looking at. Writing a note with the safe open and landing
-    // outside it would file it straight into the list you cannot currently see.
     setNotePrivate(note ? !!note.isPrivate : privateSafe);
+    setNoteColor(note?.color || '');
     setAttachments(note?.attachments || []);
     noteIdRef.current = note?._id || null;
+    setMeta({ updatedAt: note?.updatedAt, pinned: !!note?.pinned });
   };
 
-  const save = async () => {
+  const openNew = () => {
+    openedAsNewRef.current = true;
+    fillDraft(null);
+    setPanelMode('edit');
+  };
+
+  const openView = (note: any) => {
+    openedAsNewRef.current = false;
+    fillDraft(note);
+    setPanelMode('view');
+  };
+
+  const closePanel = () => {
+    setPanelMode(null);
+    setSettingsOpen(false);
+    noteIdRef.current = null;
+  };
+
+  const save = async (): Promise<boolean> => {
     const id = noteIdRef.current;
-    // An attachment alone is a note worth keeping, even with no words in it
     if (!title.trim() && isNoteBodyEmpty(body) && !attachments.length) {
-      if (id) await deleteNote(id);   // created by an attach that was then removed again
-      setEditing(null); reloadNotes(); return;
+      if (id) await deleteNote(id);
+      closePanel();
+      reloadNotes();
+      return true;
     }
     const group = projects.find(p => String(p._id) === noteProject);
-    if (!(await confirmShare(group))) return;
+    if (!(await confirmShare(group))) return false;
+    const payload = {
+      title: title.trim(),
+      body,
+      projectId: noteProject,
+      isPrivate: notePrivate,
+      color: noteColor,
+    };
     const res = id
-      ? await updateNote(id, { title: title.trim(), body, projectId: noteProject, isPrivate: notePrivate })
-      : await createNote({ title: title.trim(), body, projectId: noteProject, isPrivate: notePrivate });
+      ? await updateNote(id, payload)
+      : await createNote(payload);
     if (res.success) {
-      // Nothing failed — a padlock the group could open was never going to be kept, and this is
-      // the note saying so rather than the flag vanishing between saves.
       if (res.privacyDropped) toast(droppedPrivacy(group?.name), 'info');
-      setEditing(null); reloadNotes();
-    } else toast(res.error || 'Something went wrong', 'error');
+      if (!id && res.note?._id) noteIdRef.current = res.note._id;
+      setMeta(m => ({
+        ...m,
+        updatedAt: res.note?.updatedAt || m.updatedAt,
+        pinned: res.note?.pinned ?? m.pinned,
+      }));
+      reloadNotes();
+      return true;
+    }
+    toast(res.error || 'Something went wrong', 'error');
+    return false;
+  };
+
+  const finishEdit = async () => {
+    const wasNew = openedAsNewRef.current;
+    if (!(await save())) return;
+    if (wasNew) {
+      openedAsNewRef.current = false;
+      closePanel();
+    } else setPanelMode('view');
+  };
+
+  const persistSettings = async () => {
+    const id = noteIdRef.current;
+    if (!id) return;
+    const group = projects.find(p => String(p._id) === noteProject);
+    if (!(await confirmShare(group))) return;
+    const res = await updateNote(id, {
+      projectId: noteProject,
+      isPrivate: notePrivate,
+      color: noteColor,
+    });
+    if (res.success) {
+      if (res.privacyDropped) toast(droppedPrivacy(group?.name), 'info');
+      reloadNotes();
+    } else toast(res.error || 'Could not save options', 'error');
+  };
+
+  const closeSettings = () => {
+    setSettingsOpen(false);
+    if (panelMode === 'view' && noteIdRef.current) void persistSettings();
+  };
+
+  const persistChecklistBody = async (id: string, html: string) => {
+    setNotes(n => n.map(x => x._id === id ? { ...x, body: html } : x));
+    const res = await updateNote(id, { body: html });
+    if (!res.success) toast(res.error || 'Could not update checklist', 'error');
+    else reloadNotes();
+  };
+
+  const saveChecklist = async (html: string) => {
+    setBody(html);
+    const id = noteIdRef.current;
+    if (!id) return;
+    await persistChecklistBody(id, html);
+  };
+
+  const saveChecklistOnCard = async (noteId: string, html: string) => {
+    if (noteIdRef.current === noteId) setBody(html);
+    await persistChecklistBody(noteId, html);
   };
 
   const attach = async (files: FileList | null) => {
@@ -160,16 +240,15 @@ export default function NotesClient() {
       fd.append('file', file);
       const res = await attachToNote(noteIdRef.current, fd);
       if (res.success) {
-        noteIdRef.current = res.noteId!;   // first attach on a new note creates it
+        noteIdRef.current = res.noteId!;
         setAttachments(a => [...a, res.attachment]);
       } else if (res.needsDrive) {
         toast('Taking you to Google to connect your Drive…', 'info');
         goConnectDrive();
-        break;   // no point trying the rest of the batch against a Drive that is not connected
+        break;
       } else toast(res.error || 'Could not attach that', 'error');
     }
     setUploading(false);
-    // Cleared so picking the same file twice in a row still fires onChange
     if (fileRef.current) fileRef.current.value = '';
     if (cameraRef.current) cameraRef.current.value = '';
   };
@@ -184,18 +263,21 @@ export default function NotesClient() {
   const remove = async (id: string) => {
     if (!(await confirm({ title: 'Delete this note?', danger: true, confirmLabel: 'Delete' }))) return;
     setNotes(n => n.filter(x => x._id !== id));
-    setEditing(null);
+    closePanel();
     const res = await deleteNote(id);
     if (!res.success) reloadNotes();
   };
 
-  const togglePin = async (note: any) => {
-    setNotes(n => n.map(x => x._id === note._id ? { ...x, pinned: !x.pinned } : x));
-    await updateNote(note._id, { pinned: !note.pinned });
+  const togglePin = async () => {
+    const id = noteIdRef.current;
+    if (!id) return;
+    const next = !meta.pinned;
+    setMeta(m => ({ ...m, pinned: next }));
+    setNotes(n => n.map(x => x._id === id ? { ...x, pinned: next } : x));
+    await updateNote(id, { pinned: next });
     reloadNotes();
   };
 
-  // Notes in a project are a project owner's to delete; personal notes are mine.
   const canRemove = (n: any) => {
     const pid = n?.projectId?._id || n?.projectId;
     if (!pid) return true;
@@ -205,111 +287,174 @@ export default function NotesClient() {
 
   const inScope = notes.filter(n => (scope ? n.projectId?._id === scope._id : !n.projectId));
   const filtered = inScope.filter(n => !q || `${n.title || ''} ${noteBodyPlainText(n.body || '')}`.toLowerCase().includes(q.toLowerCase()));
-  // Chip counts, so you can see where the notes are without switching scope
   const counts = notes.reduce((acc: Record<string, number>, n) => {
     const key = n.projectId?._id || 'personal';
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
 
-  if (editing) {
+  const attachInputs = (
+    <>
+      <input ref={fileRef} type="file" multiple hidden accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx"
+        onChange={e => attach(e.target.files)} />
+      <input ref={cameraRef} type="file" hidden accept="image/*" capture="environment"
+        onChange={e => attach(e.target.files)} />
+    </>
+  );
+
+  const attachmentBlock = (editable: boolean) => (
+    (attachments.length > 0 || uploading) && (
+      <div className={`note-attachments${editable ? '' : ' note-attachments-view'}`}>
+        {attachments.map(a => (
+          <div key={a.key} className="note-attach">
+            <a href={a.url} target="_blank" rel="noreferrer" className="note-attach-open" title={a.name}>
+              {isImage(a)
+                ? <CachedAppFileImage url={a.url} alt="" loading="lazy" />
+                : <span className="note-attach-glyph">{(a.mimeType || '').includes('pdf') ? <FileText size={20} /> : <ImageIcon size={20} />}</span>}
+              <span className="note-attach-name">
+                {a.name}
+                {isImageAttachment(a) && (
+                  <span className="note-attach-mention"> @{mentionLabelOf(a, attachments)}</span>
+                )}
+              </span>
+              <span className="note-attach-size">{sizeOf(a.size)}</span>
+            </a>
+            {editable && (
+              <button className="note-attach-del" onClick={() => detach(a.key)} title="Remove" aria-label="Remove attachment">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        ))}
+        {uploading && <div className="note-attach uploading">Uploading…</div>}
+      </div>
+    )
+  );
+
+  const settingsSheet = (
+    <NoteSettingsSheet
+      open={settingsOpen}
+      onClose={closeSettings}
+      projects={projects}
+      noteProject={noteProject}
+      onProjectChange={setNoteProject}
+      notePrivate={notePrivate}
+      onPrivateChange={setNotePrivate}
+      color={noteColor}
+      onColorChange={setNoteColor}
+    />
+  );
+
+  if (panelMode === 'view') {
+    const id = noteIdRef.current;
     return (
-      <div className="container" style={{ padding: '20px 16px 120px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
-          <button className="icon-btn" onClick={save} title="Back"><X size={16} /></button>
-          <span style={{ flex: 1, fontWeight: 800, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-            {editing._id ? `Edited ${when(editing.updatedAt)}` : 'New note'}
-          </span>
-          <input ref={fileRef} type="file" multiple hidden accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx"
-            onChange={e => attach(e.target.files)} />
-          {/* Separate input: `capture` on the one above would force the camera for PDFs too.
-              The attribute opens the system camera directly — no plugin, no CAMERA permission. */}
-          <input ref={cameraRef} type="file" hidden accept="image/*" capture="environment"
-            onChange={e => attach(e.target.files)} />
-          {hasCamera && (
-            <button className="icon-btn" onClick={async () => { if (await ensureDrive('/notes')) cameraRef.current?.click(); }} disabled={uploading}
-              title="Take a photo" aria-label="Take a photo">
-              <Camera size={16} />
-            </button>
-          )}
-          <button className="icon-btn" onClick={async () => { if (await ensureDrive('/notes')) fileRef.current?.click(); }} disabled={uploading}
-            title="Attach image or document" aria-label="Attach image or document">
-            <Paperclip size={16} />
+      <div className="note-detail container" style={noteCardStyle(noteColor)}>
+        {attachInputs}
+        {settingsSheet}
+        <header className="note-detail-head">
+          <button type="button" className="icon-btn" onClick={closePanel} aria-label="Back">
+            <ArrowLeft size={18} />
           </button>
-          {noteIdRef.current && canRemove(editing) && <button className="icon-btn danger" onClick={() => remove(noteIdRef.current!)} title="Delete"><Trash2 size={16} /></button>}
-          <button className="btn-primary" onClick={save} style={{ padding: '9px 20px', borderRadius: '12px', fontWeight: 800 }}>Done</button>
+          <span className="note-detail-meta">
+            {meta.updatedAt ? `Edited ${when(meta.updatedAt)}` : 'Note'}
+          </span>
+          <div className="note-detail-actions">
+            <button type="button" className="icon-btn" onClick={togglePin} title={meta.pinned ? 'Unpin' : 'Pin'} aria-label={meta.pinned ? 'Unpin' : 'Pin'}>
+              <Pin size={16} fill={meta.pinned ? 'currentColor' : 'none'} />
+            </button>
+            <button type="button" className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Note options">
+              <MoreVertical size={18} />
+            </button>
+            <button type="button" className="icon-btn note-detail-edit" onClick={() => setPanelMode('edit')} aria-label="Edit note">
+              <Pencil size={17} />
+            </button>
+          </div>
+        </header>
+
+        <article className="note-detail-scroll">
+          {title ? <h1 className="note-detail-title">{title}</h1> : null}
+          {body ? (
+            <NoteBodyView
+              body={body}
+              attachments={attachments}
+              mode="full"
+              className="note-detail-body"
+              interactive
+              onBodyChange={saveChecklist}
+            />
+          ) : (
+            !attachments.length && <p className="note-detail-empty">This note is empty.</p>
+          )}
+          {attachmentBlock(false)}
+        </article>
+      </div>
+    );
+  }
+
+  if (panelMode === 'edit') {
+    const id = noteIdRef.current;
+    const isNew = !id;
+    return (
+      <div className="note-detail container" style={noteCardStyle(noteColor)}>
+        {attachInputs}
+        {settingsSheet}
+        <header className="note-detail-head">
+          <button type="button" className="icon-btn" onClick={() => (isNew ? closePanel() : setPanelMode('view'))} aria-label="Back">
+            <ArrowLeft size={18} />
+          </button>
+          <span className="note-detail-meta">{isNew ? 'New note' : `Editing · ${meta.updatedAt ? when(meta.updatedAt) : ''}`}</span>
+          <div className="note-detail-actions">
+            {hasCamera && (
+              <button type="button" className="icon-btn" onClick={async () => { if (await ensureDrive('/notes')) cameraRef.current?.click(); }} disabled={uploading}
+                title="Take a photo" aria-label="Take a photo">
+                <Camera size={16} />
+              </button>
+            )}
+            <button type="button" className="icon-btn" onClick={async () => { if (await ensureDrive('/notes')) fileRef.current?.click(); }} disabled={uploading}
+              title="Attach" aria-label="Attach">
+              <Paperclip size={16} />
+            </button>
+            <button type="button" className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Note options">
+              <MoreVertical size={18} />
+            </button>
+            {id && canRemove({ _id: id, projectId: noteProject ? { _id: noteProject } : null }) && (
+              <button type="button" className="icon-btn danger" onClick={() => remove(id)} title="Delete" aria-label="Delete">
+                <Trash2 size={16} />
+              </button>
+            )}
+            <button type="button" className="btn-primary note-detail-done" onClick={() => void finishEdit()}>
+              Done
+            </button>
+          </div>
+        </header>
+
+        <div className="note-detail-scroll">
+          <textarea
+            className="field bare-input note-detail-title-input"
+            placeholder="Title"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            rows={1}
+            autoFocus={isNew}
+          />
+          <NoteRichEditor
+            key={id || 'new'}
+            value={body}
+            onChange={setBody}
+            placeholder="Write anything…"
+            minRows={12}
+            mentionAttachments={mentionAttachments}
+          />
+          {attachmentBlock(true)}
         </div>
-        {/* bare-input: the note editor IS the field, so a focus ring drawn tight around the title
-            would sit hard against the first letter — it pads vertically only. */}
-        <input className="field bare-input" placeholder="Title" value={title} onChange={e => setTitle(e.target.value)}
-          style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '10px', background: 'transparent', border: 'none', padding: '4px 0' }} autoFocus={!editing._id} />
-
-        {projects.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-            <select className="field" value={noteProject} onChange={e => setNoteProject(e.target.value)}
-              style={{ fontSize: '0.8rem', fontWeight: 700, padding: '7px 10px', width: 'auto' }}>
-              <option value="">Personal — only me</option>
-              {projects.map(p => <option key={p._id} value={p._id}>{p.name}</option>)}
-            </select>
-            {/* "Private to you" used to live here. It now means one specific thing — in the safe —
-                and a personal note is not that, so this says what it actually is. */}
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', fontWeight: 600 }}>
-              {noteProject ? 'Everyone in this project can see and edit it.' : 'Only you can see it.'}
-            </span>
-          </div>
-        )}
-
-        <div style={{ marginBottom: '12px' }}>
-          <PrivateToggle value={notePrivate} onChange={setNotePrivate}
-            groupName={projects.find(p => String(p._id) === noteProject)?.name} />
-        </div>
-        <NoteRichEditor
-          key={editing._id || 'new'}
-          value={body}
-          onChange={setBody}
-          placeholder="Write anything…"
-          minRows={attachments.length ? 10 : 16}
-          mentionAttachments={mentionAttachments}
-        />
-
-        {body && mentionAttachments.length > 0 && (
-          <div className="note-readout-wrap">
-            <NoteBodyView body={body} attachments={attachments} mode="full" />
-          </div>
-        )}
-
-        {(attachments.length > 0 || uploading) && (
-          <div className="note-attachments">
-            {attachments.map(a => (
-              <div key={a.key} className="note-attach">
-                <a href={a.url} target="_blank" rel="noreferrer" className="note-attach-open" title={a.name}>
-                  {isImage(a)
-                    ? <CachedAppFileImage url={a.url} alt="" loading="lazy" />
-                    : <span className="note-attach-glyph">{(a.mimeType || '').includes('pdf') ? <FileText size={20} /> : <ImageIcon size={20} />}</span>}
-                  <span className="note-attach-name">
-                    {a.name}
-                    {isImageAttachment(a) && (
-                      <span className="note-attach-mention"> @{mentionLabelOf(a, attachments)}</span>
-                    )}
-                  </span>
-                  <span className="note-attach-size">{sizeOf(a.size)}</span>
-                </a>
-                <button className="note-attach-del" onClick={() => detach(a.key)} title="Remove" aria-label="Remove attachment">
-                  <X size={13} />
-                </button>
-              </div>
-            ))}
-            {uploading && <div className="note-attach uploading">Uploading…</div>}
-          </div>
-        )}
       </div>
     );
   }
 
   return (
-    <div className="container" style={{ padding: '24px 16px 120px' }}>
+    <div className="container notes-page">
       {shareDialog}
-      <header style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '18px', gap: '12px' }}>
+      <header className="notes-page-head">
         <div>
           <h1 className="page-title">{scope ? scope.name : 'Notes'}</h1>
           <p className="page-subtitle">
@@ -318,12 +463,12 @@ export default function NotesClient() {
               : 'Anything you want to remember'}
           </p>
         </div>
-        <button className="btn-primary" onClick={() => open(null)} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px', borderRadius: '12px', fontWeight: 800 }}>
+        <button className="btn-primary notes-new-btn" onClick={openNew}>
           <Plus size={18} /> New
         </button>
       </header>
 
-      <div style={{ marginBottom: '16px' }}>
+      <div className="notes-scope-picker">
         <ProjectPicker
           projects={projects}
           activeId={scope?._id || null}
@@ -338,12 +483,10 @@ export default function NotesClient() {
         />
       </div>
 
-      {/* Only in Personal: a group's notes are the group's and do not swap, so saying the safe is
-          open over a list it is not touching would be the second lie. */}
       {!scope && <SafeBanner noun="notes" />}
 
-      {inScope.length > 5 && (
-        <input className="field" placeholder="Search notes…" value={q} onChange={e => setQ(e.target.value)} style={{ marginBottom: '16px' }} />
+      {inScope.length > 0 && (
+        <input className="field notes-page-search" placeholder="Search notes…" value={q} onChange={e => setQ(e.target.value)} />
       )}
 
       {loading && notes.length === 0 ? (
@@ -351,7 +494,6 @@ export default function NotesClient() {
       ) : failed && notes.length === 0 ? (
         <LoadError what="your notes" onRetry={() => load(true)} />
       ) : filtered.length === 0 && privateSafe && !scope && !q ? (
-        // "No notes yet" here would be about a vault that is not on screen.
         <SafeEmpty noun="notes" />
       ) : filtered.length === 0 ? (
         <div className="empty-state">
@@ -361,32 +503,47 @@ export default function NotesClient() {
         </div>
       ) : (
         <div className="notes-grid">
-          {filtered.map(n => (
-            <div key={n._id} className="note-card" onClick={() => open(n)}>
-              <button className="note-pin" onClick={e => { e.stopPropagation(); togglePin(n); }} title={n.pinned ? 'Unpin' : 'Pin'}>
-                <Pin size={14} fill={n.pinned ? 'currentColor' : 'none'} />
-              </button>
-              {n.title && <div className="note-title">{n.title}</div>}
-              {n.body && (
-                <NoteBodyView
-                  body={n.body}
-                  attachments={n.attachments || []}
-                  mode="preview"
-                  className="note-body"
-                />
-              )}
-              {n.attachments?.length > 0 && (
-                <div className="note-clip"><Paperclip size={11} /> {n.attachments.length}</div>
-              )}
-              <div className="note-time">
-                {/* Whose it is only matters once a note is shared — in Personal it is always mine */}
-                {n.projectId && n.userId?.email && n.userId.email.toLowerCase() !== myEmail && (
-                  <span className="chip" style={{ marginRight: '6px' }}>{n.userId.name || n.userId.email}</span>
+          {filtered.map(n => {
+            const cover = firstImage(n.attachments);
+            return (
+              <div
+                key={n._id}
+                className="note-card"
+                style={noteCardStyle(n.color)}
+                onClick={() => openView(n)}
+              >
+                <button className="note-pin" onClick={e => { e.stopPropagation(); setNotes(ns => ns.map(x => x._id === n._id ? { ...x, pinned: !x.pinned } : x)); updateNote(n._id, { pinned: !n.pinned }).then(() => reloadNotes()); }} title={n.pinned ? 'Unpin' : 'Pin'}>
+                  <Pin size={14} fill={n.pinned ? 'currentColor' : 'none'} />
+                </button>
+                {cover && (
+                  <div className="note-card-cover">
+                    <CachedAppFileImage url={cover.url} alt="" loading="lazy" />
+                  </div>
                 )}
-                {when(n.updatedAt)}
+                {n.title && <div className="note-title">{n.title}</div>}
+                {n.body && (
+                  <NoteBodyView
+                    body={n.body}
+                    attachments={n.attachments || []}
+                    mode="preview"
+                    className="note-body"
+                    interactive
+                    stopCheckboxPropagation
+                    onBodyChange={html => void saveChecklistOnCard(n._id, html)}
+                  />
+                )}
+                {n.attachments?.length > 0 && (
+                  <div className="note-clip"><Paperclip size={11} /> {n.attachments.length}</div>
+                )}
+                <div className="note-time">
+                  {n.projectId && n.userId?.email && n.userId.email.toLowerCase() !== myEmail && (
+                    <span className="chip" style={{ marginRight: '6px' }}>{n.userId.name || n.userId.email}</span>
+                  )}
+                  {when(n.updatedAt)}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

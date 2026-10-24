@@ -1,8 +1,20 @@
 'use client';
 
 import { useEffect, useMemo, useRef } from 'react';
-import { noteBodyPlainText, looksLikeNoteHtml, sanitizeNoteBody } from '@/lib/noteHtml';
+import {
+  noteBodyPlainText,
+  looksLikeNoteHtml,
+  noteHasChecklist,
+  sanitizeNoteBody,
+  reflectNoteCheckboxes,
+} from '@/lib/noteHtml';
 import { mentionLabelOf, isImageAttachment } from '@/lib/noteMentionLabels';
+
+function emitBodyFromView(root: HTMLDivElement, onBodyChange?: (html: string) => void) {
+  if (!onBodyChange) return;
+  reflectNoteCheckboxes(root);
+  onBodyChange(sanitizeNoteBody(root.innerHTML));
+}
 type Attachment = {
   key: string;
   name: string;
@@ -17,6 +29,11 @@ type Props = {
   mode?: 'preview' | 'full';
   maxPreview?: number;
   className?: string;
+  /** Tap checklist boxes in read or grid preview (Keep-style). */
+  interactive?: boolean;
+  onBodyChange?: (html: string) => void;
+  /** Stop card click when toggling a box on the grid. */
+  stopCheckboxPropagation?: boolean;
 };
 
 function labelMap(attachments: Attachment[]) {
@@ -33,9 +50,17 @@ export default function NoteBodyView({
   mode = 'full',
   maxPreview = 160,
   className,
+  interactive,
+  onBodyChange,
+  stopCheckboxPropagation,
 }: Props) {
   const viewRef = useRef<HTMLDivElement>(null);
   const byLabel = useMemo(() => labelMap(attachments), [attachments]);
+
+  useEffect(() => {
+    if (!viewRef.current || !looksLikeNoteHtml(body)) return;
+    reflectNoteCheckboxes(viewRef.current);
+  }, [body, mode]);
 
   useEffect(() => {
     if (mode !== 'full' || !viewRef.current) return;
@@ -59,18 +84,36 @@ export default function NoteBodyView({
 
   if (!body) return null;
 
-  if (mode === 'preview' || !looksLikeNoteHtml(body)) {
+  const richPreview = mode === 'preview' && noteHasChecklist(body) && looksLikeNoteHtml(body);
+
+  if ((mode === 'preview' && !richPreview) || !looksLikeNoteHtml(body)) {
     const text = noteBodyPlainText(body);
     const shown = mode === 'preview' ? text.slice(0, maxPreview) : text;
     return <div className={className}>{shown}</div>;
   }
 
   const safe = sanitizeNoteBody(body);
+  const richClass = [
+    'note-rich-view',
+    interactive ? 'note-rich-view-interactive' : '',
+    richPreview ? 'note-rich-view-preview' : '',
+    className || '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
     <div
       ref={viewRef}
-      className={`note-rich-view ${className || ''}`.trim()}
+      className={richClass}
       dangerouslySetInnerHTML={{ __html: safe }}
+      onClick={(e) => {
+        const t = e.target as HTMLElement;
+        const isBox = t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'checkbox';
+        if (isBox && stopCheckboxPropagation) e.stopPropagation();
+        if (!interactive || !viewRef.current || !isBox) return;
+        queueMicrotask(() => emitBodyFromView(viewRef.current!, onBodyChange));
+      }}
     />
   );
 }

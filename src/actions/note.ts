@@ -108,7 +108,7 @@ export async function getNotes(projectId?: string) {
   }
 }
 
-export async function createNote(data: { title?: string; body: string; projectId?: string; isPrivate?: boolean }) {
+export async function createNote(data: { title?: string; body: string; projectId?: string; isPrivate?: boolean; color?: string }) {
   try {
     await connectToDatabase();
     const who = await me();
@@ -123,6 +123,7 @@ export async function createNote(data: { title?: string; body: string; projectId
     const note = await Note.create({
       userId: who.userId, projectId: data.projectId || undefined,
       title: data.title?.trim(), body, isPrivate,
+      color: (data.color || '').trim().slice(0, 16),
     });
     revalidatePath('/notes');
     return {
@@ -136,7 +137,7 @@ export async function createNote(data: { title?: string; body: string; projectId
   }
 }
 
-export async function updateNote(id: string, data: { title?: string; body?: string; pinned?: boolean; projectId?: string; isPrivate?: boolean }) {
+export async function updateNote(id: string, data: { title?: string; body?: string; pinned?: boolean; projectId?: string; isPrivate?: boolean; color?: string }) {
   try {
     await connectToDatabase();
     const who = await me();
@@ -155,6 +156,7 @@ export async function updateNote(id: string, data: { title?: string; body?: stri
     if (data.title !== undefined) note.title = data.title;
     if (data.body !== undefined) note.body = sanitizeNoteBody(data.body);
     if (data.pinned !== undefined) note.pinned = data.pinned;
+    if (data.color !== undefined) note.color = (data.color || '').trim().slice(0, 16);
     // Settled AFTER the move, because where the note ends up is what decides whether it may be
     // private at all. A private note dragged into a group loses the padlock instead of keeping
     // one every member could open, and privacyDropped is how the screen gets to say so.

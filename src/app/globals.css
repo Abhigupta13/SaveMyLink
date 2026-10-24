@@ -142,6 +142,8 @@ body {
 a {
   color: inherit;
   text-decoration: none;
+  /* Capacitor WebView: skip double-tap zoom wait so taps feel immediate. */
+  touch-action: manipulation;
 }
 
 button {
@@ -150,6 +152,7 @@ button {
   background: none;
   font-family: inherit;
   color: inherit;
+  touch-action: manipulation;
 }
 
 input, select, textarea {
@@ -2503,15 +2506,93 @@ main { padding-bottom: 84px; }
 @media (max-width: 600px) { .search-fab { right: 22px; bottom: 150px; } .fab-container { bottom: 208px; right: 22px; } }
 
 /* ---------- Notes ---------- */
+/* Horizontal inset comes from .container only — do not add extra px here. */
+.notes-page {
+  padding-top: 24px;
+  padding-bottom: calc(108px + env(safe-area-inset-bottom, 0px));
+}
+.notes-page-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  margin-bottom: 18px; gap: 12px;
+}
+.notes-page-search { margin-bottom: 16px; }
+.notes-scope-picker { margin-bottom: 16px; }
+.notes-new-btn {
+  display: flex; align-items: center; gap: 6px; padding: 10px 16px;
+  border-radius: 12px; font-weight: 800; flex-shrink: 0; min-height: 44px;
+}
+
 .notes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .note-card { position: relative; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 16px; padding: 14px 14px 30px; cursor: pointer; transition: var(--transition); min-height: 96px; }
 .note-card:hover { border-color: var(--accent-color); transform: translateY(-2px); }
-.note-title { font-weight: 800; color: var(--text-primary); margin-bottom: 6px; padding-right: 22px; }
+.note-title { font-weight: 800; color: var(--text-primary); margin-bottom: 6px; padding-right: 28px; overflow-wrap: anywhere; }
 .note-body { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
-.note-time { position: absolute; bottom: 10px; left: 14px; font-size: 0.68rem; font-weight: 700; color: var(--text-tertiary); }
-.note-pin { position: absolute; top: 10px; right: 10px; background: none; border: none; color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 6px; }
+.note-body.note-rich-view-preview {
+  display: block; white-space: normal; -webkit-line-clamp: unset;
+  max-height: 7.6em; color: var(--text-secondary);
+}
+.note-body.note-rich-view-preview ul.note-checklist { margin: 0; }
+.note-time { position: absolute; bottom: 10px; left: 14px; right: 14px; font-size: 0.68rem; font-weight: 700; color: var(--text-tertiary); }
+.note-pin { position: absolute; top: 10px; right: 10px; background: none; border: none; color: var(--text-tertiary); cursor: pointer; padding: 6px; border-radius: 8px; min-width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; }
 .note-pin:hover { color: var(--accent-text); }
 .note-card:has(.note-pin svg[fill="currentColor"]) { border-color: color-mix(in srgb, var(--accent-color) 45%, transparent); }
+.note-card-cover {
+  margin: -14px -14px 10px; border-radius: 15px 15px 10px 10px; overflow: hidden; max-height: 140px;
+}
+.note-card-cover img { width: 100%; height: 140px; object-fit: cover; display: block; }
+
+.note-detail {
+  width: 100%; max-width: 720px; margin-left: auto; margin-right: auto;
+  min-height: 100%; display: flex; flex-direction: column;
+  padding-top: 12px;
+  padding-bottom: calc(108px + env(safe-area-inset-bottom, 0px));
+}
+.note-detail-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px;
+  margin-bottom: 12px; flex-shrink: 0;
+}
+.note-detail-meta {
+  flex: 1 1 120px; min-width: 0; font-weight: 800; font-size: 0.82rem; color: var(--text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.note-detail-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; margin-left: auto; }
+.note-detail-edit { color: var(--accent-text); }
+.note-detail-done {
+  min-height: 40px; padding: 0 14px !important; border-radius: 12px !important;
+  font-weight: 800; flex-shrink: 0; font-size: 0.88rem;
+}
+.note-detail-scroll {
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding-bottom: 16px;
+}
+.note-detail-title {
+  margin: 0 0 14px; font-size: clamp(1.2rem, 4vw, 1.45rem); font-weight: 800; letter-spacing: -0.02em;
+  color: var(--text-primary); line-height: 1.3; overflow-wrap: anywhere;
+}
+.note-detail-title-input {
+  width: 100%; resize: none; font-size: clamp(1.1rem, 3.6vw, 1.25rem); font-weight: 800; margin-bottom: 12px;
+  background: transparent; border: none; padding: 2px 0 6px; line-height: 1.35; min-height: 2.5em;
+  field-sizing: content;
+}
+.note-detail-body { font-size: 1rem; color: var(--text-primary); line-height: 1.65; overflow-wrap: anywhere; }
+.note-detail-empty { color: var(--text-tertiary); font-weight: 600; margin: 0 0 8px; }
+.note-attachments-view { border-top: none; margin-top: 12px; padding-top: 0; }
+.note-rich-view-interactive ul.note-checklist input[type="checkbox"] { cursor: pointer; }
+
+.note-settings-hint { margin: 0 0 14px; line-height: 1.45; }
+.note-settings-label {
+  display: block; margin: 0 0 6px; font-weight: 800; font-size: 0.82rem; color: var(--text-primary);
+}
+.note-settings-field { width: 100%; margin-bottom: 16px; font-weight: 700; }
+.note-settings-private { margin-bottom: 18px; }
+
+.note-color-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; padding-bottom: 4px; }
+.note-color-swatch {
+  width: 32px; height: 32px; border-radius: 999px; border: 2px solid var(--border-color);
+  cursor: pointer; padding: 0; background: var(--bg-secondary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-color) 40%, transparent);
+}
+.note-color-swatch.on { border-color: var(--accent-color); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 35%, transparent); }
 
 .note-rich-editor { margin-bottom: 8px; }
 .note-rich-toolbar {
@@ -2525,17 +2606,29 @@ main { padding-bottom: 84px; }
   display: inline-flex; align-items: center; justify-content: center;
 }
 .note-rich-btn:hover { background: var(--bg-secondary); color: var(--accent-text); }
+.note-rich-btn[aria-pressed="true"] { background: var(--bg-secondary); color: var(--accent-text); }
 .note-rich-sep { width: 1px; height: 22px; background: var(--border-color); margin: 0 4px; }
 .note-rich-colors { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.note-rich-color { position: relative; display: inline-flex; width: 34px; height: 34px; }
+.note-rich-color .note-rich-btn { width: 34px; height: 34px; pointer-events: none; }
 .note-rich-swatch {
   width: 18px; height: 18px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
   cursor: pointer; padding: 0;
 }
-.note-rich-color-input { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+/* Sits on the palette icon and takes the tap itself. A zero-size input never opens the picker. */
+.note-rich-color-input {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0;
+  border: 0; opacity: 0; cursor: pointer; background: transparent;
+}
 .note-rich-body {
   outline: none; line-height: 1.65; font-size: 0.95rem; padding: 4px 0;
   background: transparent; border: none;
 }
+.note-rich-body b, .note-rich-body strong,
+.note-rich-view b, .note-rich-view strong { font-weight: 800; }
+.note-rich-body i, .note-rich-body em,
+.note-rich-view i, .note-rich-view em { font-style: italic; }
+.note-rich-body u, .note-rich-view u { text-decoration: underline; }
 .note-rich-body:empty::before {
   content: attr(data-placeholder);
   color: var(--text-tertiary);
@@ -2549,7 +2642,33 @@ main { padding-bottom: 84px; }
 }
 .note-rich-body ul.note-checklist input[type="checkbox"],
 .note-rich-view ul.note-checklist input[type="checkbox"] {
-  margin-top: 0.35em; flex-shrink: 0; width: 16px; height: 16px; accent-color: var(--accent-color);
+  margin-top: 0.35em; flex-shrink: 0; width: 18px; height: 18px; accent-color: var(--accent-color);
+  border-radius: 4px; cursor: pointer;
+}
+ul.note-checklist li:has(input[type="checkbox"]:checked) {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--text-tertiary) 85%, transparent);
+}
+ul.note-checklist li:has(input[type="checkbox"]:checked) input[type="checkbox"] {
+  text-decoration: none;
+}
+hr.note-divider {
+  border: none; border-top: 1px solid color-mix(in srgb, var(--border-color) 90%, transparent);
+  margin: 14px 0; height: 0;
+}
+.note-rich-body hr.note-divider, .note-rich-view hr.note-divider { pointer-events: none; }
+table.note-table {
+  width: 100%; max-width: 100%; border-collapse: collapse; margin: 10px 0;
+  font-size: 0.92em;
+}
+table.note-table th, table.note-table td {
+  border: 1px solid var(--border-color); padding: 7px 9px; vertical-align: top;
+  min-width: 3rem; overflow-wrap: anywhere;
+}
+table.note-table th {
+  font-weight: 800; background: color-mix(in srgb, var(--bg-tertiary) 55%, transparent);
+  text-align: left;
 }
 .note-rich-view { font-size: inherit; line-height: 1.5; color: inherit; }
 .note-rich-view p { margin: 0 0 0.35em; }
@@ -2582,6 +2701,41 @@ main { padding-bottom: 84px; }
 .note-readout-wrap {
   margin: 14px 0; padding: 12px 14px; border-radius: 14px;
   background: var(--bg-tertiary); border: 1px solid var(--border-color);
+}
+
+@media (max-width: 600px) {
+  .notes-page { padding-top: 16px; padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px)); }
+  .notes-page-head { margin-bottom: 14px; gap: 10px; }
+  .notes-grid { grid-template-columns: 1fr; gap: 10px; }
+  .note-card { padding: 12px 12px 28px; min-height: 88px; }
+  .note-card-cover { margin: -12px -12px 8px; border-radius: 13px 13px 8px 8px; max-height: 120px; }
+  .note-card-cover img { height: 120px; }
+  .note-time { left: 12px; right: 12px; bottom: 8px; }
+  .note-detail { padding-top: 4px; max-width: none; }
+  .note-detail-head { margin-bottom: 10px; gap: 2px 4px; }
+  .note-detail-meta { display: none; }
+  .note-detail-actions { flex-wrap: wrap; justify-content: flex-end; gap: 2px; max-width: calc(100% - 48px); }
+  .note-detail-done { min-height: 44px; padding: 0 16px !important; }
+  .note-color-swatch { width: 36px; height: 36px; }
+  .note-detail-scroll { padding-bottom: 20px; }
+  .note-rich-toolbar { padding: 8px 6px; gap: 2px; margin-bottom: 10px; }
+  .note-rich-btn, .note-rich-color, .note-rich-color .note-rich-btn { width: 40px; height: 40px; }
+  .note-rich-swatch { width: 28px; height: 28px; }
+  .note-attachments { margin-top: 14px; padding-top: 14px; }
+}
+
+@media (min-width: 601px) and (max-width: 900px) {
+  .notes-grid { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 11px; }
+}
+
+@media (min-width: 901px) {
+  .notes-grid { gap: 14px; }
+  .notes-page { padding-top: 28px; }
+  .note-detail { padding-top: 16px; }
+}
+
+@media (min-width: 1200px) {
+  .notes-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
 }
 
 /* Home greeting — text only */
@@ -3172,38 +3326,38 @@ body:has(> * .auth-shell), body:has(> * .landing) { padding-bottom: 0; }
 /* Centred in what is left of the viewport rather than pinned to the top of an empty page — the
    mark lands where the eye already is while the screen is still empty. */
 .loading-page { min-height: 60vh; }
+
+.route-shell-title { margin-bottom: 8px; }
+.route-shell .loading-page { min-height: 48vh; }
 /* One card's contents, arriving inside a page that is already there. Roughly the height the rows
    will occupy, so the card does not collapse and snap back open underneath the cursor. */
 .loading-inline { padding: 22px 0; }
 
-/* The bars run the landing page's waveform, not the calmer level-meter pulse `mark-live` uses
-   elsewhere: same 1s, same reach PAST rest rather than only shrinking away from it, same stagger.
-   That reach is the whole difference — a bar that only ever gets smaller reads as fading out, and
-   one that overshoots reads as a signal arriving. This is the recording card on the landing hero,
-   which is the right thing for a screen that is waiting on something.
-
-   Scoped to `.loading`, so the sign-in side panel keeps the quieter version it was designed with. */
-.loading .mark-bar { animation: mark-wave 1s ease-in-out infinite; }
-.loading .mark-bar.b1 { animation-delay: 0s; }
-.loading .mark-bar.b2 { animation-delay: .15s; }
-.loading .mark-bar.b3 { animation-delay: .3s; }
+/* Waiting mark — class `mark-wait` on the SVG (see ui/Loading). Not mark-live: that animation
+   collided with these rules and the bars looked frozen, especially in Android WebView. */
+.mark-wait .mark-bar {
+  transform-origin: 50% 50%;
+  transform-box: fill-box;
+  animation: mark-wave 1s ease-in-out infinite;
+}
+.mark-wait .mark-bar.b1 { animation-delay: 0s; }
+.mark-wait .mark-bar.b2 { animation-delay: .15s; }
+.mark-wait .mark-bar.b3 { animation-delay: .3s; }
 @keyframes mark-wave { 0%, 100% { transform: scaleY(.4); } 50% { transform: scaleY(1.4); } }
 
-/* The tick draws itself in over the bars, holds, clears, and goes again — the mark doing the thing
-   the mark means. 2s is exactly two wave cycles, so the two loops stay locked to each other; any
-   duration that is not a multiple would drift and read as two animations that happen to share a
-   logo. The reset lands at opacity 0, so the stroke is never seen jumping back to the start. */
-.loading .mark-tick { stroke-dasharray: 62; animation: tick-draw 2s ease-in-out infinite; }
+.mark-wait .mark-tick {
+  stroke-dasharray: 62;
+  animation: tick-draw 2s ease-in-out infinite;
+}
 @keyframes tick-draw {
   0%, 6%   { stroke-dashoffset: 62; opacity: 0; }
   20%      { opacity: 1; }
   62%, 88% { stroke-dashoffset: 0; opacity: 1; }
   100%     { stroke-dashoffset: 0; opacity: 0; }
 }
-/* Stilled, but never left mid-draw: without the offset the tick would sit permanently erased. */
 @media (prefers-reduced-motion: reduce) {
-  .loading .mark-bar { animation: none; }
-  .loading .mark-tick { animation: none; stroke-dashoffset: 0; }
+  .mark-wait .mark-bar { animation: none; }
+  .mark-wait .mark-tick { animation: none; stroke-dashoffset: 0; }
 }
 
 /* ---------- MOM: the recording stage ---------- */

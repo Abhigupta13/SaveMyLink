@@ -19,6 +19,8 @@ export interface INote extends MongooseDocument {
   title?: string;
   body: string;
   pinned: boolean;
+  /** Keep-style card tint (hex). */
+  color?: string;
   attachments: INoteAttachment[];
   /** Behind the Private Safe. Only ever true on a personal record — see lib/privacy. */
   isPrivate?: boolean;
@@ -38,6 +40,7 @@ const NoteSchema = new Schema<INote>({
   title: { type: String },
   body: { type: String, default: '' },
   pinned: { type: Boolean, default: false },
+  color: { type: String, default: '' },
   // Owned by the note: deleted with it, and never shown in the Digi Locker
   attachments: {
     type: [{ _id: false, name: String, key: String, url: String, mimeType: String, size: Number, text: String, mentionLabel: String }],
