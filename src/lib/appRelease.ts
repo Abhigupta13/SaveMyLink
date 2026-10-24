@@ -42,13 +42,13 @@ export interface Release {
  * an update is worth their data allowance is the audience.
  */
 export const LATEST: Release = {
-  versionCode: 4,
-  versionName: '1.3',
+  versionCode: 5,
+  versionName: '1.4',
   notes: [
+    'Save from SMS — pick text messages and file them as notes, tasks, or expenses.',
     'Sign in with Google without leaving the app.',
     'Downloads and shared links open properly instead of doing nothing.',
     'Reminders ask for permission again if you said no the first time.',
-    'Installing over an older copy no longer fails.',
   ],
 };
 

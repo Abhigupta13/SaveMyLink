@@ -1,4 +1,4 @@
-package com.swaraj.savemylink;
+package com.allyouneed.app;
 
 import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
@@ -39,6 +39,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(SmsInboxPlugin.class);
         super.onCreate(savedInstanceState);
 
         Bridge bridge = getBridge();

@@ -8,7 +8,7 @@ import {
  * The native sign-in handoff, which exists because Google refuses OAuth from an embedded WebView.
  *
  * Both halves of this file are auth boundaries, and neither is reachable from a browser to poke at:
- * the challenge/verifier binding is what stops an app that hijacks the `com.swaraj.savemylink://`
+ * the challenge/verifier binding is what stops an app that hijacks the `com.allyouneed.app://`
  * scheme from spending an intercepted code, and the handoff token is what lets a Custom Tab with no
  * session start a Drive consent as a particular user. Getting either subtly wrong looks like
  * nothing at all until it looks like account takeover, so the rules are asserted here rather than
@@ -113,8 +113,8 @@ describe('the Drive handoff token', () => {
 
 describe('deep links', () => {
   test('use the scheme the manifest declares', () => {
-    expect(nativeAuthDeepLink('abc')).toBe('com.swaraj.savemylink://auth?code=abc');
-    expect(nativeDriveDeepLink('/profile')).toBe('com.swaraj.savemylink://drive?to=%2Fprofile');
+    expect(nativeAuthDeepLink('abc')).toBe('com.allyouneed.app://auth?code=abc');
+    expect(nativeDriveDeepLink('/profile')).toBe('com.allyouneed.app://drive?to=%2Fprofile');
   });
 
   /**
@@ -123,7 +123,7 @@ describe('deep links', () => {
    * no pattern anyone could see.
    */
   test('encode their arguments', () => {
-    expect(nativeAuthDeepLink('a&b=c')).toBe('com.swaraj.savemylink://auth?code=a%26b%3Dc');
+    expect(nativeAuthDeepLink('a&b=c')).toBe('com.allyouneed.app://auth?code=a%26b%3Dc');
     expect(nativeDriveDeepLink('/x?y=1&z=2')).toContain('%26');
   });
 });

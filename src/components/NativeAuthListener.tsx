@@ -9,9 +9,9 @@ import { closeNativeTab, takeVerifier } from '@/lib/nativeBridge';
  *
  * Two links land here, both declared by the intent filter in AndroidManifest.xml:
  *
- *   com.swaraj.savemylink://auth?code=…   Google sign-in finished in Chrome. Spend the code for a
+ *   com.allyouneed.app://auth?code=…   Google sign-in finished in Chrome. Spend the code for a
  *                                         session cookie in this WebView.
- *   com.swaraj.savemylink://drive?to=…    Drive consent finished. Nothing to spend — the refresh
+ *   com.allyouneed.app://drive?to=…    Drive consent finished. Nothing to spend — the refresh
  *                                         token was already stored server-side — so just reload the
  *                                         page that asked, which then shows the connected state.
  *
@@ -38,7 +38,7 @@ export default function NativeAuthListener() {
         } catch {
           return;   // not a URL we put in front of Android; leave it alone
         }
-        if (parsed.protocol !== 'com.swaraj.savemylink:') return;
+        if (parsed.protocol !== 'com.allyouneed.app:') return;
 
         // The tab has done its job either way. Close it before navigating so the person is not
         // left looking at a Chrome page while the app changes underneath it.

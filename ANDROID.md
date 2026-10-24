@@ -132,7 +132,7 @@ new one has a real secret stored somewhere that is not the repository.
 
 Worth being clear about why this is not the usual "a debug key is harmless" case: the well-known
 key that ships with every Android SDK is `CN=Android Debug, O=Android, C=US`. This one is
-`CN=SaveMyLink Sideload`, made on 31 Aug 2026 and valid until 2054. It is a release key in
+`CN=AllYouNeed Sideload`, made on 31 Aug 2026 and valid until 2054. It is a release key in
 everything but its filename.
 
 Either way this key must not be the Play release key when that day comes.
@@ -188,7 +188,7 @@ If any step fails, the useful detail is which step and what appeared on screen.
 - **`GEMINI_API_KEY` is unset** in every env file, so Hinglish transcription silently falls back to
   Groq Whisper, which the code itself notes mis-detects Hindi as Urdu. `SARVAM_API_KEY` is unset too,
   so the paid path is unreachable.
-- **Deep links use a custom scheme** (`com.swaraj.savemylink://`), which any app may also claim. The
+- **Deep links use a custom scheme** (`com.allyouneed.app://`), which any app may also claim. The
   handoff is built so an interceptor gains nothing — it would hold a one-time code but not the
   verifier needed to spend it — but Android App Links on the real domain would remove the
   interception entirely. That needs `.well-known/assetlinks.json` carrying this signing key's

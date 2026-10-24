@@ -25,7 +25,7 @@
             <!-- Google refuses OAuth inside an embedded WebView (disallowed_useragent), so sign-in
                  and Drive consent run in a Chrome Custom Tab instead. A Custom Tab shares cookies
                  with Chrome, not with this WebView, so the finished flow has to get back into the
-                 app somehow — it redirects to com.swaraj.savemylink://auth, which lands here.
+                 app somehow — it redirects to com.allyouneed.app://auth, which lands here.
                  launchMode="singleTask" above is what routes it to the running instance rather
                  than a second copy of the app. -->
             <intent-filter>
@@ -67,4 +67,7 @@
     <!-- MOM recording -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- SMS pick-to-save: read classic SMS on device only when the user opens that screen -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
 </manifest>

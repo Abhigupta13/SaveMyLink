@@ -10,7 +10,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
  * the result back across, and that something is a one-time code delivered by deep link.
  *
  * A bare code is not safe on Android. Custom URL schemes are first-come-first-served: any installed
- * app may also claim `com.swaraj.savemylink://`, and if one does it receives the deep link and the
+ * app may also claim `com.allyouneed.app://`, and if one does it receives the deep link and the
  * code inside it. Redeeming that code would hand a stranger's app a live session for this account.
  *
  * So the code is bound to a secret the WebView keeps to itself, PKCE-style:
@@ -21,7 +21,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
  *   challenge = sha256(verifier) ──▶ /api/auth/native/start ───────────▶  with the code
  *   (verifier stays in sessionStorage)   Google OAuth
  *                                    /api/auth/native/done
- *   deep link with code       ◀────── com.swaraj.savemylink://auth
+ *   deep link with code       ◀────── com.allyouneed.app://auth
  *   /complete?code=&verifier= ─────────────────────────────────────────▶  sha256(verifier)
  *                                                                        must equal challenge
  *
@@ -37,7 +37,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 export const NATIVE_CODE_TTL_MS = 2 * 60 * 1000;
 
 /** The scheme declared in AndroidManifest.xml and android/app/src/main/res/values/strings.xml. */
-export const NATIVE_SCHEME = 'com.swaraj.savemylink';
+export const NATIVE_SCHEME = 'com.allyouneed.app';
 
 export const nativeAuthDeepLink = (code: string) =>
   `${NATIVE_SCHEME}://auth?code=${encodeURIComponent(code)}`;
