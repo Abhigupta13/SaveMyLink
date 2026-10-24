@@ -1,5 +1,7 @@
 # ALL you need — shared team brief
 
+Current product docs are in `docs/`. This brief is older. Where they disagree, `docs/` and the code win. Update `docs/` when behavior changes (see `.claude/rules/docs-sync.md`).
+
 Every team agent reads this first. It is the *product* context; the code is the
 source of truth for anything mechanical.
 
