@@ -7,7 +7,7 @@
 import mongoose from 'mongoose';
 process.loadEnvFile('.env.local');
 
-const LOCAL = process.env.LOCAL_MONGODB_URI || 'mongodb://localhost:27017/savemylink';
+const LOCAL = process.env.LOCAL_MONGODB_URI || 'mongodb://localhost:27017/allyouneed';
 const ATLAS = process.env.MONGODB_URI;
 const COMMIT = process.argv.includes('--commit');
 
