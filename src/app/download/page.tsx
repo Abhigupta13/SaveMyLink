@@ -78,7 +78,8 @@ const PERMISSIONS: [string, string][] = [
   ['Microphone', 'Only while you are recording a meeting or talking to Jarvis.'],
   ['Notifications & alarms', 'So a task reminder arrives at the time you set, not whenever the phone wakes up.'],
   ['Start after restart', 'Re-arms your pending reminders when the phone reboots.'],
-  ['Receive shared links', 'Lets other apps send a link here through the share sheet.'],
+  ['Receive shared links', 'Lets other apps send a link or plain text here through the share sheet.'],
+  ['SMS (optional)', 'Only if you open Save from SMS in Profile. Reads classic text messages on this phone so you can pick which to save. Nothing is uploaded until you confirm. Chat (RCS) in Google Messages is not included.'],
 ];
 
 const STEPS = [
@@ -184,8 +185,9 @@ export default async function DownloadPage() {
         </ul>
 
         <p style={{ fontSize: '0.86rem', lineHeight: 1.65, color: 'var(--text-secondary)', margin: '14px 0 0' }}>
-          It never asks for your contacts, photos, location, messages or call log — it cannot read
-          them. Android still sandboxes the app, and Play Protect still scans it after installing.
+          It does not ask for contacts, photos, location, or call log. SMS is optional and only used
+          when you open Save from SMS. Android still sandboxes the app, and Play Protect still scans
+          it after installing.
         </p>
       </div>
 

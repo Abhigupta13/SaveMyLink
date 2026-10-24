@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
-import { Lock, Unlock, Share2, FileText, BarChart3, BookOpen, Compass, Sparkles, Languages, BellRing, ChevronRight, ChevronDown, Smartphone } from 'lucide-react';
+import { Lock, Unlock, Share2, FileText, BarChart3, BookOpen, Compass, Sparkles, Languages, BellRing, ChevronRight, ChevronDown, Smartphone, MessageSquareText } from 'lucide-react';
 import { getReminderDefault, setReminderDefault } from '@/actions/task';
 import ReminderPicker from '@/components/ReminderPicker';
 import { DEFAULT_CHOICE, type ReminderChoice } from '@/lib/reminderRule';
@@ -170,6 +170,22 @@ export default function ProfilePage() {
 
         </div>
       </section>
+
+      {native && (
+        <section className="set-group">
+          <h2 className="set-label">Capture</h2>
+          <div className="set-card">
+            <Link href="/sms-inbox" className="set-row">
+              <span className="row-icon"><MessageSquareText size={18} strokeWidth={2.2} /></span>
+              <span className="set-row-text">
+                <span className="set-row-title">Save from SMS</span>
+                <span className="set-row-sub">Pick messages on this phone and save them as notes, tasks, or expenses</span>
+              </span>
+              <ChevronRight className="set-row-go" size={18} />
+            </Link>
+          </div>
+        </section>
+      )}
 
       <section className="set-group">
         <h2 className="set-label">How the app behaves</h2>
