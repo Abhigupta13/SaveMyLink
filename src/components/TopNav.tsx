@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef, useTransition } from 'react';
+import Link from 'next/link';
+import { getCategories } from '@/actions/category';
 import { useDialog, dialogProps } from '@/components/ui/useDialog';
 import NotificationsBell from '@/components/NotificationsBell';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
@@ -15,20 +17,56 @@ import { useUser } from '@/components/UserContext';
 import { useFeedback } from '@/components/ui/Feedback';
 import { invalidateLinksCache } from '@/lib/appDataCache';
 import { markShareFlow, consumeShareFlow } from '@/lib/shareIntent';
+import { useNavIntent } from '@/components/NavIntentContext';
 
-export default function TopNav({ initialCategories }: { initialCategories: any[] }) {
+export default function TopNav() {
   const { data: session } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const { privateSafe } = useUser();
   const { toast } = useFeedback();
+  const { effectivePath, markNav } = useNavIntent();
+  const [, startTransition] = useTransition();
+
+  const push = (href: string) => {
+    markNav(href);
+    startTransition(() => router.push(href));
+  };
 
   const initial = ((session?.user?.name || session?.user?.email || 'U') as string)[0].toUpperCase();
-  const [categories, setCategories] = useState(initialCategories);
-  useEffect(() => { setCategories(initialCategories); }, [initialCategories]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const categoriesMode = useRef<'public' | 'private' | null>(null);
+
+  const refreshCategories = useCallback(async () => {
+    const mode = privateSafe ? 'private' : 'public';
+    try {
+      const cats = await getCategories(privateSafe);
+      setCategories(cats);
+      categoriesMode.current = mode;
+    } catch {
+      console.warn('Failed to fetch categories.');
+    }
+  }, [privateSafe]);
+
+  useEffect(() => {
+    const mode = privateSafe ? 'private' : 'public';
+    if (categoriesMode.current !== null && categoriesMode.current !== mode) {
+      setCategories([]);
+      categoriesMode.current = null;
+    }
+  }, [privateSafe]);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   useDialog(isModalOpen, () => setIsModalOpen(false));
+
+  useEffect(() => {
+    if (pathname === '/links') refreshCategories();
+  }, [pathname, refreshCategories]);
+
+  useEffect(() => {
+    if (isModalOpen) refreshCategories();
+  }, [isModalOpen, refreshCategories]);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [searchValue, setSearchValue] = useState(searchParams.get('search') || '');
   const [sharePrefill, setSharePrefill] = useState<{ url?: string; title?: string }>({});
@@ -86,10 +124,11 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
     }
   };
 
-  const isActive = (path: string) => path === '/' ? pathname === '/' : pathname.startsWith(path);
+  const isActive = (path: string) =>
+    path === '/' ? effectivePath === '/' : effectivePath.startsWith(path);
   const goSearch = () => {
     if (pathname === '/links') setShowSearchBar(v => !v);
-    else router.push('/search');
+    else push('/search');
   };
 
   // The landing, the auth pages and the suspended screen carry their own brand; other public pages
@@ -113,21 +152,21 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
       {/* Desktop / tablet: left rail */}
       <aside className="side-rail">
         <Wordmark className="rail-wordmark" size={20} />
-        <button className={`rail-item home ${isActive('/') ? 'active' : ''}`} onClick={() => router.push('/')} title="Home">
+        <Link href="/" prefetch className={`rail-item home ${isActive('/') ? 'active' : ''}`} onClick={() => markNav('/')} title="Home">
           <Home size={20} strokeWidth={2.2} /><span>Home</span>
-        </button>
+        </Link>
         <nav className="rail-scroll">
           {NAV.map(({ title, href, Icon }) => (
-            <button key={href} className={`rail-item ${isActive(href) ? 'active' : ''}`} onClick={() => router.push(href)} title={title}>
+            <Link key={href} href={href} prefetch className={`rail-item ${isActive(href) ? 'active' : ''}`} onClick={() => markNav(href)} title={title}>
               <Icon size={20} strokeWidth={2.2} /><span>{title}</span>
-            </button>
+            </Link>
           ))}
         </nav>
         <div className="rail-bottom">
           {/* A rail item, not a bare icon button: it now reads as part of the nav it sits in
               rather than something dropped into the corner. */}
           <NotificationsBell variant="rail" />
-          <button className={`rail-avatar ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')} title="Profile">{initial}</button>
+          <Link href="/profile" prefetch className={`rail-avatar ${isActive('/profile') ? 'active' : ''}`} onClick={() => markNav('/profile')} title="Profile">{initial}</Link>
         </div>
       </aside>
 
@@ -143,16 +182,16 @@ export default function TopNav({ initialCategories }: { initialCategories: any[]
 
       {/* Phone: bottom tabs only — no top bar */}
       <nav className="bottom-nav">
-        <button className={`bottom-item ${isActive('/') ? 'active' : ''}`} onClick={() => router.push('/')}><Home size={21} strokeWidth={2.2} /><span>Home</span></button>
+        <Link href="/" prefetch className={`bottom-item ${isActive('/') ? 'active' : ''}`} onClick={() => markNav('/')}><Home size={21} strokeWidth={2.2} /><span>Home</span></Link>
         {NAV.filter(n => MOBILE_NAV.includes(n.href)).map(({ title, href, Icon }) => (
-          <button key={href} className={`bottom-item ${isActive(href) ? 'active' : ''}`} onClick={() => router.push(href)}><Icon size={21} strokeWidth={2.2} /><span>{title}</span></button>
+          <Link key={href} href={href} prefetch className={`bottom-item ${isActive(href) ? 'active' : ''}`} onClick={() => markNav(href)}><Icon size={21} strokeWidth={2.2} /><span>{title}</span></Link>
         ))}
         {/* Its five siblings pair an icon with a text label; this one is just an initial, so it
             announced as a single letter — on the only route to settings, the Private Safe and
             sign out. */}
-        <button className={`bottom-item ${isActive('/profile') ? 'active' : ''}`} onClick={() => router.push('/profile')} aria-label="Your profile and settings">
+        <Link href="/profile" prefetch className={`bottom-item ${isActive('/profile') ? 'active' : ''}`} onClick={() => markNav('/profile')} aria-label="Your profile and settings">
           <span className="bottom-avatar" aria-hidden="true">{initial}</span>
-        </button>
+        </Link>
       </nav>
 
       {/* Links search strip (toggled from the rail / top bar while on /links) */}

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { LayoutGrid, List } from 'lucide-react';
 import { NAV } from '@/lib/nav';
+import { useNavIntent } from '@/components/NavIntentContext';
 
 /* The vault, and only the vault: the places things are KEPT.
  *
@@ -18,6 +19,7 @@ import { NAV } from '@/lib/nav';
 const TILES = NAV.filter(n => n.href !== '/import');
 
 export default function HomeTiles() {
+  const { markNav } = useNavIntent();
   const [view, setView] = useState<'grid' | 'list'>('grid');
 
   useEffect(() => { try { const v = localStorage.getItem('homeView'); if (v === 'list' || v === 'grid') setView(v); } catch {} }, []);
@@ -40,7 +42,7 @@ export default function HomeTiles() {
 
       <div className={`tiles ${view}`}>
         {TILES.map(({ href, Icon, title, desc }) => (
-          <Link key={href} href={href} className="tile">
+          <Link key={href} href={href} prefetch className="tile" onClick={() => markNav(href)}>
             <span className="tile-icon"><Icon size={view === 'grid' ? 22 : 24} strokeWidth={2.2} /></span>
             <span className="tile-text">
               <span className="tile-title">{title}</span>

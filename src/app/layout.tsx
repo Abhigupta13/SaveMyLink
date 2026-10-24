@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import TopNav from "@/components/TopNav";
-import { getCategories } from "@/actions/category";
 import { PreviewProvider } from "@/components/PreviewContext";
 import { ViewProvider } from "@/components/ViewContext";
 import { UserProvider } from "@/components/UserContext";
@@ -17,6 +16,7 @@ import BackButtonListener from "@/components/BackButtonListener";
 import NetworkGate from "@/components/NetworkGate";
 import JarvisWidget from "@/components/JarvisWidget";
 import Tour from "@/components/Tour";
+import { NavIntentProvider } from "@/components/NavIntentContext";
 import { FeedbackProvider } from "@/components/ui/Feedback";
 import { cookies } from "next/headers";
 import { getServerSession } from "next-auth/next";
@@ -50,7 +50,6 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const cookieStore = await cookies();
-  const privateSafe = cookieStore.get('privateSafe')?.value === 'true';
   const columns = Number(cookieStore.get('columns')?.value) || 2;
   // Rendered on the server so there is no flash of the wrong theme.
   // No attribute ("system") means the CSS follows the OS.
@@ -58,13 +57,6 @@ export default async function RootLayout({
 
   // Handed to SessionProvider so client pages start with the session already in hand.
   const session = await getServerSession(authOptions);
-
-  let categories = [];
-  try {
-    categories = await getCategories(privateSafe);
-  } catch (error) {
-    console.warn("Failed to fetch categories. Database might not be connected yet.");
-  }
 
   return (
     <html
@@ -90,14 +82,16 @@ export default async function RootLayout({
                 <NetworkGate />
                 {/* Registers the exit-time feedback prompt that BackButtonListener consults. */}
                 <ExitFeedback />
-                <Suspense fallback={null}>
-                  <TopNav initialCategories={categories} />
-                </Suspense>
-                <main className="flex-1">
-                  {children}
-                </main>
-                <JarvisWidget />
-                <Tour />
+                <NavIntentProvider>
+                  <Suspense fallback={null}>
+                    <TopNav />
+                  </Suspense>
+                  <main className="flex-1">
+                    {children}
+                  </main>
+                  <JarvisWidget />
+                  <Tour />
+                </NavIntentProvider>
               </ViewProvider>
             </PreviewProvider>
             </FeedbackProvider>

@@ -22,7 +22,9 @@ export default function Loading({
 }: { variant?: 'page' | 'inline'; label?: string; className?: string }) {
   return (
     <div className={`loading loading-${variant} ${className}`.trim()} role="status" aria-live="polite">
-      <Mark size={variant === 'page' ? 72 : 34} animate />
+      {/* `mark-wait` — not `mark-live`. Loading owns bar + tick keyframes; mark-live's level
+          animation fought those rules and left the bars static in several WebViews. */}
+      <Mark size={variant === 'page' ? 72 : 34} className="mark-wait" />
       <span className="sr-only">{label}</span>
     </div>
   );
